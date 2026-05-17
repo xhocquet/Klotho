@@ -1339,9 +1339,9 @@ namespace xpTURN.Klotho.Core
                 _logger?.ZLogInformation($"[KlothoEngine][SD] Initial FullState broadcast: size={_cachedFullState.Length}, hash=0x{_cachedFullStateHash:X16}");
 
                 // Diagnostic — per-component hash breakdown for desync root-cause analysis.
-                // Debug level: steady-state, not surfaced in normal logs.
+                // Information level: surfaced in release builds (ServerInit fires once per match).
                 if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimDiag)
-                    ecsSimDiag.LogComponentHashes(_logger, "ServerInit", atDebugLevel: true);
+                    ecsSimDiag.LogComponentHashes(_logger, "ServerInit", atDebugLevel: false);
             }
         }
 

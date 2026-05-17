@@ -152,6 +152,10 @@ namespace xpTURN.Klotho.Core
                     var predicted = _inputPredictor.PredictInput(playerId, CurrentTick, _previousCommandsCache);
                     _tickCommandsCache.Add(predicted);
                     // On the SD path, prediction validation is replaced by the state hash, so _pendingCommands is not used.
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+                    var bufRange = _inputBuffer.GetBufferedTickRange(playerId);
+                    _logger?.ZLogDebug($"[SD][PredSource] tick={CurrentTick} targetPlayerId={playerId} selfPeerId={LocalPlayerId} bufferedTickLo={bufRange.lo} bufferedTickHi={bufRange.hi}");
+#endif
                 }
             }
 
@@ -161,6 +165,8 @@ namespace xpTURN.Klotho.Core
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             _logger?.ZLogDebug($"[SD][HASH] PredTick: tick={CurrentTick} hash=0x{_simulation.GetStateHash():X16}");
+            if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimSnap)
+                ecsSimSnap.SnapshotHashesToQueue();
 #endif
 
             _eventBuffer.ClearTick(CurrentTick);
@@ -299,19 +305,15 @@ namespace xpTURN.Klotho.Core
                 }
             }
 
-            // If the restored tick is earlier than the first execution tick, fill the gap from the InputBuffer.
+            // If the restored tick is earlier than the first execution tick, fill the gap.
+            // Uses the shared helper so missing remote players are substituted with EmptyCommand
+            // (mirrors server-side CollectTickInputs and guarantees hash parity).
             if (rollbackPerformed && restoreTick < firstExecutionTick)
             {
                 int gapTick = restoreTick;
                 while (gapTick < firstExecutionTick)
                 {
-                    SaveSnapshot(gapTick);
-                    _tickCommandsCache.Clear();
-                    var gapCmds = _inputBuffer.GetCommandList(gapTick);
-                    for (int gi = 0; gi < gapCmds.Count; gi++)
-                        _tickCommandsCache.Add(gapCmds[gi]);
-                    _tickCommandsCache.Sort(s_commandComparer);
-                    _simulation.Tick(_tickCommandsCache);
+                    SimulateGapTickWithEmptyFallback(gapTick);
                     gapTick++;
                 }
             }
@@ -322,6 +324,12 @@ namespace xpTURN.Klotho.Core
             {
                 var entry = _pendingVerifiedQueue.Dequeue();
                 int executionTick = entry.Tick - 1; // input tick at the time of execution
+
+                int simTickAtEntry = _simulation.CurrentTick;
+                if (simTickAtEntry < executionTick)
+                {
+                    _logger?.ZLogWarning($"[SD][ResimGap] currentSimTick={simTickAtEntry} executionTick={executionTick} gap={executionTick - simTickAtEntry} entryTick={entry.Tick} batchRemaining={_pendingVerifiedQueue.Count}");
+                }
 
                 // Overwrite the predicted input in the InputBuffer with the verified input.
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
@@ -403,9 +411,15 @@ namespace xpTURN.Klotho.Core
                     _logger?.ZLogError(
                         $"[KlothoEngine][SD] Determinism failure: tick={entry.Tick}, local=0x{resimHash:X16}, server=0x{entry.StateHash:X16}");
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
                     // Diagnostic — per-component hash to identify which component(s) diverged.
                     if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimDiag)
+                    {
+                        if (!_fullStateRequestPending)
+                            ecsSimDiag.FlushHashHistory(_logger, entry.Tick);
                         ecsSimDiag.LogComponentHashes(_logger, "DesyncLocal");
+                    }
+#endif
 
                     if (!_fullStateRequestPending)
                     {
@@ -511,6 +525,42 @@ namespace xpTURN.Klotho.Core
             for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
                 EventPool.Return(_rollbackOldEventsCache[i]);
             _rollbackOldEventsCache.Clear();
+        }
+
+        /// <summary>
+        /// Resimulate a single gap tick using own input from the InputBuffer plus EmptyCommand
+        /// substitution for missing players. Mirrors server-side ServerInputCollector.CollectTickInputs
+        /// so the resulting state hash matches the server's verified hash for the same tick.
+        /// </summary>
+        private void SimulateGapTickWithEmptyFallback(int gapTick)
+        {
+            SaveSnapshot(gapTick);
+            _tickCommandsCache.Clear();
+
+            var gapCmds = _inputBuffer.GetCommandList(gapTick);
+            for (int gi = 0; gi < gapCmds.Count; gi++)
+                _tickCommandsCache.Add(gapCmds[gi]);
+
+            for (int pi = 0; pi < _activePlayerIds.Count; pi++)
+            {
+                int playerId = _activePlayerIds[pi];
+                if (!_inputBuffer.HasCommandForTick(gapTick, playerId))
+                {
+                    var empty = CommandPool.Get<EmptyCommand>();
+                    empty.PlayerId = playerId;
+                    empty.Tick = gapTick;
+                    _tickCommandsCache.Add(empty);
+                }
+            }
+
+            _tickCommandsCache.Sort(s_commandComparer);
+#if DEBUG
+            _inputBuffer.SetResimulating(true);
+#endif
+            _simulation.Tick(_tickCommandsCache);
+#if DEBUG
+            _inputBuffer.SetResimulating(false);
+#endif
         }
 
         /// <summary>

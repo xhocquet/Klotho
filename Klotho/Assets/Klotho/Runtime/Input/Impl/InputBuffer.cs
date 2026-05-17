@@ -225,6 +225,23 @@ namespace xpTURN.Klotho.Input
             return false;
         }
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        public (int lo, int hi) GetBufferedTickRange(int playerId)
+        {
+            int lo = int.MaxValue;
+            int hi = int.MinValue;
+            foreach (var kv in _commands)
+            {
+                if (kv.Value.ContainsKey(playerId))
+                {
+                    if (kv.Key < lo) lo = kv.Key;
+                    if (kv.Key > hi) hi = kv.Key;
+                }
+            }
+            return hi == int.MinValue ? (-1, -1) : (lo, hi);
+        }
+#endif
+
         /// <summary>
         /// Checks whether commands from all players have arrived
         /// </summary>

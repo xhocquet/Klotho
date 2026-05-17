@@ -127,6 +127,7 @@ namespace xpTURN.Klotho.Network
             {
                 _rejectedPeerMismatchCount++;
                 _logger?.ZLogWarning($"[InputCollector] Rejected (peerId mismatch): peerId={peerId}, playerId={playerId}, cmd={command.GetType().Name}");
+                _logger?.ZLogDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=peer_mismatch arrivalDelayMs=-1 cmdTypeId={command.CommandTypeId}");
                 OnCommandRejected?.Invoke(peerId, tick, command.CommandTypeId, RejectionReason.PeerMismatch);
                 return false;
             }
@@ -144,6 +145,8 @@ namespace xpTURN.Klotho.Network
                 {
                     _rejectedPastTickCount++;
                     _logger?.ZLogWarning($"[InputCollector] Rejected (past tick): tick={tick}, lastExec={_lastExecutedTick}, playerId={playerId}, cmd={command.GetType().Name}");
+                    long arrivalDelayPast = _deadlines.TryGetValue(tick, out long dlPast) ? _nowMs() - dlPast : -1;
+                    _logger?.ZLogDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=past_tick arrivalDelayMs={arrivalDelayPast} cmdTypeId={command.CommandTypeId}");
                     OnCommandRejected?.Invoke(peerId, tick, command.CommandTypeId, RejectionReason.PastTick);
                     return false;
                 }
@@ -156,6 +159,7 @@ namespace xpTURN.Klotho.Network
                 {
                     _rejectedToleranceExceededCount++;
                     _logger?.ZLogWarning($"[InputCollector] Rejected (tolerance exceeded): tick={tick}, playerId={playerId}, cmd={command.GetType().Name}");
+                    _logger?.ZLogDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=tolerance_exceeded arrivalDelayMs={_nowMs() - deadline} cmdTypeId={command.CommandTypeId}");
                     OnCommandRejected?.Invoke(peerId, tick, command.CommandTypeId, RejectionReason.ToleranceExceeded);
                     return false;
                 }
@@ -228,6 +232,7 @@ namespace xpTURN.Klotho.Network
                     _resultCache.Add(empty);
                     OnPlayerInputTimeout?.Invoke(playerId);
                     _logger?.ZLogDebug($"[Server][DIAG] Collect.Miss: tick={tick}, pid={playerId}, slotExists={(tickInputs != null)}, slotPids=[{(tickInputs != null ? string.Join(",", tickInputs.Keys) : "")}]");
+                    _logger?.ZLogDebug($"[InputCollector][EmptySubst] execTick={tick} playerId={playerId}");
                 }
             }
 

@@ -246,6 +246,25 @@ namespace xpTURN.Klotho.LiteNetLib
                 reader.GetBytes(copy, length);
                 reader.Recycle();
                 long releaseAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (rtt / 2);
+
+                // Preserve per-peer FIFO under variable EmulatedRttMs.
+                // Without this clamp, a later-arriving message can be released before an earlier one
+                // when EmulatedRttMs drops mid-flight — producing artificial ReliableOrdered violations
+                // the real transport never exhibits.
+                for (int i = _delayedRecvMessages.Count - 1; i >= 0; i--)
+                {
+                    if (_delayedRecvMessages[i].peerId == peerId)
+                    {
+                        if (releaseAt < _delayedRecvMessages[i].releaseAtMs)
+                        {
+                            long clamped = _delayedRecvMessages[i].releaseAtMs;
+                            _logger?.ZLogDebug($"[FaultInjection][FIFO] clamp peerId={peerId} naturalMs={releaseAt} clampedMs={clamped} addedDelayMs={clamped - releaseAt}");
+                            releaseAt = clamped;
+                        }
+                        break;
+                    }
+                }
+
                 _delayedRecvMessages.Add((releaseAt, peerId, copy, length));
                 return;
             }

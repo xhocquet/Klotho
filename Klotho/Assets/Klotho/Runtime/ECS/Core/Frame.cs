@@ -8,6 +8,11 @@ using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Deterministic;
 using xpTURN.Klotho.Serialization;
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+using System.Collections.Generic;
+using System.Text;
+#endif
+
 namespace xpTURN.Klotho.ECS
 {
     // All component storages for the frame state are laid out in a single byte[] heap.
@@ -234,6 +239,47 @@ namespace xpTURN.Klotho.ECS
 
             return hash;
         }
+
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        private const int HashHistoryCapacity = 60;
+        private readonly List<(int tick, string formattedLine)> _hashHistoryQueue = new List<(int, string)>(HashHistoryCapacity);
+        private readonly StringBuilder _hashHistoryBuilder = new StringBuilder(512);
+
+        public void SnapshotHashesToQueue()
+        {
+            var typeIds = ComponentStorageRegistry.RegisteredTypeIdsSorted;
+            _hashHistoryBuilder.Clear();
+            _hashHistoryBuilder.Append("entityCount=").Append(Entities.Count);
+            for (int i = 0; i < typeIds.Length; i++)
+            {
+                int typeId = typeIds[i];
+                ref readonly var layout = ref ComponentStorageRegistry.GetLayout(typeId);
+                int count = MemoryMarshal.Cast<byte, int>(_heap.AsSpan(layout.CountOffset, 4))[0];
+
+                ulong hash = FPHash.FNV_OFFSET;
+                ComponentStorageRegistry.GetHashDispatch(typeId)(_heap, in layout, Entities, ref hash);
+
+                var typeName = ComponentStorageRegistry.GetType(typeId)?.Name ?? "?";
+                _hashHistoryBuilder.Append(' ').Append(typeName).Append('=').Append(count).Append('/').AppendFormat("0x{0:X16}", hash);
+            }
+
+            if (_hashHistoryQueue.Count >= HashHistoryCapacity)
+                _hashHistoryQueue.RemoveAt(0);
+            _hashHistoryQueue.Add((Tick, _hashHistoryBuilder.ToString()));
+        }
+
+        public void FlushHashHistory(ILogger logger, int dumpTick)
+        {
+            if (logger == null || _hashHistoryQueue.Count == 0) return;
+            logger.ZLogDebug($"[CompHash][History] dumpTick={dumpTick} bufferDepth={_hashHistoryQueue.Count}");
+            for (int i = 0; i < _hashHistoryQueue.Count; i++)
+            {
+                var entry = _hashHistoryQueue[i];
+                logger.ZLogDebug($"[CompHash][HashLine] tick={entry.tick} {entry.formattedLine}");
+            }
+            _hashHistoryQueue.Clear();
+        }
+#endif
 
         // Diagnostic — per-typeId hash and count breakdown for desync investigation.
         // atDebugLevel=true emits at Debug level for steady-state monitoring (filtered out in normal logs).

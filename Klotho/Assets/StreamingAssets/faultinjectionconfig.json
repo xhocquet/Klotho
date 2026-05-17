@@ -1,8 +1,8 @@
 {
-  "_comment": "Fault injection toggles for IMP38 ISS-04 / scenario matrix. All fields optional — missing = leave default. Empty arrays clear the corresponding HashSet. Active only when KLOTHO_FAULT_INJECTION is defined.",
+  "_comment": "Fault injection toggles for scenario matrix. All fields optional — missing = leave default. Empty arrays clear the corresponding HashSet. Active only when KLOTHO_FAULT_INJECTION is defined.",
 
-  "EmulatedRttMs": 0,
-  "_EmulatedRttSchedule": [
+  "EmulatedRttMs": 200,
+  "EmulatedRttSchedule": [
     { "atSec": 10.0, "rttMs": 300 },
     { "atSec": 15.0, "rttMs": 500 },
     { "atSec": 30.0, "rttMs": 200 },

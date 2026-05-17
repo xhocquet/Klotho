@@ -135,6 +135,11 @@ public void Initialize()
         public void LogComponentHashes(ILogger logger, string label, bool atDebugLevel = false)
             => _frame.LogComponentHashes(logger, label, atDebugLevel);
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        public void SnapshotHashesToQueue() => _frame.SnapshotHashesToQueue();
+        public void FlushHashHistory(ILogger logger, int dumpTick) => _frame.FlushHashHistory(logger, dumpTick);
+#endif
+
         public void RestoreFromFullState(byte[] stateData)
         {
             if (_snapshotParticipants.Count == 0)
