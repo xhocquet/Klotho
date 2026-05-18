@@ -91,6 +91,12 @@ namespace xpTURN.Klotho.Core
                     DesyncThresholdForResync = accept.DesyncThresholdForResync,
                     CountdownDurationMs = accept.CountdownDurationMs,
                     CatchupMaxTicksPerFrame = accept.CatchupMaxTicksPerFrame,
+                    CorrectiveResetCooldownMs = accept.CorrectiveResetCooldownMs,
+                    MaxSpectators = accept.MaxSpectators,
+                    AbortGraceMs = accept.AbortGraceMs,
+                    EndGracePolicy = (EndGracePolicy)accept.EndGracePolicy,
+                    EndGraceMs = accept.EndGraceMs,
+                    ClientShutdownGraceMs = accept.ClientShutdownGraceMs,
                 };
             }
             else if (isReconnect)
@@ -114,6 +120,12 @@ namespace xpTURN.Klotho.Core
                     DesyncThresholdForResync = accept.DesyncThresholdForResync,
                     CountdownDurationMs = accept.CountdownDurationMs,
                     CatchupMaxTicksPerFrame = accept.CatchupMaxTicksPerFrame,
+                    CorrectiveResetCooldownMs = accept.CorrectiveResetCooldownMs,
+                    MaxSpectators = accept.MaxSpectators,
+                    AbortGraceMs = accept.AbortGraceMs,
+                    EndGracePolicy = (EndGracePolicy)accept.EndGracePolicy,
+                    EndGraceMs = accept.EndGraceMs,
+                    ClientShutdownGraceMs = accept.ClientShutdownGraceMs,
                 };
             }
             else

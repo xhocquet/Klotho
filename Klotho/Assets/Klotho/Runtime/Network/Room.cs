@@ -48,6 +48,16 @@ namespace xpTURN.Klotho.Network
         public long CreatedAtMs { get; set; }
         public SessionPhase DrainPhase { get; private set; }
 
+        // Match-end / abort grace state. Null EndRequestedAtUtc = no request pending.
+        // Wall-time based so the EndGracePolicy.Pause case (tick frozen) still progresses naturally.
+        public DateTimeOffset? EndRequestedAtUtc { get; private set; }
+        public TimeSpan EndGrace { get; private set; }
+        public EndReason EndReason { get; private set; }
+
+        // Engine event handlers held for unsubscription at Dispose. Set by RoomManager via AttachEngineHandlers.
+        private Action<int, IMatchEndEvent> _engineMatchEndedHandler;
+        private Action<AbortReason> _engineMatchAbortedHandler;
+
         private readonly ILogger _logger;
 
         public Room(
@@ -85,12 +95,67 @@ namespace xpTURN.Klotho.Network
             DrainInboundQueue();
             Engine.Update(elapsedSec);
 
-            if (State == RoomState.Active && ShouldDrain())
+            if (State != RoomState.Active) return;
+
+            // Match-end / abort grace expiry. Checked before ShouldDrain so the
+            // explicit match-end / match-aborted reason wins when both fire in the same Update.
+            if (EndRequestedAtUtc.HasValue && DateTimeOffset.UtcNow - EndRequestedAtUtc.Value >= EndGrace)
             {
                 DrainPhase = NetworkService.Phase;
                 State = RoomState.Draining;
-                _logger?.ZLogInformation($"[Room {RoomId}] → Draining (all connections gone, phase={DrainPhase})");
+                string reasonStr = EndReason == EndReason.MatchEnded ? "match-ended" : "match-aborted";
+                _logger?.ZLogInformation($"[Room {RoomId}] → Draining (reason={reasonStr}, phase={DrainPhase})");
+                return;
             }
+
+            if (ShouldDrain())
+            {
+                DrainPhase = NetworkService.Phase;
+                State = RoomState.Draining;
+                _logger?.ZLogInformation($"[Room {RoomId}] → Draining (reason=all-peers-gone, phase={DrainPhase})");
+            }
+        }
+
+        /// <summary>
+        /// Requests room drain after a grace window. Wall-time based — works for both
+        /// EndGracePolicy.Continue (user input keeps flowing) and EndGracePolicy.Pause (clients send
+        /// StopCommand each frame so verified state halts character motion deterministically). In
+        /// both cases the engine keeps ticking through the grace window.
+        /// First-write-wins: subsequent calls are no-ops while a request is already pending. This naturally
+        /// handles abort-during-grace — if a normal-end RequestEnd is already pending, a later abort RequestEnd
+        /// is ignored so the result screen plays out to completion.
+        /// </summary>
+        public void RequestEnd(EndReason reason, TimeSpan grace)
+        {
+            if (EndRequestedAtUtc.HasValue)
+            {
+                _logger?.ZLogDebug($"[Room {RoomId}] RequestEnd ignored (already pending: reason={EndReason}, grace={EndGrace.TotalMilliseconds:F0}ms); incoming reason={reason}");
+                return;
+            }
+            EndRequestedAtUtc = DateTimeOffset.UtcNow;
+            EndReason = reason;
+            EndGrace = grace;
+            _logger?.ZLogInformation($"[Room {RoomId}] RequestEnd: reason={reason}, grace={grace.TotalMilliseconds:F0}ms");
+        }
+
+        /// <summary>
+        /// Subscribes the given handlers to Engine.OnMatchEnded / Engine.OnMatchAborted and stores the
+        /// delegate references for unsubscription at Dispose time. Called by RoomManager on room creation.
+        /// </summary>
+        public void AttachEngineHandlers(Action<int, IMatchEndEvent> onMatchEnded, Action<AbortReason> onMatchAborted)
+        {
+            _engineMatchEndedHandler = onMatchEnded;
+            _engineMatchAbortedHandler = onMatchAborted;
+            Engine.OnMatchEnded += onMatchEnded;
+            Engine.OnMatchAborted += onMatchAborted;
+        }
+
+        private void DetachEngineHandlers()
+        {
+            if (_engineMatchEndedHandler != null) Engine.OnMatchEnded -= _engineMatchEndedHandler;
+            if (_engineMatchAbortedHandler != null) Engine.OnMatchAborted -= _engineMatchAbortedHandler;
+            _engineMatchEndedHandler = null;
+            _engineMatchAbortedHandler = null;
         }
 
         /// <summary>
@@ -151,7 +216,9 @@ namespace xpTURN.Klotho.Network
             // Summary line stays at Information; per-component breakdown demoted to Debug.
             _logger?.ZLogInformation($"[Room {RoomId}] Dispose pre-dump: commandPoolTotal={CommandPool.GetTotalPooledCount()} commandPoolTypes={CommandPool.GetPooledTypeCount()}");
             if (Simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimDiag)
-                ecsSimDiag.LogComponentHashes(_logger, $"RoomDispose:{RoomId}", atDebugLevel: true);
+                ecsSimDiag.LogComponentHashes(_logger, $"RoomDispose:{RoomId}", logLevel: LogLevel.Debug);
+
+            DetachEngineHandlers();
 
             NetworkService.LeaveRoom();
 

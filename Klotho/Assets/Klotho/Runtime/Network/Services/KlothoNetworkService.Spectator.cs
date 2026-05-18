@@ -72,6 +72,12 @@ namespace xpTURN.Klotho.Network
                     DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
                     CountdownDurationMs = _sessionConfig.CountdownDurationMs,
                     CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
+                    CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
+                    MaxSpectators = _sessionConfig.MaxSpectators,
+                    AbortGraceMs = _sessionConfig.AbortGraceMs,
+                    EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
+                    EndGraceMs = _sessionConfig.EndGraceMs,
+                    ClientShutdownGraceMs = _sessionConfig.ClientShutdownGraceMs,
                 };
                 for (int i = 0; i < _players.Count; i++)
                     startMsg.PlayerIds.Add(_players[i].PlayerId);

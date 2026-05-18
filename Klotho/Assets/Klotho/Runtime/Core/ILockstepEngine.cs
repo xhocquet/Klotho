@@ -49,6 +49,14 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         Paused,
         /// <summary>
+        /// Transient: tick advance frozen while transport keepalives continue. ExecuteTick is blocked
+        /// while in Ending. NOT included in IsEnded() — still pre-terminal, allowing AbortMatch to
+        /// transition Ending → Aborted. Currently not entered in the normal end flow (both
+        /// EndGracePolicy.Continue and EndGracePolicy.Pause keep Running through the grace window);
+        /// retained for API stability and potential future use.
+        /// </summary>
+        Ending,
+        /// <summary>
         /// Stop() invoked — engine has been torn down. Replay playback also lands here when finished.
         /// </summary>
         Finished,
@@ -244,6 +252,13 @@ namespace xpTURN.Klotho.Core
 
         /// <summary>Convenience property for resimulation. `Stage == Resimulate`.</summary>
         bool IsResimulation => Stage == SimulationStage.Resimulate;
+
+        /// <summary>
+        /// Whether OnMatchEnded has been dispatched on this engine (the verified IMatchEndEvent fired).
+        /// Used by game-side OnPollInput to apply EndGracePolicy-specific behavior during the post-match
+        /// grace window (e.g., send StopCommand when EndGracePolicy == Pause).
+        /// </summary>
+        bool IsMatchEnded { get; }
 
         /// <summary>
         /// Initialize the engine.

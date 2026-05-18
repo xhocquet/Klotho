@@ -11,6 +11,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **ICommand-based input system** — serializable command interface (MoveCommand, ActionCommand, SkillCommand, etc.)
   - **ISystemCommand** — interface for system-only commands (PlayerJoinCommand, etc.)
   - **CommandBase** — abstract base class for commands
+  - **StopCommand** — explicit "no movement, no action" intent emitted by clients during the `EndGracePolicy.Pause` grace window; SD/P2P unified
 - **CommandFactory / CommandRegistry** — command type registration / construction / deserialization, integrated with the source generator
 - **Client-side prediction** — predict missing inputs and execute without delay
 - **Rollback & re-simulation** — ring-snapshot based; configurable max rollback ticks
@@ -25,7 +26,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **KlothoSession / IKlothoSession** — session lifecycle management (a wrapper around KlothoEngine)
   - **KlothoSessionSetup** — session-construction helper
   - **ISimulationCallbacks** — engine-lifecycle callback interface
-- **KlothoEngine / IKlothoEngine** — engine state machine (Idle, WaitingForPlayers, Running, Paused, Finished)
+- **KlothoEngine / IKlothoEngine** — engine state machine (Idle, WaitingForPlayers, BootstrapPending, Running, Paused, Ending, Finished, Aborted)
   - **NetworkMode** — selectable P2P / ServerDriven topology
   - Partials: Rollback, TimeSync, ErrorCorrection, FullStateResync, LateJoin, Reconnect, Spectator, ServerDriven, ServerDrivenClient, Replay, FrameVerification, SyncTest, EventHelpers
 - **DedicatedServerLoop** — dedicated-server loop (for standalone server processes)
@@ -109,6 +110,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **Hash gate (post-`ApplyFullState`)** — every `ApplyFullState` entry point (LateJoin / InitialFullState / ResyncRequest / CorrectiveReset / Reconnect) verifies the post-restore hash and fires `OnHashMismatch(tick, localHash, remoteHash)`
 - **Corrective reset (P2P, host-only)** — `OnHashMismatch` triggers host `TryCorrectiveReset` → `BroadcastFullState(..., FullStateKind.CorrectiveReset)` → host self-apply + guest apply with `ApplyReason.CorrectiveReset`. Cooldown via `CorrectiveResetCooldownMs` prevents broadcast storms. Match continues; `OnMatchReset(ResetReason.StateDivergence)` fires only when the post-restore hash matches (mismatch retries via the mid-match desync pipeline)
 - **Chain stall watchdog (peer-local)** — `AbortMatch(AbortReason.ChainStallTimeout)` when `CurrentTick - LastVerifiedTick` exceeds `max(ReconnectTimeoutMs/TickIntervalMs + 100, MinStallAbortTicks)`. Distinct terminal state `KlothoState.Aborted` (see `KlothoStateExtensions.IsEnded()`)
+- **Normal-end lifecycle** — `IMatchEndEvent` (Synced marker, e.g. `GameOverEvent`) fires `OnMatchEnded(tick, evt)` exactly once on first verification. `EndGracePolicy.Continue` keeps the simulation running through the grace window; `EndGracePolicy.Pause` transitions `Running → Ending` (tick advance frozen, transport keepalives preserved). Grace durations: `EndGraceMs` (server `Room` drain), `ClientShutdownGraceMs` (client self-shutdown — must stay below `EndGraceMs`). `EndReason.MatchEnded` / `MatchAborted` classifies the drain trigger
 - **RTT spike measurement** — `RttSpikeMetricsCollector` records per-spike windowed `chainBreak`, `rollbackDepth` mean/p95, `chainResumeLatencyMs`. Emitted at match-end via `[Metrics][RttSpike]`
 - **PlayerRttSmoother** — 5-sample sliding median per player (≈5s window) feeding the dynamic-delay push decision
 - **Command rejection feedback (SD)** — server unicast `CommandRejected` (PeerMismatch / PastTick / ToleranceExceeded / Duplicate) surfaced as engine `OnCommandRejected`
@@ -188,7 +190,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **EcsStateSnapshot** — IStateSnapshot adapter (built on Frame.CopyFrom)
 - **EcsSimulation** — ISimulation implementation (owns Frame + SystemRunner; pluggable into KlothoEngine)
 - **FixedString32 / FixedString64** — `unmanaged` fixed-size UTF-8 strings (for component fields)
-- **Built-in components** — TransformComponent, VelocityComponent, MovementComponent, HealthComponent, CombatComponent, OwnerComponent, PhysicsBodyComponent, NavigationComponent
+- **Built-in components** — TransformComponent, VelocityComponent, MovementComponent, HealthComponent, CombatComponent, OwnerComponent, PhysicsBodyComponent, NavigationComponent, SessionParticipantComponent (engine writes one per active player at `Start()` for a deterministic all-participants-spawned gate)
 - **Built-in systems** — MovementSystem, CombatSystem, PhysicsSystem, NavigationSystem, CommandSystem, EventSystem
 
 ## Replay

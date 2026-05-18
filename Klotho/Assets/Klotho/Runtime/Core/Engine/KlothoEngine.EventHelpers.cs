@@ -16,6 +16,15 @@ namespace xpTURN.Klotho.Core
         // and by Spectator.ResetToTick (per-tick re-emit).
         private int _syncedDispatchHighWaterMark = -1;
 
+        // True after OnMatchEnded has fired at least once. Exposed via IKlothoEngine.IsMatchEnded
+        // for game-side OnPollInput to apply EndGracePolicy-specific behavior during the post-match
+        // grace window (e.g., send StopCommand when EndGracePolicy == Pause). Also used by the
+        // ClientTick hard-limit warning to demote the log to Debug. Not reset within an engine instance.
+        private bool _matchEndedDispatched;
+
+        /// <inheritdoc />
+        public bool IsMatchEnded => _matchEndedDispatched;
+
         #region Event System Helpers
 
         private void DispatchTickEvents(int tick, FrameState state)
@@ -57,6 +66,11 @@ namespace xpTURN.Klotho.Core
                 var evt = events[i];
                 if (evt.Mode != EventMode.Synced) continue;
                 _dispatcher.Dispatch(OnSyncedEvent, tick, evt, nameof(OnSyncedEvent));
+                if (evt is IMatchEndEvent endEvt)
+                {
+                    _matchEndedDispatched = true;
+                    OnMatchEnded?.Invoke(tick, endEvt);
+                }
                 anyFired = true;
             }
             if (anyFired) _syncedDispatchHighWaterMark = tick;

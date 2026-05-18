@@ -103,6 +103,12 @@ namespace xpTURN.Klotho.Network
                 DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
                 CountdownDurationMs = _sessionConfig.CountdownDurationMs,
                 CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
+                CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
+                MaxSpectators = _sessionConfig.MaxSpectators,
+                AbortGraceMs = _sessionConfig.AbortGraceMs,
+                EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
+                EndGraceMs = _sessionConfig.EndGraceMs,
+                ClientShutdownGraceMs = _sessionConfig.ClientShutdownGraceMs,
                 RecommendedExtraDelay = lateJoinSeedExtraDelay,
             };
             // Seed push baseline so the first mid-match recompute does not redundantly push the same value.

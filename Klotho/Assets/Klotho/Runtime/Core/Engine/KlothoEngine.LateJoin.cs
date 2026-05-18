@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ZLogger;
 
 using xpTURN.Klotho.Input;
+using xpTURN.Klotho.ECS;
 
 namespace xpTURN.Klotho.Core
 {
@@ -138,8 +139,22 @@ namespace xpTURN.Klotho.Core
 
         private void HandlePlayerJoinedNotification(int joinedPlayerId)
         {
-            if (!_activePlayerIds.Contains(joinedPlayerId))
+            bool added = !_activePlayerIds.Contains(joinedPlayerId);
+            if (added)
                 _activePlayerIds.Add(joinedPlayerId);
+
+            // Mirror the roster mutation into the frame so the deterministic
+            // SessionParticipantComponent slot set stays in sync with _activePlayerIds.
+            // PlayerJoinCommand path → same tick on all nodes → deterministic.
+            if (added && _simulation is EcsSimulation ecsSim)
+            {
+                var frame = ecsSim.Frame;
+                var slotEntity = frame.CreateEntity();
+                frame.Add(slotEntity, new SessionParticipantComponent
+                {
+                    PlayerId = joinedPlayerId,
+                });
+            }
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             var sb = new System.Text.StringBuilder();

@@ -15,8 +15,6 @@ namespace Brawler
     /// </summary>
     public class GameOverSystem : ISystem
     {
-        const int GraceTicks = 10;
-
         static readonly FixedString32 ReasonStocks  = FixedString32.FromString("stocks");
         static readonly FixedString32 ReasonTimeout = FixedString32.FromString("timeout");
 
@@ -47,8 +45,14 @@ namespace Brawler
         // ────────────────────────────────────────────
         bool TryStocksGameOver(ref Frame frame, ref GameTimerStateComponent state)
         {
-            if (frame.Tick - state.StartTick < GraceTicks) return false;
+            // Expected participant count — engine-populated SessionParticipantComponent slot entities.
+            // Fail-closed when zero (component not yet written) to avoid firing during bootstrap.
+            int expected = 0;
+            var slotFilter = frame.Filter<SessionParticipantComponent>();
+            while (slotFilter.Next(out _)) expected++;
+            if (expected == 0) return false;
 
+            int presentCount = 0;
             int aliveCount  = 0;
             int winnerPlayerId = -1;
             int winnerStocks   = -1;
@@ -57,6 +61,7 @@ namespace Brawler
             while (filter.Next(out var entity))
             {
                 ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(entity);
+                presentCount++;
                 if (c.StockCount > 0)
                 {
                     aliveCount++;
@@ -68,6 +73,9 @@ namespace Brawler
                     }
                 }
             }
+
+            // Gate: all expected participants must have a CharacterComponent before judging stocks.
+            if (presentCount < expected) return false;
 
             if (aliveCount > 1) return false;
 

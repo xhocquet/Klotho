@@ -203,8 +203,10 @@ Assets/Klotho/
 | ---- | ---- |
 | Idle | Initial state. Engine not started |
 | WaitingForPlayers | Waiting for all players to connect / be ready |
+| BootstrapPending | (SD server only) Awaiting all players' bootstrap-ready acks (or timeout) before the first tick. Blocks `UpdateServerTick` via the existing `State == Running` gate |
 | Running | Simulation in progress |
 | Paused | Paused (waiting for input or manual) |
+| Ending | Transient: tick advance frozen while transport keepalives continue. Reached when `EndGracePolicy.Pause` is selected at match end — `ExecuteTick` is blocked, input is buffered but not processed |
 | Finished | Game over or manually stopped |
 | Aborted | Match aborted before completion (chain stall timeout, catastrophic divergence, etc.). Distinct from `Finished` so replay-save / score-aggregation / normal-end UI can branch. Pair with `AbortReason` via `OnMatchAborted`. Use `KlothoStateExtensions.IsEnded()` for terminal-state check (covers both `Finished` and `Aborted`) |
 
@@ -256,6 +258,10 @@ Configuration is split into two layers.
 | CorrectiveResetCooldownMs | 5000 | ms | (P2P, host-only) Minimum interval between consecutive corrective-reset broadcasts. Prevents broadcast storms when persistent hash divergence fires `OnHashMismatch` repeatedly |
 | CountdownDurationMs | 3000 | ms | Game-start countdown length |
 | CatchupMaxTicksPerFrame | 200 | ticks | Max ticks per frame during catchup |
+| AbortGraceMs | 1500 | ms | Post-match grace duration on abort. Time between `OnMatchAborted` fire and `Room.State` transition to `Draining`, giving clients time to display the error dialog and the server side time for abort logging |
+| EndGracePolicy | Continue | enum | Simulation behavior during the post-match grace window. `Continue` keeps the simulation running (input/heartbeat/replay continuity); `Pause` halts tick advancement (`Running` → `Ending`) |
+| EndGraceMs | 5000 | ms | Post-match grace duration on normal end. Time between `OnMatchEnded` fire and `Room.State` transition to `Draining`, giving clients time to display the result screen and the server side time for any post-processing hook. Range: 0 (immediate drain, debug/integration only) or greater |
+| ClientShutdownGraceMs | 4500 | ms | Client-side grace duration on normal end. Time between `OnMatchEnded` on the client and the client's self-initiated session shutdown, so the result screen plays out before the chain-stall warning storm begins. Must stay below `EndGraceMs` — inversion risks chain-stall warnings |
 | Old-data cleanup threshold | CurrentTick - MaxRollbackTicks - 10 | ticks | Threshold for discarding old data |
 
 ### 2.3 Events
@@ -281,6 +287,7 @@ Configuration is split into two layers.
 | OnResyncFailed | `Action` | Failed after exceeding max resync retries |
 | OnMatchAborted | `Action<AbortReason>` | Match terminated mid-play via `AbortMatch` (state transitions to `Aborted`). Reasons: `ChainStallTimeout` / `StateDivergence` / `ReconnectFailed` / `Unknown` |
 | OnMatchReset | `Action<ResetReason>` | Corrective reset applied — state restored, match continues (`Running` preserved). Sibling to `OnMatchAborted` (terminal). Reasons: `StateDivergence` / `ManualResync` / `Unknown` |
+| OnMatchEnded | `Action<int, IMatchEndEvent>` | Normal match-end signaled by a verified `IMatchEndEvent` (Synced). Fires exactly once per match on first verification (tick, event). Drives the grace-driven `Room` drain (`EndGraceMs` / `ClientShutdownGraceMs`) and, when `EndGracePolicy.Pause` is set, the `Running → Ending` transition |
 | OnDisconnectedInputNeeded | `Action<int>` | Empty-input request for a disconnected player (playerId) |
 | OnCatchupComplete | `Action` | Late-join catchup completed |
 | OnVerifiedInputBatchReady | `Action<int, int, byte[], int>` | Verified input batch ready for spectators (startTick, tickCount, data, length) |
@@ -500,6 +507,7 @@ ICommand:
 | Type | Location | Purpose |
 | ---- | ---- | ---- |
 | EmptyCommand | Core | Fallback for prediction (cached) |
+| StopCommand | Core | Explicit "no movement, no action" intent. Sent by clients during the `EndGracePolicy.Pause` grace window to deterministically halt all characters; concrete semantics decided by game-side `ICommandSystem` |
 | PlayerJoinCommand | Core | Player-join system command (`ISystemCommand`) |
 | MoveCommand | Gameplay | Move command (TargetX/Y/Z — FP64 raw) |
 | ActionCommand | Gameplay (Sample) | Action command |
@@ -964,6 +972,7 @@ Carries the SessionConfig payload + StartTime + PlayerIds together (a separated 
   [long StartTime]                    // absolute game-start time, in SharedNow
   [int  RandomSeed]
   [int  MaxPlayers]
+  [int  MaxSpectators]
   [int  MinPlayers]
   [bool AllowLateJoin]
   [int  ReconnectTimeoutMs]
@@ -971,10 +980,17 @@ Carries the SessionConfig payload + StartTime + PlayerIds together (a separated 
   [int  LateJoinDelayTicks]
   [int  ResyncMaxRetries]
   [int  DesyncThresholdForResync]
+  [int  CorrectiveResetCooldownMs]
   [int  CountdownDurationMs]
   [int  CatchupMaxTicksPerFrame]
+  [int  AbortGraceMs]
+  [int  EndGracePolicy]               // EndGracePolicy enum (Continue/Pause)
+  [int  EndGraceMs]
+  [int  ClientShutdownGraceMs]
   [int  PlayerIdCount] [int[] PlayerIds]
 ```
+
+The same SessionConfig payload is also propagated via `LateJoinAcceptMessage` and `ReconnectAcceptMessage` so a joiner ends up with byte-identical session parameters regardless of the join path.
 
 **Ping/Pong** (ID=40/41):
 

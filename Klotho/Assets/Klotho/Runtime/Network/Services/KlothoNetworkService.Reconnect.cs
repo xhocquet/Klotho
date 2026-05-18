@@ -633,6 +633,12 @@ namespace xpTURN.Klotho.Network
             _reconnectAcceptCache.DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync;
             _reconnectAcceptCache.CountdownDurationMs = _sessionConfig.CountdownDurationMs;
             _reconnectAcceptCache.CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame;
+            _reconnectAcceptCache.CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs;
+            _reconnectAcceptCache.MaxSpectators = _sessionConfig.MaxSpectators;
+            _reconnectAcceptCache.AbortGraceMs = _sessionConfig.AbortGraceMs;
+            _reconnectAcceptCache.EndGracePolicy = (int)_sessionConfig.EndGracePolicy;
+            _reconnectAcceptCache.EndGraceMs = _sessionConfig.EndGraceMs;
+            _reconnectAcceptCache.ClientShutdownGraceMs = _sessionConfig.ClientShutdownGraceMs;
             _reconnectAcceptCache.RecommendedExtraDelay =
                 ComputeRecommendedExtraDelay(reconnectAvgRtt, msg.PlayerId, peerId, "Reconnect");
 

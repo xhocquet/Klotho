@@ -79,9 +79,33 @@ namespace Brawler
                 case SpawnCharacterCommand spawn:
                     HandleSpawn(ref frame, spawn);
                     break;
+                case StopCommand stop:
+                    HandleStop(ref frame, stop);
+                    break;
                 default:
                     break;
             }
+        }
+
+        // ────────────────────────────────────────────
+        // StopCommand: zero XZ velocity and clear input magnitude
+        // ────────────────────────────────────────────
+        void HandleStop(ref Frame frame, StopCommand cmd)
+        {
+            if (!TryFindCharacter(ref frame, cmd.PlayerId, out var entity)) return;
+
+            ref var character = ref frame.Get<CharacterComponent>(entity);
+            if (character.IsDead) return;
+
+            bool inputBlocked = frame.Has<KnockbackComponent>(entity)
+                && frame.GetReadOnly<KnockbackComponent>(entity).BlockInput;
+            inputBlocked |= character.ActionLockTicks > 0;
+            if (inputBlocked) return;
+
+            ref var physics = ref frame.Get<PhysicsBodyComponent>(entity);
+            physics.RigidBody.velocity.x = FP64.Zero;
+            physics.RigidBody.velocity.z = FP64.Zero;
+            character.InputMagnitude = FP64.Zero;
         }
 
         // ────────────────────────────────────────────

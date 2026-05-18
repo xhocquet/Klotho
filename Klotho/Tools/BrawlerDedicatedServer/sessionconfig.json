@@ -1,7 +1,19 @@
 {
+  "RandomSeed": 0,
+  "MaxPlayers": 4,
+  "MinPlayers": 2,
   "AllowLateJoin": true,
   "ReconnectTimeoutMs": 60000,
   "ReconnectMaxRetries": 3,
-  "MinPlayers": 2,
-  "MaxSpectators": 4
+  "LateJoinDelayTicks": 10,
+  "ResyncMaxRetries": 3,
+  "DesyncThresholdForResync": 3,
+  "CorrectiveResetCooldownMs": 5000,
+  "CountdownDurationMs": 3000,
+  "CatchupMaxTicksPerFrame": 200,
+  "MaxSpectators": 4,
+  "AbortGraceMs": 1500,
+  "EndGracePolicy": "Pause",
+  "EndGraceMs": 5000,
+  "ClientShutdownGraceMs": 4500
 }

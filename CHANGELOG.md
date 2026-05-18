@@ -1,10 +1,15 @@
 # Changelog
 
-## [0.1.7] - 2026-05-17
+## [0.1.7] - 2026-05-18
 
 - IMP-40 (`KLOTHO_FAULT_INJECTION`-only): SD RTT-spike desync fix — per-peer FIFO clamp in `LiteNetLibTransport._delayedRecvMessages` resolves the fault-injection reorder bug (production transport unaffected).
 - IMP-40: `ProcessVerifiedBatchCore` batch-start gap fill refactored to use `SimulateGapTickWithEmptyFallback` helper, closing a latent bug where missing players were not substituted with `EmptyCommand` (separate from the fault-injection fix above; surfaces in high-RTT predict-snapshot rollback paths).
 - IMP-40: SD desync runtime alarm — `[SD][ResimGap]` `ZLogWarning` emits when a verified batch leaves resim behind `entry.Tick`; complemented by dev-only diagnostics (`[InputCollector][Reject]`/`[EmptySubst]`, `[SD][PredSource]`, `[CompHash][History]`). `ServerInit` component hash dump promoted to `ZLogInformation` so release builds still surface it.
+- IMP-39: All-participants-spawned gate — introduced `SessionParticipantComponent`; engine writes deterministic participant slots into the frame at `Start()`.
+- IMP-39: Normal-end lifecycle — `IMatchEndEvent`/`EndReason` + `OnMatchEnded` channel, grace-driven `Room` drain, wired into `BrawlerGameController`/`GameOverSystem`.
+- IMP-39: Client match-end reaction — prediction-freeze path + `ClientShutdownGraceMs` (SessionConfig).
+- IMP-39: `StopCommand`-based pause behavior — SD/P2P unified, handled in `PlatformerCommandSystem`.
+- IMP-39: `SessionConfig` propagation across 17 fields (6 previously missing + Normal-join bug fix), aligned `GameStartMessage`/`LateJoinAcceptMessage`/`ReconnectAcceptMessage`.
 
 ## [0.1.6] - 2026-05-16
 

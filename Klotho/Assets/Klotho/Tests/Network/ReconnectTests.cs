@@ -779,6 +779,7 @@ namespace xpTURN.Klotho.Network.Tests
             public bool IsReplayMode => false;
             public bool IsServer => false;
             public bool IsHost => false;
+            public bool IsMatchEnded => false;
             public SimulationStage Stage => SimulationStage.Forward;
             public int LocalPlayerId { get; set; }
             public int TickInterval => 25;

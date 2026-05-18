@@ -165,6 +165,22 @@ namespace xpTURN.Klotho.Network
                 roomId, simConfig, sessionConfig, sim, commandFactory,
                 transport, networkService, engine, callbacks, roomLogger);
 
+            // Hook room drain into engine match-end / match-abort events.
+            // Normal end (OnMatchEnded) → EndGraceMs grace, then Draining (reason="match-ended").
+            //   Pause policy halts characters via client-issued StopCommand on the deterministic stream;
+            //   the engine keeps ticking through the grace window so the StopCommand reaches verified state.
+            // Abort (OnMatchAborted) → AbortGraceMs grace, then Draining (reason="match-aborted").
+            // first-write-wins inside Room.RequestEnd handles abort-during-grace.
+            room.AttachEngineHandlers(
+                onMatchEnded: (tick, endEvt) =>
+                {
+                    room.RequestEnd(EndReason.MatchEnded, TimeSpan.FromMilliseconds(sessionConfig.EndGraceMs));
+                },
+                onMatchAborted: reason =>
+                {
+                    room.RequestEnd(EndReason.MatchAborted, TimeSpan.FromMilliseconds(sessionConfig.AbortGraceMs));
+                });
+
             room.CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             room.State = RoomState.Active;
             _rooms[roomId] = room;

@@ -33,6 +33,12 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int DesyncThresholdForResync;
         [KlothoOrder] public int CountdownDurationMs;
         [KlothoOrder] public int CatchupMaxTicksPerFrame;
+        [KlothoOrder] public int CorrectiveResetCooldownMs;
+        [KlothoOrder] public int MaxSpectators;
+        [KlothoOrder] public int AbortGraceMs;
+        [KlothoOrder] public int EndGracePolicy; // EndGracePolicy enum as int
+        [KlothoOrder] public int EndGraceMs;
+        [KlothoOrder] public int ClientShutdownGraceMs;
 
         // --- PlayerConfig list (existing player data, concatenated serialized bytes) ---
 

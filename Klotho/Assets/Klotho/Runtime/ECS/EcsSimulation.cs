@@ -132,8 +132,8 @@ public void Initialize()
         }
 
         // Diagnostic — delegates to Frame for per-component hash dump.
-        public void LogComponentHashes(ILogger logger, string label, bool atDebugLevel = false)
-            => _frame.LogComponentHashes(logger, label, atDebugLevel);
+        public void LogComponentHashes(ILogger logger, string label, LogLevel logLevel = LogLevel.Debug)
+            => _frame.LogComponentHashes(logger, label, logLevel);
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
         public void SnapshotHashesToQueue() => _frame.SnapshotHashesToQueue();

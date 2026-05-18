@@ -471,6 +471,8 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
         public HashSet<int> DisconnectedPeers { get; } = new HashSet<int>();
         private readonly Dictionary<int, byte[]> _lastSent = new Dictionary<int, byte[]>();
 
+        public int BroadcastCount { get; private set; }
+
         public byte[] LastSentTo(int peerId)
         {
             _lastSent.TryGetValue(peerId, out var data);
@@ -510,8 +512,8 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
             _lastSent[peerId] = copy;
         }
 
-        public void Broadcast(byte[] data, DeliveryMethod deliveryMethod) { }
-        public void Broadcast(byte[] data, int length, DeliveryMethod deliveryMethod) { }
+        public void Broadcast(byte[] data, DeliveryMethod deliveryMethod) { BroadcastCount++; }
+        public void Broadcast(byte[] data, int length, DeliveryMethod deliveryMethod) { BroadcastCount++; }
 
         public void DisconnectPeer(int peerId)
         {

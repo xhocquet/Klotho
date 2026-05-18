@@ -613,6 +613,30 @@ namespace xpTURN.Klotho.Network
         {
             _logger?.ZLogInformation($"[SDClientService] Game start: seed={msg.RandomSeed}, players={msg.PlayerIds.Count}");
 
+            // Apply server-authoritative SessionConfig fields in place. Engine and NetworkService
+            // share the same SessionConfig reference, so mutating the instance propagates to both
+            // readers automatically. Match-start one-shot; SessionConfig stays immutable afterward.
+            if (_sessionConfig is SessionConfig cfg)
+            {
+                cfg.RandomSeed = msg.RandomSeed;
+                cfg.MaxPlayers = msg.MaxPlayers;
+                cfg.MinPlayers = msg.MinPlayers;
+                cfg.AllowLateJoin = msg.AllowLateJoin;
+                cfg.ReconnectTimeoutMs = msg.ReconnectTimeoutMs;
+                cfg.ReconnectMaxRetries = msg.ReconnectMaxRetries;
+                cfg.LateJoinDelayTicks = msg.LateJoinDelayTicks;
+                cfg.ResyncMaxRetries = msg.ResyncMaxRetries;
+                cfg.DesyncThresholdForResync = msg.DesyncThresholdForResync;
+                cfg.CountdownDurationMs = msg.CountdownDurationMs;
+                cfg.CatchupMaxTicksPerFrame = msg.CatchupMaxTicksPerFrame;
+                cfg.CorrectiveResetCooldownMs = msg.CorrectiveResetCooldownMs;
+                cfg.MaxSpectators = msg.MaxSpectators;
+                cfg.AbortGraceMs = msg.AbortGraceMs;
+                cfg.EndGracePolicy = (EndGracePolicy)msg.EndGracePolicy;
+                cfg.EndGraceMs = msg.EndGraceMs;
+                cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
+            }
+
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {

@@ -716,6 +716,12 @@ namespace xpTURN.Klotho.Network
                 CountdownDurationMs = _sessionConfig.CountdownDurationMs,
                 CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
                 MinPlayers = _sessionConfig.MinPlayers,
+                CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
+                MaxSpectators = _sessionConfig.MaxSpectators,
+                AbortGraceMs = _sessionConfig.AbortGraceMs,
+                EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
+                EndGraceMs = _sessionConfig.EndGraceMs,
+                ClientShutdownGraceMs = _sessionConfig.ClientShutdownGraceMs,
             };
 
             foreach (var player in _players)

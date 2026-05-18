@@ -71,7 +71,13 @@ namespace xpTURN.Klotho.Core
                 leadTicks = CurrentTick - _lastServerVerifiedTick;
                 if (hardLimit > 0 && leadTicks >= hardLimit)
                 {
-                    _logger?.ZLogWarning($"[KlothoEngine] ClientTick: Hard limit reached: currentTick={CurrentTick}, lastVerifiedTick={_lastServerVerifiedTick}, leadTicks={leadTicks}, hardLimit={hardLimit}");
+                    // Demote to Debug once OnMatchEnded has fired — server's EndGracePolicy.Pause
+                    // freezes verified-tick advance, so client prediction naturally hits hardLimit
+                    // until ClientShutdownGraceMs expires. Known trade-off, not a stall.
+                    if (_matchEndedDispatched)
+                        _logger?.ZLogDebug($"[KlothoEngine] ClientTick: Hard limit reached (post-match-end): currentTick={CurrentTick}, lastVerifiedTick={_lastServerVerifiedTick}, leadTicks={leadTicks}, hardLimit={hardLimit}");
+                    else
+                        _logger?.ZLogWarning($"[KlothoEngine] ClientTick: Hard limit reached: currentTick={CurrentTick}, lastVerifiedTick={_lastServerVerifiedTick}, leadTicks={leadTicks}, hardLimit={hardLimit}");
                     break;
                 }
 

@@ -32,6 +32,7 @@ if (isTest)
     int failures = 0;
     failures += SafeRunSuite("MultiRoomTests", MultiRoomTests.RunAll);
     failures += SafeRunSuite("SingleRoomLifecycleTests", SingleRoomLifecycleTests.RunAll);
+    failures += SafeRunSuite("NormalEndLifecycleTests", NormalEndLifecycleTests.RunAll);
     return failures;
 }
 else if (multiRoom)

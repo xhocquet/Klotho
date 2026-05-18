@@ -94,6 +94,7 @@ namespace Brawler
         private LiteNetLibTransport _transport;
         private Camera _mainCamera;
         private CancellationTokenSource _connectCts;  // For canceling JoinGameAsync
+        private CancellationTokenSource _clientShutdownCts;  // For canceling ScheduleClientShutdown
         private IReconnectCredentialsStore _credentialsStore;
         private bool _isStopping;
 
@@ -537,6 +538,7 @@ namespace Brawler
             _session.NetworkService.OnPlayerReconnected += OnPlayerReconnected;
             _session.Engine.OnGameStart += InjectInitialStateSnapshot;
             _session.Engine.OnMatchAborted += OnMatchAborted;
+            _session.Engine.OnMatchEnded += OnMatchEnded;
             _session.Engine.OnMatchReset += OnMatchReset;
 
             // Broadcast the local player's character selection via PlayerConfig
@@ -617,6 +619,7 @@ namespace Brawler
                 _session.Engine.OnResyncCompleted += OnResyncCompleted;
                 _session.Engine.OnGameStart += InjectInitialStateSnapshot;
                 _session.Engine.OnMatchAborted += OnMatchAborted;
+                _session.Engine.OnMatchEnded += OnMatchEnded;
                 _session.Engine.OnMatchReset += OnMatchReset;
 
                 // Broadcast the local player's character selection via PlayerConfig
@@ -689,6 +692,7 @@ namespace Brawler
                 _session.Engine.OnResyncCompleted += OnResyncCompleted;
                 _session.Engine.OnGameStart += InjectInitialStateSnapshot;
                 _session.Engine.OnMatchAborted += OnMatchAborted;
+                _session.Engine.OnMatchEnded += OnMatchEnded;
                 _session.Engine.OnMatchReset += OnMatchReset;
 
                 // Re-send PlayerConfig on reconnect to force-sync the last selection (intent).
@@ -879,6 +883,8 @@ namespace Brawler
             _spectatorEngine = engine;
             _spectatorSimulation = simulation;
 
+            engine.OnMatchEnded += OnMatchEnded;
+
             InitializeViewSync(engine, simulation, sessionCfg.MaxPlayers);
             _gameMenu.SetActionType(GameMenu.ActionType.Playing);
         }
@@ -935,6 +941,11 @@ namespace Brawler
             _connectCts?.Dispose();
             _connectCts = null;
 
+            // Cancel any pending client shutdown task
+            _clientShutdownCts?.Cancel();
+            _clientShutdownCts?.Dispose();
+            _clientShutdownCts = null;
+
             var engine = ActiveEngine;
 
             _viewSync.OnLocalCharacterSpawned -= OnLocalCharacterSpawned;
@@ -960,6 +971,7 @@ namespace Brawler
                 _session.Engine.OnResyncCompleted -= OnResyncCompleted;
                 _session.Engine.OnGameStart -= InjectInitialStateSnapshot;
                 _session.Engine.OnMatchAborted -= OnMatchAborted;
+                _session.Engine.OnMatchEnded -= OnMatchEnded;
                 _session.Engine.OnMatchReset -= OnMatchReset;
             }
 
@@ -973,13 +985,18 @@ namespace Brawler
             if (engine != null && !engine.IsReplayMode)
                 engine.SaveReplayToFile(_replayPath, true);
 
-            _spectatorEngine?.Stop();
+            if (_spectatorEngine != null)
+            {
+                _spectatorEngine.OnMatchEnded -= OnMatchEnded;
+                _spectatorEngine.Stop();
+            }
             _spectatorEngine = null;
             _spectatorSimulation = null;
             if (_spectatorService != null)
             {
                 _spectatorService.OnSimulationConfigReceived -= OnSpectatorSimConfigReceived;
                 _spectatorService.OnSessionConfigReceived -= OnSpectatorSessionConfigReceived;
+                _spectatorService.Disconnect();
                 _spectatorService = null;
             }
             _spectatorCommandFactory = null;
@@ -1066,6 +1083,9 @@ namespace Brawler
 
         private void OnReconnecting()
         {
+            // Suppress reconnect UX when match-end is in progress — host disconnect after match end is not a network error.
+            if (_clientShutdownCts != null) return;
+
             _logger?.ZLogWarning($"[Brawler] Disconnected, reconnecting...");
             _gameMenu.ReconnectStatus = "Reconnecting...";
         }
@@ -1087,6 +1107,39 @@ namespace Brawler
                 AbortReason.ReconnectFailed => "Match ended: reconnection failed",
                 _ => "Match ended",
             };
+            StopGame();
+        }
+
+        private void OnMatchEnded(int tick, IMatchEndEvent endEvt)
+        {
+            if (_session?.Engine?.IsReplayMode == true) return;
+
+            _logger?.ZLogInformation(
+                $"[Brawler] Match ended: tick={tick}, winner={endEvt.WinnerPlayerId}, reason={endEvt.Reason}");
+
+            ScheduleClientShutdown();
+        }
+
+        private void ScheduleClientShutdown()
+        {
+            var engine = ActiveEngine;
+            if (engine == null) return;
+            if (_clientShutdownCts != null) return;
+
+            int graceMs = engine.SessionConfig.ClientShutdownGraceMs;
+            _clientShutdownCts = new CancellationTokenSource();
+            ClientShutdownAsync(graceMs, _clientShutdownCts.Token).Forget();
+        }
+
+        private async UniTaskVoid ClientShutdownAsync(int graceMs, CancellationToken ct)
+        {
+            try
+            {
+                await UniTask.Delay(graceMs, cancellationToken: ct);
+            }
+            catch (OperationCanceledException) { return; }
+
+            if (ActiveEngine == null) return;
             StopGame();
         }
 

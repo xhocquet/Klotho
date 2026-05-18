@@ -93,5 +93,39 @@ namespace xpTURN.Klotho.Core
         /// Maximum number of spectators allowed in the session.
         /// </summary>
         int MaxSpectators { get; }
+
+        /// <summary>
+        /// Post-match grace duration on abort (milliseconds). Time between OnMatchAborted fire and
+        /// Room.State transition to Draining, giving clients time to display an error dialog
+        /// (connection lost / chain stall notice) and server side time for abort logging. Default 1500.
+        /// Range: 0 or greater. Typically shorter than EndGraceMs since abort uses an error UI, not a
+        /// result screen.
+        /// </summary>
+        int AbortGraceMs { get; }
+
+        /// <summary>
+        /// Simulation behavior during the post-match grace window. Continue (default) keeps the
+        /// simulation running so input/heartbeat/replay continuity is preserved; Pause halts tick
+        /// advancement (KlothoState transitions Running -&gt; Ending). See EndGracePolicy.
+        /// </summary>
+        EndGracePolicy EndGracePolicy { get; }
+
+        /// <summary>
+        /// Post-match grace duration on normal end (milliseconds). Time between OnMatchEnded fire and
+        /// Room.State transition to Draining, giving clients time to display the result screen and
+        /// server side time for any post-processing hook. Default 5000.
+        /// Range: 0 (immediate drain, debug/integration only) or greater.
+        /// </summary>
+        int EndGraceMs { get; }
+
+        /// <summary>
+        /// Client-side grace duration on normal end (milliseconds). Time between OnMatchEnded fire
+        /// on the client and the client's self-initiated session shutdown, so the result screen
+        /// plays out before the chain-stall warning storm begins. Default 4500 — 500ms shorter than
+        /// EndGraceMs so the client tears down before the server drain disables verified broadcasts.
+        /// Range: 0 or greater. Must stay below EndGraceMs; inversion risks chain-stall warnings.
+        /// Raise EndGraceMs or lower this if P99 RTT exceeds the default margin (500ms).
+        /// </summary>
+        int ClientShutdownGraceMs { get; }
     }
 }

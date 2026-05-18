@@ -122,6 +122,17 @@ namespace Brawler
         {
             if (_engine == null) return;
 
+            // EndGracePolicy.Pause grace: send StopCommand instead of normal input so verified state
+            // halts character motion deterministically. IsMatchEnded flips after the verified
+            // IMatchEndEvent fires; for Continue policy this branch is skipped (normal flow continues).
+            if (IsPauseGraceActive())
+            {
+                var stop = CommandPool.Get<StopCommand>();
+                stop.PlayerId = playerId;
+                sender.Send(stop);
+                return;
+            }
+
 #if KLOTHO_FAULT_INJECTION
             // Duplicate path: bypass HasOwnCharacter so spawn cmd is re-sent on cooldown even
             // after spawn success → server's HandleSpawn hits TryFindCharacter guard → Duplicate reject
@@ -195,6 +206,12 @@ namespace Brawler
 
             // Consume event-style input (send only once)
             _input.ConsumeOneShot();
+        }
+
+        private bool IsPauseGraceActive()
+        {
+            return _engine.IsMatchEnded
+                && _engine.SessionConfig.EndGracePolicy == EndGracePolicy.Pause;
         }
 
         public void SetEngine(IKlothoEngine engine)

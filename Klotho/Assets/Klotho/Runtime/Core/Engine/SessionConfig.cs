@@ -45,5 +45,17 @@ namespace xpTURN.Klotho.Core
 
         /// <inheritdoc />
         public int MaxSpectators { get; set; } = 0;
+
+        /// <inheritdoc />
+        public int AbortGraceMs { get; set; } = 1500;
+
+        /// <inheritdoc />
+        public EndGracePolicy EndGracePolicy { get; set; } = EndGracePolicy.Continue;
+
+        /// <inheritdoc />
+        public int EndGraceMs { get; set; } = 5000;
+
+        /// <inheritdoc />
+        public int ClientShutdownGraceMs { get; set; } = 4500;
     }
 }

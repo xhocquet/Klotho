@@ -201,6 +201,16 @@ namespace xpTURN.Klotho.Network
                 return null;
             }
 
+            // Room in post-match grace (EndRequestedAtUtc set, State still Active) —
+            // reject new joins / reconnects. Catches both first-time joins (RoomHandshakeMessage)
+            // and reconnect attempts (which also start with RoomHandshakeMessage for routing).
+            if (room.EndRequestedAtUtc.HasValue)
+            {
+                _logger?.ZLogWarning($"[RoomRouter] Peer {peerId}: room {roomId} is ending (reason={room.EndReason}, grace pending)");
+                RejectAndDisconnect(peerId, 5); // RoomClosing — reuse code; grace counts as closing from the new peer's perspective
+                return null;
+            }
+
             int transportCap = room.NetworkService.MaxPlayersPerRoom + room.NetworkService.MaxSpectatorsPerRoom;
             if (room.Transport.PeerCount >= transportCap)
             {

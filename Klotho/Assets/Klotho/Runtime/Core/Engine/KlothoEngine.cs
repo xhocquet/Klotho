@@ -72,6 +72,7 @@ namespace xpTURN.Klotho.Core
         public event Action<int, SimulationEvent> OnEventConfirmed;
         public event Action<int, SimulationEvent> OnEventCanceled;
         public event Action<int, SimulationEvent> OnSyncedEvent;
+        public event Action<int, IMatchEndEvent> OnMatchEnded;
         public event Action<int> OnResyncCompleted;
         public event Action<AbortReason> OnMatchAborted;
         public event Action<ResetReason> OnMatchReset;
@@ -623,7 +624,24 @@ namespace xpTURN.Klotho.Core
             // double-init).
             bool isSdClient = _simConfig.Mode == NetworkMode.ServerDriven && !IsServer;
             if (!isSdClient)
+            {
+                // Engine writes deterministic participant slots into the frame
+                // before any game-specific world setup runs.
+                if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
+                {
+                    var frame = ecsSim.Frame;
+                    for (int i = 0; i < _activePlayerIds.Count; i++)
+                    {
+                        var slotEntity = frame.CreateEntity();
+                        frame.Add(slotEntity, new xpTURN.Klotho.ECS.SessionParticipantComponent
+                        {
+                            PlayerId = _activePlayerIds[i],
+                        });
+                    }
+                }
+
                 _simulationCallbacks?.OnInitializeWorld(this);
+            }
 
             SaveSnapshot(0);
 
@@ -979,6 +997,26 @@ namespace xpTURN.Klotho.Core
             _logger?.ZLogWarning($"[KlothoEngine][AbortMatch] reason={reason}, State {State}->Aborted");
             State = KlothoState.Aborted;
             OnMatchAborted?.Invoke(reason);
+        }
+
+        /// <summary>
+        /// Transitions Running -> Ending. Idempotent: no-op when called from Ending / Finished /
+        /// Aborted / Idle / WaitingForPlayers / BootstrapPending / Paused. While in Ending, the
+        /// State == Running gate in Update() blocks ExecuteTick, so the simulation tick freezes.
+        /// _networkService.Update() (run before the gate) keeps transport-level keepalives flowing.
+        /// Currently not invoked in the normal end flow — EndGracePolicy.Pause halts characters via
+        /// client-issued StopCommand on the deterministic stream instead. Retained for API stability
+        /// and potential future use (e.g., admin-triggered freeze).
+        /// </summary>
+        public void EnterEnding()
+        {
+            if (State != KlothoState.Running)
+            {
+                _logger?.ZLogDebug($"[KlothoEngine][EnterEnding] ignored, State={State} (only Running -> Ending allowed)");
+                return;
+            }
+            _logger?.ZLogInformation($"[KlothoEngine][EnterEnding] State Running->Ending at tick={CurrentTick}");
+            State = KlothoState.Ending;
         }
 
         public void Stop()
@@ -1339,9 +1377,9 @@ namespace xpTURN.Klotho.Core
                 _logger?.ZLogInformation($"[KlothoEngine][SD] Initial FullState broadcast: size={_cachedFullState.Length}, hash=0x{_cachedFullStateHash:X16}");
 
                 // Diagnostic — per-component hash breakdown for desync root-cause analysis.
-                // Information level: surfaced in release builds (ServerInit fires once per match).
+                // Debug level: ServerInit fires once per match, kept off the release log stream.
                 if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimDiag)
-                    ecsSimDiag.LogComponentHashes(_logger, "ServerInit", atDebugLevel: false);
+                    ecsSimDiag.LogComponentHashes(_logger, "ServerInit", logLevel: LogLevel.Debug);
             }
         }
 
