@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.8] - 2026-05-18
+
+- Updated LiteNetLib to [2.1.3](https://github.com/RevenantX/LiteNetLib/releases/tag/2.1.3); renamed `ConnectionRequest` → `LiteConnectionRequest` in `LiteNetLibTransport.OnConnectionRequest` to match the new interface signature.
+
+
 ## [0.1.7] - 2026-05-18
 
 - IMP-40 (`KLOTHO_FAULT_INJECTION`-only): SD RTT-spike desync fix — per-peer FIFO clamp in `LiteNetLibTransport._delayedRecvMessages` resolves the fault-injection reorder bug (production transport unaffected).

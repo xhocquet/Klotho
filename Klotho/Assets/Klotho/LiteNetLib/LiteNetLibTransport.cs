@@ -278,7 +278,7 @@ namespace xpTURN.Klotho.LiteNetLib
             StreamPool.ReturnBuffer(data);
         }
 
-        void ILiteNetEventListener.OnConnectionRequest(ConnectionRequest request)
+        void ILiteNetEventListener.OnConnectionRequest(LiteConnectionRequest request)
         {
             if (_isServer)
             {
