@@ -394,7 +394,7 @@ namespace xpTURN.Klotho.Network.Tests
         {
             StartPlaying();
 
-            string failReason = null;
+            byte failReason = 0;
             _clientService.OnReconnectFailed += r => failReason = r;
 
             // Fire Guest's HandleDisconnected
@@ -418,7 +418,7 @@ namespace xpTURN.Klotho.Network.Tests
             // _clientService should already be in WaitingForTransport due to the disconnect
             // Make it receive ReconnectReject
             // In practice this is processed via HandleDataReceived
-            Assert.AreEqual("InvalidMagic", failReason ?? "InvalidMagic");
+            Assert.AreEqual(ReconnectRejectReason.InvalidMagic, failReason == 0 ? ReconnectRejectReason.InvalidMagic : failReason);
         }
 
         #endregion

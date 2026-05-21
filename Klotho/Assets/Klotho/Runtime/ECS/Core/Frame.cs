@@ -6,6 +6,7 @@ using ZLogger;
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Deterministic;
+using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Serialization;
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
@@ -92,11 +93,82 @@ namespace xpTURN.Klotho.ECS
         public bool Has<T>(EntityRef entity) where T : unmanaged, IComponent
             => GetStorage<T>().Has(entity.Index);
 
+        // --- Singleton component access ---
+        // Intended for components marked [KlothoSingletonComponent], whose engine-side
+        // invariant guarantees exactly one entity carrier at the relevant lifecycle window.
+
+        public ref T GetSingleton<T>() where T : unmanaged, IComponent
+        {
+            var storage = GetStorage<T>();
+            if (storage.Count == 0)
+                throw new InvalidOperationException(
+                    $"GetSingleton<{typeof(T).Name}>: no entity carries this component");
+            return ref storage.ComponentsSpan[0];
+        }
+
+        public ref readonly T GetReadOnlySingleton<T>() where T : unmanaged, IComponent
+        {
+            var storage = GetStorage<T>();
+            if (storage.Count == 0)
+                throw new InvalidOperationException(
+                    $"GetReadOnlySingleton<{typeof(T).Name}>: no entity carries this component");
+            return ref storage.ComponentsSpan[0];
+        }
+
+        public bool TryGetSingleton<T>(out EntityRef entity) where T : unmanaged, IComponent
+        {
+            var storage = GetStorage<T>();
+            if (storage.Count == 0)
+            {
+                entity = default;
+                return false;
+            }
+            int entityIndex = storage.DenseSpan[0];
+            entity = new EntityRef(entityIndex, Entities.GetVersion(entityIndex));
+            return true;
+        }
+
         public void Add<T>(EntityRef entity, T component) where T : unmanaged, IComponent
-            => GetStorage<T>().Add(entity.Index, component);
+        {
+            var storage = GetStorage<T>();
+
+            // Singleton guard: a component marked [KlothoSingletonComponent] may have at most one entity carrier.
+            // TypeIdCache<T>.IsSingleton is populated lazily in GetTypeId<T> (called via GetStorage<T> above).
+            if (ComponentStorageRegistry.TypeIdCache<T>.IsSingleton && storage.Count > 0)
+                throw new InvalidOperationException(
+                    $"Duplicate singleton component {typeof(T).Name} on entity {entity.Index}; existing entity is already present");
+
+            storage.Add(entity.Index, component);
+
+            // Built-in: auto-initialize PreviousPosition / PreviousRotation when a TransformComponent
+            // is added with PreviousInitialized=false (default). Caller-side ref-set after
+            // CreateEntity(prototypeId) is not reachable here — handle via RefreshPreviousTransform.
+            if (typeof(T) == typeof(TransformComponent))
+            {
+                ref var t = ref Get<TransformComponent>(entity);
+                if (!t.PreviousInitialized)
+                {
+                    t.PreviousPosition = t.Position;
+                    t.PreviousRotation = t.Rotation;
+                    t.PreviousInitialized = true;
+                }
+            }
+        }
 
         public void Remove<T>(EntityRef entity) where T : unmanaged, IComponent
             => GetStorage<T>().Remove(entity.Index);
+
+        // Forces PreviousPosition / PreviousRotation to sync with the current Position / Rotation
+        // and marks PreviousInitialized=true. Use after caller-side ref-set of Position to suppress
+        // a 1-frame interpolation from the stale Previous*. Equivalent to the manual snap
+        // (PreviousPosition = Position; PreviousRotation = Rotation;) in one named call.
+        public void RefreshPreviousTransform(EntityRef entity)
+        {
+            ref var t = ref Get<TransformComponent>(entity);
+            t.PreviousPosition = t.Position;
+            t.PreviousRotation = t.Rotation;
+            t.PreviousInitialized = true;
+        }
 
         // --- Entity lifecycle ---
 
@@ -110,6 +182,17 @@ namespace xpTURN.Klotho.ECS
         public EntityRef CreateEntity(int prototypeId)
         {
             return Prototypes.Create(prototypeId, this);
+        }
+
+        // Typed prototype overload — lets callers carry spawn data on the prototype struct
+        // instead of post-create ref-set. EntityPrototypeRegistry is bypassed (no dictionary
+        // lookup); semantics match the registered path otherwise.
+        public EntityRef CreateEntity<TPrototype>(in TPrototype prototype)
+            where TPrototype : struct, IEntityPrototype
+        {
+            var entity = CreateEntity();
+            prototype.Apply(this, entity);
+            return entity;
         }
 
         public void DestroyEntity(EntityRef entity)

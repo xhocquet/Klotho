@@ -48,11 +48,19 @@ namespace xpTURN.Klotho.Tests
             return entity;
         }
 
-        private void SpawnGameSeed(EcsSimulation sim, ulong worldSeed = 12345)
+        private void SpawnRandomSeed(EcsSimulation sim, ulong worldSeed = 12345)
         {
             var frame = sim.Frame;
             var entity = frame.CreateEntity();
-            frame.Add(entity, new GameSeedComponent { WorldSeed = worldSeed });
+            frame.Add(entity, new RandomSeedComponent { Seed = worldSeed });
+
+            var timerEntity = frame.CreateEntity();
+            frame.Add(timerEntity, new GameTimerStateComponent
+            {
+                StartTick = -1,
+                LastReportedSeconds = -1,
+                GameOverFired = false,
+            });
         }
 
         private EntityRef SpawnItem(EcsSimulation sim, int itemType, FPVector2 pos)
@@ -91,7 +99,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_ShieldPickup_BlocksKnockback()
         {
             var sim = CreateBrawlerSimulation();
-            SpawnGameSeed(sim);
+            SpawnRandomSeed(sim);
 
             // Player 0: spawn at the Shield item's position
             SpawnWarrior(sim, 0, new FPVector2(FP64.Zero, FP64.Zero));
@@ -117,7 +125,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_BoostPickup_IncreasesSpeed()
         {
             var sim = CreateBrawlerSimulation();
-            SpawnGameSeed(sim);
+            SpawnRandomSeed(sim);
 
             SpawnWarrior(sim, 0, new FPVector2(FP64.Zero, FP64.Zero));
             SpawnItem(sim, 1, new FPVector2(FP64.Zero, FP64.Zero));
@@ -150,7 +158,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_BombPickup_KnockbackNearby()
         {
             var sim = CreateBrawlerSimulation();
-            SpawnGameSeed(sim);
+            SpawnRandomSeed(sim);
 
             // Player 0: spawn at the Bomb's position
             SpawnWarrior(sim, 0, new FPVector2(FP64.Zero, FP64.Zero));
@@ -175,7 +183,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_ShieldBlocksBomb()
         {
             var sim = CreateBrawlerSimulation();
-            SpawnGameSeed(sim);
+            SpawnRandomSeed(sim);
 
             // Player 0: picks up Shield first
             SpawnWarrior(sim, 0, new FPVector2(FP64.Zero, FP64.Zero));

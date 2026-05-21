@@ -37,10 +37,6 @@ namespace Brawler
                 GameOverFired = false,
             });
 
-            // Global seed singleton
-            var seedEntity = frame.CreateEntity();
-            frame.Add(seedEntity, new GameSeedComponent { WorldSeed = (ulong)engine.RandomSeed });
-
             // Moving platform
             var platformEntity = frame.CreateEntity();
             frame.Add(platformEntity, new TransformComponent { Position = new FPVector3(-16.0f, 0.0f, -16.0f) });
@@ -66,7 +62,8 @@ namespace Brawler
 
             // Bot spawn — place bots beyond the player range
             if (botCount > 0)
-                SpawnBots(ref frame, maxPlayers, botCount, (ulong)engine.RandomSeed);
+                SpawnBots(ref frame, maxPlayers, botCount,
+                          frame.GetReadOnlySingleton<RandomSeedComponent>().Seed);
         }
 
         // PlayerId range invariant.
@@ -89,7 +86,15 @@ namespace Brawler
                 int botPlayerId = maxPlayers + 1 + i;
 
                 int classIdx = rng.NextIntInclusive(0, stats.Length - 1);
-                var entity   = frame.CreateEntity(stats[classIdx].PrototypeId);
+                var spawnPos = rules.SpawnPositions[botPlayerId % rules.SpawnPositions.Length];
+                EntityRef entity = classIdx switch
+                {
+                    0 => frame.CreateEntity(new WarriorPrototype { SpawnPosition = spawnPos }),
+                    1 => frame.CreateEntity(new MagePrototype    { SpawnPosition = spawnPos }),
+                    2 => frame.CreateEntity(new RoguePrototype   { SpawnPosition = spawnPos }),
+                    3 => frame.CreateEntity(new KnightPrototype  { SpawnPosition = spawnPos }),
+                    _ => throw new System.ArgumentOutOfRangeException(nameof(classIdx)),
+                };
 
                 ref var character = ref frame.Get<CharacterComponent>(entity);
                 character.PlayerId       = botPlayerId;
@@ -97,11 +102,6 @@ namespace Brawler
 
                 ref var owner = ref frame.Get<OwnerComponent>(entity);
                 owner.OwnerId = botPlayerId;
-
-                ref var transform = ref frame.Get<TransformComponent>(entity);
-                transform.Position = rules.SpawnPositions[botPlayerId % rules.SpawnPositions.Length];
-                transform.PreviousPosition = transform.Position;
-                transform.PreviousRotation = transform.Rotation;
 
                 frame.Add(entity, new BotComponent
                 {
@@ -115,7 +115,7 @@ namespace Brawler
                 frame.Add(marker, new SpawnMarkerComponent
                 {
                     PlayerId      = botPlayerId,
-                    SpawnPosition = new FPVector2(transform.Position.x, transform.Position.z),
+                    SpawnPosition = new FPVector2(spawnPos.x, spawnPos.z),
                 });
             }
         }
@@ -148,8 +148,8 @@ namespace Brawler
             if (botFSMSystem != null)
                 botFSMSystem.SetCommandSystem(platformerCommandSystem);
 
-            // PreUpdate — save previous state for interpolation, then bots, then command processing
-            simulation.AddSystem(new SavePreviousTransformSystem(), SystemPhase.PreUpdate);
+            // PreUpdate — bots, then command processing.
+            // PreviousPosition / PreviousRotation are captured by the engine built-in pass.
             if (botFSMSystem != null)
                 simulation.AddSystem(botFSMSystem, SystemPhase.PreUpdate);
             simulation.AddSystem(platformerCommandSystem, SystemPhase.PreUpdate);

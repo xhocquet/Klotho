@@ -73,12 +73,12 @@ namespace xpTURN.Klotho.Tests.Integration
             // New guest transport — connect via KlothoConnection
             var lateTransport = new TestTransport();
             ConnectionResult result = null;
-            string failReason = null;
+            Exception failReason = null;
 
             var conn = KlothoConnection.Connect(
                 lateTransport, "localhost", 7777,
                 onCompleted: r => result = r,
-                onFailed: reason => failReason = reason,
+                onFailed: ex => failReason = ex,
                 logger: _logger);
 
             // Pump — until the server sends SimConfig/LateJoinAccept/FullState after sync
@@ -108,7 +108,7 @@ namespace xpTURN.Klotho.Tests.Integration
             var conn = KlothoConnection.Connect(
                 lateTransport, "localhost", 7777,
                 onCompleted: r => result = r,
-                onFailed: reason => Assert.Fail(reason),
+                onFailed: ex => Assert.Fail(ex.Message),
                 logger: _logger);
 
             PumpAll(lateTransport, conn, rounds: 30);
@@ -143,7 +143,7 @@ namespace xpTURN.Klotho.Tests.Integration
             var conn = KlothoConnection.Connect(
                 lateTransport, "localhost", 7777,
                 onCompleted: r => result = r,
-                onFailed: reason => Assert.Fail(reason),
+                onFailed: ex => Assert.Fail(ex.Message),
                 logger: _logger);
 
             PumpAll(lateTransport, conn, rounds: 30);
@@ -224,7 +224,7 @@ namespace xpTURN.Klotho.Tests.Integration
             var conn = KlothoConnection.Connect(
                 lateTransport, "localhost", 7777,
                 onCompleted: r => result = r,
-                onFailed: reason => Assert.Fail(reason),
+                onFailed: ex => Assert.Fail(ex.Message),
                 logger: _logger);
 
             PumpAll(lateTransport, conn, rounds: 30);
@@ -268,6 +268,9 @@ namespace xpTURN.Klotho.Tests.Integration
                     UsePrediction = false,
                     InputDelayTicks = 1,
                     HardToleranceMs = 200,
+                    ResyncMaxRetries = 3,
+                    DesyncThresholdForResync = 3,
+                    CatchupMaxTicksPerFrame = 200,
                 },
                 new SessionConfig
                 {
@@ -278,9 +281,6 @@ namespace xpTURN.Klotho.Tests.Integration
                     ReconnectTimeoutMs = 30000,
                     ReconnectMaxRetries = 3,
                     LateJoinDelayTicks = 10,
-                    ResyncMaxRetries = 3,
-                    DesyncThresholdForResync = 3,
-                    CatchupMaxTicksPerFrame = 200,
                 });
             peer.Engine.Initialize(peer.Simulation, serverService, _logger);
             peer.Engine.SetCommandFactory(_commandFactory);

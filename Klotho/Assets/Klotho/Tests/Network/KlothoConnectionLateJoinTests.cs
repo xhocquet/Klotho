@@ -48,11 +48,11 @@ namespace xpTURN.Klotho.Network.Tests
         public void LateJoin_CompletesWithAllMessages()
         {
             ConnectionResult result = null;
-            string failReason = null;
+            Exception failReason = null;
             var conn = KlothoConnection.Connect(
                 _transport, "localhost", 0,
                 onCompleted: r => result = r,
-                onFailed: reason => failReason = reason,
+                onFailed: ex => failReason = ex,
                 logger: _logger);
 
             // Fire connect event (when the transport's Connect fires OnConnected, KlothoConnection sends PlayerJoinMessage)
@@ -95,12 +95,12 @@ namespace xpTURN.Klotho.Network.Tests
         [Test]
         public void LateJoin_Timeout_FiresOnFailed()
         {
-            string failReason = null;
+            Exception failReason = null;
             ConnectionResult result = null;
             var conn = KlothoConnection.Connect(
                 _transport, "localhost", 0,
                 onCompleted: r => result = r,
-                onFailed: reason => failReason = reason,
+                onFailed: ex => failReason = ex,
                 logger: _logger);
 
             _transport.FireConnected();
@@ -117,7 +117,7 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.IsTrue(conn.IsCompleted, "IsCompleted=true after timeout");
             Assert.IsNull(result, "Complete callback not fired");
             Assert.IsNotNull(failReason, "Fail callback fired");
-            StringAssert.Contains("timeout", failReason.ToLowerInvariant());
+            StringAssert.Contains("timeout", failReason.Message.ToLowerInvariant());
         }
 
         // ── #3 Disconnect midway — onFailed ────────────────────────────
@@ -125,12 +125,12 @@ namespace xpTURN.Klotho.Network.Tests
         [Test]
         public void LateJoin_DisconnectMidway_FiresOnFailed()
         {
-            string failReason = null;
+            Exception failReason = null;
             ConnectionResult result = null;
             KlothoConnection.Connect(
                 _transport, "localhost", 0,
                 onCompleted: r => result = r,
-                onFailed: reason => failReason = reason,
+                onFailed: ex => failReason = ex,
                 logger: _logger);
 
             _transport.FireConnected();
@@ -141,7 +141,7 @@ namespace xpTURN.Klotho.Network.Tests
 
             Assert.IsNull(result, "Completion callback not fired");
             Assert.IsNotNull(failReason, "Fail callback fired");
-            StringAssert.Contains("Connection lost", failReason);
+            StringAssert.Contains("Connection lost", failReason.Message);
         }
 
         // ── Helpers ─────────────────────────────────────────────
@@ -189,10 +189,10 @@ namespace xpTURN.Klotho.Network.Tests
                 ReconnectTimeoutMs = 30000,
                 ReconnectMaxRetries = 3,
                 LateJoinDelayTicks = 10,
-                ResyncMaxRetries = 3,
-                DesyncThresholdForResync = 3,
+                LateJoinDelaySafety = 2,
+                RttSanityMaxMs = 240,
+                MinStallAbortTicks = 600,
                 CountdownDurationMs = 3000,
-                CatchupMaxTicksPerFrame = 200,
                 PlayerConfigData = Array.Empty<byte>(),
                 PlayerConfigLengths = new System.Collections.Generic.List<int>(),
             };

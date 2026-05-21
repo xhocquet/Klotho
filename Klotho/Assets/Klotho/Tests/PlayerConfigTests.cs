@@ -208,10 +208,10 @@ namespace xpTURN.Klotho.Tests
                 ReconnectTimeoutMs = 30000,
                 ReconnectMaxRetries = 3,
                 LateJoinDelayTicks = 10,
-                ResyncMaxRetries = 3,
-                DesyncThresholdForResync = 3,
+                LateJoinDelaySafety = 2,
+                RttSanityMaxMs = 240,
+                MinStallAbortTicks = 600,
                 CountdownDurationMs = 3000,
-                CatchupMaxTicksPerFrame = 200,
                 PlayerConfigData = configData,
                 PlayerConfigLengths = new List<int> { configLen },
             };
@@ -233,10 +233,10 @@ namespace xpTURN.Klotho.Tests
             Assert.AreEqual(30000, restored.ReconnectTimeoutMs, "ReconnectTimeoutMs roundtrip");
             Assert.AreEqual(3, restored.ReconnectMaxRetries, "ReconnectMaxRetries roundtrip");
             Assert.AreEqual(10, restored.LateJoinDelayTicks, "LateJoinDelayTicks roundtrip");
-            Assert.AreEqual(3, restored.ResyncMaxRetries, "ResyncMaxRetries roundtrip");
-            Assert.AreEqual(3, restored.DesyncThresholdForResync, "DesyncThresholdForResync roundtrip");
+            Assert.AreEqual(2, restored.LateJoinDelaySafety, "LateJoinDelaySafety roundtrip");
+            Assert.AreEqual(240, restored.RttSanityMaxMs, "RttSanityMaxMs roundtrip");
+            Assert.AreEqual(600, restored.MinStallAbortTicks, "MinStallAbortTicks roundtrip");
             Assert.AreEqual(3000, restored.CountdownDurationMs, "CountdownDurationMs roundtrip");
-            Assert.AreEqual(200, restored.CatchupMaxTicksPerFrame, "CatchupMaxTicksPerFrame roundtrip");
             Assert.AreEqual(1, restored.PlayerConfigLengths.Count,
                 "PlayerConfigLengths count must be preserved");
             Assert.AreEqual(configLen, restored.PlayerConfigLengths[0],

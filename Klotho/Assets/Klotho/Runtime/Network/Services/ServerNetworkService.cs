@@ -263,7 +263,7 @@ namespace xpTURN.Klotho.Network
         public event Action<IPlayerInfo> OnPlayerDisconnected;
         public event Action<IPlayerInfo> OnPlayerReconnected;
         public event Action OnReconnecting;
-        public event Action<string> OnReconnectFailed;
+        public event Action<byte> OnReconnectFailed;
         public event Action OnReconnected;
         public event Action<int, int> OnLateJoinPlayerAdded;
 
@@ -707,17 +707,16 @@ namespace xpTURN.Klotho.Network
                 StartTime = useCountdown ? _gameStartTime : 0,
                 RandomSeed = _randomSeed,
                 MaxPlayers = _players.Count,
+                MinPlayers = _sessionConfig.MinPlayers,
+                MaxSpectators = _sessionConfig.MaxSpectators,
                 AllowLateJoin = _sessionConfig.AllowLateJoin,
+                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
                 ReconnectTimeoutMs = _sessionConfig.ReconnectTimeoutMs,
                 ReconnectMaxRetries = _sessionConfig.ReconnectMaxRetries,
-                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
-                ResyncMaxRetries = _sessionConfig.ResyncMaxRetries,
-                DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
+                LateJoinDelaySafety = _sessionConfig.LateJoinDelaySafety,
+                RttSanityMaxMs = _sessionConfig.RttSanityMaxMs,
+                MinStallAbortTicks = _sessionConfig.MinStallAbortTicks,
                 CountdownDurationMs = _sessionConfig.CountdownDurationMs,
-                CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
-                MinPlayers = _sessionConfig.MinPlayers,
-                CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
-                MaxSpectators = _sessionConfig.MaxSpectators,
                 AbortGraceMs = _sessionConfig.AbortGraceMs,
                 EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
                 EndGraceMs = _sessionConfig.EndGraceMs,
@@ -1227,8 +1226,8 @@ namespace xpTURN.Klotho.Network
             var (newExtraDelay, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
                 smoothedRtt,
                 _simConfig.TickIntervalMs,
-                _simConfig.LateJoinDelaySafety,
-                _simConfig.RttSanityMaxMs,
+                _sessionConfig.LateJoinDelaySafety,
+                _sessionConfig.RttSanityMaxMs,
                 _simConfig.MaxRollbackTicks);
 
             // First entry path is seeded at CompletePeerSync / CompleteLateJoinSync /
@@ -1633,7 +1632,7 @@ namespace xpTURN.Klotho.Network
             OnLocalPlayerIdAssigned?.Invoke(0);
             OnFullStateReceived?.Invoke(0, null, 0, FullStateKind.Unicast);
             OnReconnecting?.Invoke();
-            OnReconnectFailed?.Invoke(null);
+            OnReconnectFailed?.Invoke(ReconnectRejectReason.Unknown);
             OnReconnected?.Invoke();
             OnCountdownStarted?.Invoke(0);
             OnVerifiedStateReceived?.Invoke(0, null, 0);

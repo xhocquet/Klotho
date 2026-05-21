@@ -57,7 +57,7 @@ namespace xpTURN.Klotho.Core
         private void HandleCatchupUpdate()
         {
             // Run quickly using only Verified input (no prediction, ignore accumulator)
-            int maxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame;
+            int maxTicksPerFrame = _simConfig.CatchupMaxTicksPerFrame;
             int executed = 0;
             while (CurrentTick <= _catchupLastConfirmedTick && executed < maxTicksPerFrame)
             {

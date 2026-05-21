@@ -143,14 +143,13 @@ var session = KlothoSession.Create(new KlothoSessionSetup
     Transport           = transport,             // host
     // Connection       = connectionResult,      // guest (when set, host fields are ignored)
     SimulationConfig    = uSimulationConfig,     // USimulationConfig (SO) or any ISimulationConfig
+    SessionConfig       = uSessionConfig,        // USessionConfig (SO) or any ISessionConfig — host only (MaxPlayers/MinPlayers/MaxSpectators/late-join/reconnect/grace policy)
     AssetRegistry       = dataAssetRegistry,     // optional: externally built registry
-    MaxPlayers          = 2,
-    AllowLateJoin       = true,
 });
 
-session.HostGame("MyRoom", maxPlayers: 2);   // host
+session.HostGame("MyRoom", uSessionConfig.MaxPlayers);   // host
 // or
-session.JoinGame("MyRoom");                  // client
+session.JoinGame("MyRoom");                              // client
 ```
 
 ### Step 5: Define Events

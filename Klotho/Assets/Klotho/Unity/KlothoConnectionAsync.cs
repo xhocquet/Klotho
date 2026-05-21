@@ -6,11 +6,11 @@ using Microsoft.Extensions.Logging;
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Network;
 
-namespace xpTURN.Klotho.Samples.Brawler
+namespace xpTURN.Klotho.Unity
 {
     /// <summary>
-    /// Samples utility that wraps KlothoConnection (callback-based Runtime API) with UniTask.
-    /// Runtime asmdef does not reference UniTask, so it is provided in the Samples layer.
+    /// Runtime.Unity utility that wraps KlothoConnection (callback-based Runtime API) with UniTask.
+    /// Runtime asmdef does not reference UniTask, so the wrapper lives in the Runtime.Unity layer.
     ///
     /// Scope: Normal Join (ConnectAsync), Late Join (same Connect path during Playing),
     /// cold-start Reconnect (ReconnectAsync).
@@ -35,7 +35,7 @@ namespace xpTURN.Klotho.Samples.Brawler
             var connection = KlothoConnection.Connect(
                 transport, host, port,
                 onCompleted: result => tcs.TrySetResult(result),
-                onFailed: reason => tcs.TrySetException(new Exception(reason)),
+                onFailed: ex => tcs.TrySetException(ex),
                 logger: logger,
                 preJoinMessage: preJoinMessage,
                 deviceIdProvider: deviceIdProvider);
@@ -55,8 +55,9 @@ namespace xpTURN.Klotho.Samples.Brawler
 
         /// <summary>
         /// Cold-start Reconnect wrapper. Connects to creds.RemoteAddress:RemotePort and presents
-        /// the persisted credentials. On reject (reason 1/2/3/4) or timeout, throws Exception with the
-        /// reason string ("Reconnect rejected: InvalidMagic" / "AlreadyConnected" / etc.).
+        /// the persisted credentials. On reject, throws <see cref="ReconnectFailedException"/> whose
+        /// Reason byte maps to <see cref="ReconnectRejectReason"/> constants. Other failures (timeout,
+        /// transport start) throw a generic Exception.
         /// </summary>
         public static UniTask<ConnectionResult> ReconnectAsync(
             INetworkTransport transport, PersistedReconnectCredentials creds,
@@ -67,7 +68,7 @@ namespace xpTURN.Klotho.Samples.Brawler
             var connection = KlothoConnection.Reconnect(
                 transport, creds,
                 onCompleted: result => tcs.TrySetResult(result),
-                onFailed: reason => tcs.TrySetException(new Exception(reason)),
+                onFailed: ex => tcs.TrySetException(ex),
                 logger: logger);
 
             var ctRegistration = ct.Register(() =>

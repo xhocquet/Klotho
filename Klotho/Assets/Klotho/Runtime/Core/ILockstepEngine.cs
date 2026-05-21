@@ -255,8 +255,8 @@ namespace xpTURN.Klotho.Core
 
         /// <summary>
         /// Whether OnMatchEnded has been dispatched on this engine (the verified IMatchEndEvent fired).
-        /// Used by game-side OnPollInput to apply EndGracePolicy-specific behavior during the post-match
-        /// grace window (e.g., send StopCommand when EndGracePolicy == Pause).
+        /// Exposed for game-side hooks (UI / audio / Continue-policy input filtering) — Pause grace's
+        /// StopCommand emission is handled inside the engine OnPollInput dispatch site.
         /// </summary>
         bool IsMatchEnded { get; }
 

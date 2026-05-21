@@ -187,7 +187,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(8, new HealthComponent().GetSerializedSize());    // 2 x int = 8
             Assert.AreEqual(4, new OwnerComponent().GetSerializedSize());     // 1 x int = 4
             Assert.AreEqual(8, new CombatComponent().GetSerializedSize());    // 2 x int = 8
-            Assert.AreEqual(92, new TransformComponent().GetSerializedSize()); // FPVector3(24) + FP64(8) + FPVector3(24) + FPVector3(24) + FP64(8) + int(4)
+            Assert.AreEqual(93, new TransformComponent().GetSerializedSize()); // FPVector3(24) + FP64(8) + FPVector3(24) + FPVector3(24) + FP64(8) + bool(1) + int(4)
             Assert.AreEqual(24, new VelocityComponent().GetSerializedSize()); // FPVector3(24)
             Assert.AreEqual(33, new MovementComponent().GetSerializedSize()); // FP64(8) + FPVector3(24) + bool(1)
         }

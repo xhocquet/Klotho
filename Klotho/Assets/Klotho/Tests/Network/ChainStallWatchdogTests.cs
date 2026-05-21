@@ -62,7 +62,7 @@ namespace xpTURN.Klotho.Network.Tests
         {
             var engine = _harness.Host.Engine;
             int reconnectTimeoutTicks = engine.SessionConfig.ReconnectTimeoutMs / engine.SimulationConfig.TickIntervalMs;
-            return Math.Max(reconnectTimeoutTicks + 100, engine.SimulationConfig.MinStallAbortTicks);
+            return Math.Max(reconnectTimeoutTicks + 100, engine.SessionConfig.MinStallAbortTicks);
         }
 
         [Test]

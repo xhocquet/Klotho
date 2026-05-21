@@ -14,21 +14,20 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public List<int> PlayerIds = new List<int>();
         [KlothoOrder] public List<byte> PlayerConnectionStates = new List<byte>();
 
-        // --- SessionConfig fields (same layout as LateJoinAcceptMessage) ---
+        // --- SessionConfig fields (canonical order matches ISessionConfig / GameStartMessage) ---
 
         [KlothoOrder] public int RandomSeed;
         [KlothoOrder] public int MaxPlayers;
         [KlothoOrder] public int MinPlayers;
+        [KlothoOrder] public int MaxSpectators;
         [KlothoOrder] public bool AllowLateJoin;
+        [KlothoOrder] public int LateJoinDelayTicks;
         [KlothoOrder] public int ReconnectTimeoutMs;
         [KlothoOrder] public int ReconnectMaxRetries;
-        [KlothoOrder] public int LateJoinDelayTicks;
-        [KlothoOrder] public int ResyncMaxRetries;
-        [KlothoOrder] public int DesyncThresholdForResync;
+        [KlothoOrder] public int LateJoinDelaySafety;
+        [KlothoOrder] public int RttSanityMaxMs;
+        [KlothoOrder] public int MinStallAbortTicks;
         [KlothoOrder] public int CountdownDurationMs;
-        [KlothoOrder] public int CatchupMaxTicksPerFrame;
-        [KlothoOrder] public int CorrectiveResetCooldownMs;
-        [KlothoOrder] public int MaxSpectators;
         [KlothoOrder] public int AbortGraceMs;
         [KlothoOrder] public int EndGracePolicy; // EndGracePolicy enum as int
         [KlothoOrder] public int EndGraceMs;

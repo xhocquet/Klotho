@@ -19,6 +19,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
     {
         private const string IComponentInterface = "xpTURN.Klotho.ECS.IComponent";
         private const string StructLayoutAttribute = "System.Runtime.InteropServices.StructLayoutAttribute";
+        private const string KlothoSingletonComponentAttribute = "xpTURN.Klotho.ECS.KlothoSingletonComponentAttribute";
         private const string IntPtrType = "System.IntPtr";
         private const string UIntPtrType = "System.UIntPtr";
         private const string BoolType = "System.Boolean";
@@ -78,12 +79,16 @@ namespace xpTURN.Klotho.Generator.Analyzers
 
             int componentTypeId = (int)attrData.ConstructorArguments[0].Value;
 
+            bool isSingleton = symbol.GetAttributes().Any(
+                a => a.AttributeClass?.ToDisplayString() == KlothoSingletonComponentAttribute);
+
             var info = new ComponentTypeInfo
             {
                 Namespace = symbol.ContainingNamespace.IsGlobalNamespace ? null : symbol.ContainingNamespace.ToDisplayString(),
                 TypeName = symbol.Name,
                 FullTypeName = symbol.ToDisplayString(),
                 ComponentTypeId = componentTypeId,
+                IsSingleton = isSingleton,
             };
 
             // Collect fields + IMP-25 §15 D1 field-level cross-runtime checks

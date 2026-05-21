@@ -180,7 +180,7 @@ namespace xpTURN.Klotho.Core
 
         private float _accumulator;
         private bool _consumePendingDeltaTime;
-        private int _lastVerifiedTick;
+        private int _lastVerifiedTick = -1;
         private int _lastBatchedTick = -1;
         private readonly List<int> _activePlayerIds = new List<int>();
 
@@ -199,6 +199,8 @@ namespace xpTURN.Klotho.Core
         private bool _desyncDetectedForPending;
 
         private ICommandFactory _commandFactory;
+
+        private DynamicInputDelayPolicy _dynamicInputDelayPolicy;
 
         private EventBuffer _eventBuffer;
         private EventCollector _eventCollector;
@@ -377,11 +379,11 @@ namespace xpTURN.Klotho.Core
         /// <summary>
         /// Captures the PreviousUpdatePredicted snapshot.
         /// Must be called exactly once immediately on Update(dt) entry, before any simulation logic.
-        /// Skipped in states without a render path: server/replay/spectator/awaiting resync.
+        /// Skipped in states without a render path: server/replay/awaiting resync.
         /// </summary>
         private void CapturePreviousUpdatePredicted()
         {
-            if (_isReplayMode || _isSpectatorMode || IsServer
+            if (_isReplayMode || IsServer
                 || _expectingFullState
                 || _expectingInitialFullState
                 || _resyncState == ResyncState.Requested)
@@ -562,6 +564,9 @@ namespace xpTURN.Klotho.Core
             _logger?.ZLogInformation($"[KlothoEngine] WarmupRegistry running");
             WarmupRegistry.RunAll();
 
+            _dynamicInputDelayPolicy = new DynamicInputDelayPolicy(this, _logger);
+            _dynamicInputDelayPolicy.Attach();
+
             State = KlothoState.WaitingForPlayers;
         }
 
@@ -638,6 +643,13 @@ namespace xpTURN.Klotho.Core
                             PlayerId = _activePlayerIds[i],
                         });
                     }
+
+                    // Singleton seed entity — zero-extend cast normalizes negative int seeds to a stable ulong.
+                    var seedEntity = frame.CreateEntity();
+                    frame.Add(seedEntity, new xpTURN.Klotho.ECS.RandomSeedComponent
+                    {
+                        Seed = (ulong)(uint)_randomSeed,
+                    });
                 }
 
                 _simulationCallbacks?.OnInitializeWorld(this);
@@ -800,17 +812,43 @@ namespace xpTURN.Klotho.Core
                 }
 #endif
 
-                // Input-collection callback right before tick execution.
-                if (_simulationCallbacks != null)
+                // Pause-grace auto-stop — emit StopCommand instead of game OnPollInput.
+                bool pauseGraceFired = false;
+                if (_matchEndedDispatched
+                    && _sessionConfig.EndGracePolicy == EndGracePolicy.Pause)
+                {
+                    var stop = CommandPool.Get<StopCommand>();
+                    InputCommand(stop);
+                    pauseGraceFired = true;
+                }
+                else if (_simulationCallbacks != null)
+                {
                     _simulationCallbacks.OnPollInput(LocalPlayerId, CurrentTick, _commandSender);
+                }
                 else
+                {
                     OnPreTick?.Invoke(CurrentTick);
+                }
 
                 int inputTick = CurrentTick + _simConfig.InputDelayTicks;
 
-                // If the local player did not issue a command for this tick, auto-inject an empty command.
-                if (!_inputBuffer.HasCommandForTick(inputTick, LocalPlayerId))
+                // Auto-inject EmptyCommand only when (a) no LocalPlayer cmd this tick AND (b) Pause grace not active.
+                // Pause grace already emitted StopCommand at inputTick + _recommendedExtraDelay; the auto-inject
+                // would land in the same slot and overwrite stop via last-write-wins.
+                if (!pauseGraceFired && !_inputBuffer.HasCommandForTick(inputTick, LocalPlayerId))
                 {
+#if DEBUG || DEVELOPMENT_BUILD
+                    // Regression sentinel — must never fire on fix-applied builds.
+                    // Detects pre-fix Case 2 collision where auto-inject empty would land in the
+                    // same shifted slot as a previously-sent local cmd when _recommendedExtraDelay > 0.
+                    int emptyTargetTick = inputTick + _recommendedExtraDelay;
+                    if (_recommendedExtraDelay > 0
+                        && _inputBuffer.HasCommandForTick(emptyTargetTick, LocalPlayerId))
+                    {
+                        _logger?.ZLogWarning(
+                            $"[KlothoEngine][AutoInjectOverwrite] empty would overwrite existing cmd at tick={emptyTargetTick}, inputTick={inputTick}, _recommendedExtraDelay={_recommendedExtraDelay}, CurrentTick={CurrentTick}");
+                    }
+#endif
                     var empty = CommandPool.Get<EmptyCommand>();
                     empty.PlayerId = LocalPlayerId;
                     InputCommand(empty);
@@ -1026,6 +1064,8 @@ namespace xpTURN.Klotho.Core
                 int totalTicks = CurrentTick + _simConfig.InputDelayTicks;
                 _replaySystem.StopRecording(totalTicks);
             }
+
+            _dynamicInputDelayPolicy?.Detach();
 
             State = KlothoState.Finished;
 
@@ -1357,11 +1397,27 @@ namespace xpTURN.Klotho.Core
 
             _viewCallbacks?.OnGameStart(this);
             // At this point State=Running and entities already exist.
-            // OnGameStart subscribers in game code call SetInitialStateSnapshot to populate the _cachedFullState cache.
+            // OnGameStart subscribers (custom snapshot path, other handlers) still fire here.
             OnGameStart?.Invoke();
 
-            // SD Server broadcasts the authoritative tick-0 state to all remote SD Clients as a bootstrap.
-            if (_simConfig.Mode == NetworkMode.ServerDriven && _serverDrivenNetwork.IsServer)
+            // Replay InitialStateSnapshot auto-inject — non-replay + recording + (P2P / SD-Server) only.
+            // SD-Client receives the snapshot via server FullState broadcast (ServerDrivenClient.cs HandleInitialFullStateReceived).
+            if (!_isReplayMode
+                && _replaySystem?.IsRecording == true
+                && !(_simConfig.Mode == NetworkMode.ServerDriven && !_serverDrivenNetwork.IsServer))
+            {
+                var (data, hash) = _simulation.SerializeFullStateWithHash();
+                _replaySystem.SetInitialStateSnapshot(data, hash);
+                _logger?.ZLogInformation(
+                    $"[KlothoEngine][Replay] InitialStateSnapshot injected: size={data.Length}, hash=0x{hash:X16}");
+            }
+
+            // SD Server or P2P Host broadcasts the authoritative tick-0 state to all remote peers as a bootstrap.
+            // Pre-connect spectators receive the broadcast directly; late-joining spectators use the cached
+            // copy via HandleFullStateRequested → SendFullStateResponse.
+            bool isSdServer = _simConfig.Mode == NetworkMode.ServerDriven && _serverDrivenNetwork != null && _serverDrivenNetwork.IsServer;
+            bool isP2PHost = _simConfig.Mode == NetworkMode.P2P && _networkService != null && _networkService.IsHost;
+            if (isSdServer || isP2PHost)
             {
                 // Always re-serialize: pre-game late-join (e.g. spectator joining during Lobby/Sync)
                 // may have populated _cachedFullState with the empty pre-OnInitializeWorld state via
@@ -1373,8 +1429,11 @@ namespace xpTURN.Klotho.Core
                     _cachedFullStateHash = hash;
                     _cachedFullStateTick = 0;
                 }
-                _serverDrivenNetwork.BroadcastFullState(0, _cachedFullState, _cachedFullStateHash);
-                _logger?.ZLogInformation($"[KlothoEngine][SD] Initial FullState broadcast: size={_cachedFullState.Length}, hash=0x{_cachedFullStateHash:X16}");
+                if (isSdServer)
+                    _serverDrivenNetwork.BroadcastFullState(0, _cachedFullState, _cachedFullStateHash);
+                else
+                    _networkService.BroadcastFullState(0, _cachedFullState, _cachedFullStateHash);
+                _logger?.ZLogInformation($"[KlothoEngine][Bootstrap] Initial FullState broadcast: mode={(isSdServer ? "SD" : "P2P")}, size={_cachedFullState.Length}, hash=0x{_cachedFullStateHash:X16}");
 
                 // Diagnostic — per-component hash breakdown for desync root-cause analysis.
                 // Debug level: ServerInit fires once per match, kept off the release log stream.

@@ -158,7 +158,7 @@ namespace xpTURN.Klotho.Core
             }
 
             // Re-simulation with event collection.
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(true);
 #endif
             int resimTick = resolvedTick;
@@ -193,7 +193,7 @@ namespace xpTURN.Klotho.Core
                 resimTick++;
             }
 
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(false);
 #endif
 

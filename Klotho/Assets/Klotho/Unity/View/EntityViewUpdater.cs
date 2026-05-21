@@ -50,9 +50,15 @@ namespace xpTURN.Klotho
         // Reusable buffer for collecting live entities during Reconcile (GC-free).
         private EntityRef[] _entityScratch;
 
+        // playerId → EntityView registry. Built each Initialize against engine.SessionConfig.MaxPlayers.
+        // EVU is the sole Register / Unregister site (game subscribes to events).
+        private PlayerViewRegistry<EntityView> _playerViews;
+
         protected IKlothoEngine Engine { get; private set; }
 
         public EntityViewFactory Factory => _factory;
+
+        public PlayerViewRegistry<EntityView> PlayerViews => _playerViews;
 
         /// <summary>
         /// Bootstrap order:
@@ -71,6 +77,11 @@ namespace xpTURN.Klotho
             Engine = engine;
             Engine.OnTickExecuted += OnTickExecuted;
             _factory?.Attach(engine, _pool);
+
+            // PlayerViewRegistry — capacity sized from server-authoritative SessionConfig.
+            // A fresh instance per Initialize forces ViewSync to re-subscribe each session
+            // (see InitializeViewSync invariant: EVU.Initialize ⇔ ViewSync.Initialize atomic).
+            _playerViews = new PlayerViewRegistry<EntityView>(engine, engine.SessionConfig.MaxPlayers);
         }
 
         /// <summary>
@@ -99,6 +110,12 @@ namespace xpTURN.Klotho
             _presentEntityOwners.Clear();
             _staleIndices.Clear();
             _pendingStaleKeys.Clear();
+
+            // Bulk-clear and null the player registry. Null assignment surfaces stale ViewSync
+            // references as NullRef on the next call — safer than silently allowing leaked
+            // subscriptions to fire on a re-created instance.
+            _playerViews?.Clear();
+            _playerViews = null;
         }
 
         protected virtual void OnDestroy()
@@ -191,6 +208,7 @@ namespace xpTURN.Klotho
 
                 Engine?.Logger?.ZLogDebug($"[ViewLife][Rebind] entity={entity.Index}, viewType={existing.GetType().Name}, oldVersion={existing.EntityRef.Version}, newVersion={entity.Version}, versionMatch={versionMatch}, ownerMatch={ownerMatch}, viewIID={existing.GetInstanceID()}");
                 existing.OnDeactivate();
+                TryUnregisterPlayerView(existing);
                 if (_factory != null) _factory.Destroy(existing);
                 _viewsByEntityIndex.Remove(entity.Index);
             }
@@ -238,6 +256,8 @@ namespace xpTURN.Klotho
             // On pool reuse, OnInitialize is skipped but OnActivate is called every time.
             view.EnsureInitialized();
             view.InternalActivate(frame);
+
+            TryRegisterPlayerView(entity, view, frame);
         }
 
         private void DestroyStale()
@@ -276,11 +296,36 @@ namespace xpTURN.Klotho
                 var view = _viewsByEntityIndex[idx];
                 Engine?.Logger?.ZLogDebug($"[ViewLife][StaleDestroy] entity={idx}, viewType={view.GetType().Name}, viewVersion={view.EntityRef.Version}, viewIID={view.GetInstanceID()}");
                 view.OnDeactivate();
+                TryUnregisterPlayerView(view);
                 if (_factory != null) _factory.Destroy(view);
                 else if (view != null) Destroy(view.gameObject);
                 _viewsByEntityIndex.Remove(idx);
             }
             _staleIndices.Clear();
+        }
+
+        // Spawn-side hook (called once at the end of SpawnViewAsync, after InternalActivate).
+        // Reads OwnerComponent from the spawn-decision frame and writes the cached owner on the view
+        // so any of the three unbind sites can produce a stable unregister key.
+        private void TryRegisterPlayerView(EntityRef entity, EntityView view, FrameRef frame)
+        {
+            if (_playerViews == null) return;
+            var f = frame.Frame;
+            if (f == null || !f.Has<OwnerComponent>(entity)) return;
+            int ownerId = f.GetReadOnly<OwnerComponent>(entity).OwnerId;
+            view.SetCachedOwner(ownerId);
+            _playerViews.Register(ownerId, view);
+        }
+
+        // Unbind-side hook (called from TrySpawn Rebind / DestroyStale).
+        // OwnerComponent may already be absent on the live frame at despawn time —
+        // the view's cached owner is the stable unregister key.
+        private void TryUnregisterPlayerView(EntityView view)
+        {
+            if (_playerViews == null) return;
+            if (!view.TryGetCachedOwner(out int ownerId)) return;
+            _playerViews.Unregister(ownerId, view);
+            view.ClearCachedOwner();
         }
     }
 }

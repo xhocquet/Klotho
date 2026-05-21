@@ -95,16 +95,15 @@ namespace xpTURN.Klotho.Network
                 RandomSeed = _randomSeed,
                 MaxPlayers = _sessionConfig.MaxPlayers,
                 MinPlayers = _sessionConfig.MinPlayers,
+                MaxSpectators = _sessionConfig.MaxSpectators,
                 AllowLateJoin = _sessionConfig.AllowLateJoin,
+                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
                 ReconnectTimeoutMs = _sessionConfig.ReconnectTimeoutMs,
                 ReconnectMaxRetries = _sessionConfig.ReconnectMaxRetries,
-                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
-                ResyncMaxRetries = _sessionConfig.ResyncMaxRetries,
-                DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
+                LateJoinDelaySafety = _sessionConfig.LateJoinDelaySafety,
+                RttSanityMaxMs = _sessionConfig.RttSanityMaxMs,
+                MinStallAbortTicks = _sessionConfig.MinStallAbortTicks,
                 CountdownDurationMs = _sessionConfig.CountdownDurationMs,
-                CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
-                CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
-                MaxSpectators = _sessionConfig.MaxSpectators,
                 AbortGraceMs = _sessionConfig.AbortGraceMs,
                 EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
                 EndGraceMs = _sessionConfig.EndGraceMs,
@@ -217,8 +216,8 @@ namespace xpTURN.Klotho.Network
             var (extraDelay, fallback, rttTicks, raw, clamped) = RecommendedExtraDelayCalculator.Compute(
                 avgRtt,
                 _simConfig.TickIntervalMs,
-                _simConfig.LateJoinDelaySafety,
-                _simConfig.RttSanityMaxMs,
+                _sessionConfig.LateJoinDelaySafety,
+                _sessionConfig.RttSanityMaxMs,
                 _simConfig.MaxRollbackTicks);
 
             if (fallback)
@@ -231,7 +230,7 @@ namespace xpTURN.Klotho.Network
             // ("LateJoin" / "Reconnect" / "Sync") so no escaping needed.
             string clampedStr = clamped ? "true" : "false";
             string fallbackStr = fallback ? "true" : "false";
-            int safety = _simConfig.LateJoinDelaySafety;
+            int safety = _sessionConfig.LateJoinDelaySafety;
             _logger?.ZLogInformation($"[Metrics][{pathTag}] {{\"playerId\":{playerId},\"peerId\":{peerId},\"tag\":\"{pathTag}\",\"avgRtt\":{avgRtt},\"rttTicks\":{rttTicks},\"safety\":{safety},\"raw\":{raw},\"clamped\":{clampedStr},\"extraDelay\":{extraDelay},\"fallback\":{fallbackStr}}}");
 
             return extraDelay;

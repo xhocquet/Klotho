@@ -32,19 +32,35 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int LastVerifiedTick;
         [KlothoOrder] public List<int> PlayerIds = new List<int>();
 
-        // --- Full SimulationConfig (extended to include the existing TickInterval and InputDelay) ---
+        // --- SimulationConfig (canonical order matches ISimulationConfig) ---
 
         [KlothoOrder] public int TickIntervalMs;
+        [KlothoOrder] public int MaxEntities;
+        [KlothoOrder] public int CatchupMaxTicksPerFrame;
         [KlothoOrder] public int InputDelayTicks;
         [KlothoOrder] public int MaxRollbackTicks;
         [KlothoOrder] public int SyncCheckInterval;
+        [KlothoOrder] public int ResyncMaxRetries;
+        [KlothoOrder] public int DesyncThresholdForResync;
+        [KlothoOrder] public int CorrectiveResetCooldownMs;
         [KlothoOrder] public bool UsePrediction;
-        [KlothoOrder] public int MaxEntities;
         [KlothoOrder] public int Mode;
         [KlothoOrder] public int HardToleranceMs;
         [KlothoOrder] public int InputResendIntervalMs;
         [KlothoOrder] public int MaxUnackedInputs;
         [KlothoOrder] public int ServerSnapshotRetentionTicks;
+        [KlothoOrder] public int SDInputLeadTicks;
+        [KlothoOrder] public bool EnableErrorCorrection;
+        [KlothoOrder] public int InterpolationDelayTicks;
+        [KlothoOrder] public int QuorumMissDropTicks;
+        [KlothoOrder] public int ReactiveWindowTicks;
+        [KlothoOrder] public int ReactiveEscalateThreshold;
+        [KlothoOrder] public int ReactiveStep;
+        [KlothoOrder] public int ReactiveMax;
+        [KlothoOrder] public int ServerPushGraceTicks;
+        [KlothoOrder] public int ReactiveEscalateCooldownTicks;
+        [KlothoOrder] public int RollbackBurstCount;
+        [KlothoOrder] public int RollbackWindowTicks;
         [KlothoOrder] public int EventDispatchWarnMs;
         [KlothoOrder] public int TickDriftWarnMultiplier;
 
@@ -52,14 +68,19 @@ namespace xpTURN.Klotho.Network
 
         [KlothoOrder] public int MaxPlayers;
         [KlothoOrder] public int MinPlayers;
+        [KlothoOrder] public int MaxSpectators;
         [KlothoOrder] public bool AllowLateJoin;
+        [KlothoOrder] public int LateJoinDelayTicks;
         [KlothoOrder] public int ReconnectTimeoutMs;
         [KlothoOrder] public int ReconnectMaxRetries;
-        [KlothoOrder] public int LateJoinDelayTicks;
-        [KlothoOrder] public int ResyncMaxRetries;
-        [KlothoOrder] public int DesyncThresholdForResync;
+        [KlothoOrder] public int LateJoinDelaySafety;
+        [KlothoOrder] public int RttSanityMaxMs;
+        [KlothoOrder] public int MinStallAbortTicks;
         [KlothoOrder] public int CountdownDurationMs;
-        [KlothoOrder] public int CatchupMaxTicksPerFrame;
+        [KlothoOrder] public int AbortGraceMs;
+        [KlothoOrder] public int EndGracePolicy;
+        [KlothoOrder] public int EndGraceMs;
+        [KlothoOrder] public int ClientShutdownGraceMs;
 
         /// <summary>
         /// Populate the SimulationConfig fields from an ISimulationConfig.
@@ -67,16 +88,32 @@ namespace xpTURN.Klotho.Network
         public void CopySimulationConfigFrom(Core.ISimulationConfig config)
         {
             TickIntervalMs = config.TickIntervalMs;
+            MaxEntities = config.MaxEntities;
+            CatchupMaxTicksPerFrame = config.CatchupMaxTicksPerFrame;
             InputDelayTicks = config.InputDelayTicks;
             MaxRollbackTicks = config.MaxRollbackTicks;
             SyncCheckInterval = config.SyncCheckInterval;
+            ResyncMaxRetries = config.ResyncMaxRetries;
+            DesyncThresholdForResync = config.DesyncThresholdForResync;
+            CorrectiveResetCooldownMs = config.CorrectiveResetCooldownMs;
             UsePrediction = config.UsePrediction;
-            MaxEntities = config.MaxEntities;
             Mode = (int)config.Mode;
             HardToleranceMs = config.HardToleranceMs;
             InputResendIntervalMs = config.InputResendIntervalMs;
             MaxUnackedInputs = config.MaxUnackedInputs;
             ServerSnapshotRetentionTicks = config.ServerSnapshotRetentionTicks;
+            SDInputLeadTicks = config.SDInputLeadTicks;
+            EnableErrorCorrection = config.EnableErrorCorrection;
+            InterpolationDelayTicks = config.InterpolationDelayTicks;
+            QuorumMissDropTicks = config.QuorumMissDropTicks;
+            ReactiveWindowTicks = config.ReactiveWindowTicks;
+            ReactiveEscalateThreshold = config.ReactiveEscalateThreshold;
+            ReactiveStep = config.ReactiveStep;
+            ReactiveMax = config.ReactiveMax;
+            ServerPushGraceTicks = config.ServerPushGraceTicks;
+            ReactiveEscalateCooldownTicks = config.ReactiveEscalateCooldownTicks;
+            RollbackBurstCount = config.RollbackBurstCount;
+            RollbackWindowTicks = config.RollbackWindowTicks;
             EventDispatchWarnMs = config.EventDispatchWarnMs;
             TickDriftWarnMultiplier = config.TickDriftWarnMultiplier;
         }
@@ -89,16 +126,32 @@ namespace xpTURN.Klotho.Network
             return new Core.SimulationConfig
             {
                 TickIntervalMs = TickIntervalMs,
+                MaxEntities = MaxEntities,
+                CatchupMaxTicksPerFrame = CatchupMaxTicksPerFrame,
                 InputDelayTicks = InputDelayTicks,
                 MaxRollbackTicks = MaxRollbackTicks,
                 SyncCheckInterval = SyncCheckInterval,
+                ResyncMaxRetries = ResyncMaxRetries,
+                DesyncThresholdForResync = DesyncThresholdForResync,
+                CorrectiveResetCooldownMs = CorrectiveResetCooldownMs,
                 UsePrediction = UsePrediction,
-                MaxEntities = MaxEntities,
                 Mode = (Core.NetworkMode)Mode,
                 HardToleranceMs = HardToleranceMs,
                 InputResendIntervalMs = InputResendIntervalMs,
                 MaxUnackedInputs = MaxUnackedInputs,
                 ServerSnapshotRetentionTicks = ServerSnapshotRetentionTicks,
+                SDInputLeadTicks = SDInputLeadTicks,
+                EnableErrorCorrection = EnableErrorCorrection,
+                InterpolationDelayTicks = InterpolationDelayTicks,
+                QuorumMissDropTicks = QuorumMissDropTicks,
+                ReactiveWindowTicks = ReactiveWindowTicks,
+                ReactiveEscalateThreshold = ReactiveEscalateThreshold,
+                ReactiveStep = ReactiveStep,
+                ReactiveMax = ReactiveMax,
+                ServerPushGraceTicks = ServerPushGraceTicks,
+                ReactiveEscalateCooldownTicks = ReactiveEscalateCooldownTicks,
+                RollbackBurstCount = RollbackBurstCount,
+                RollbackWindowTicks = RollbackWindowTicks,
                 EventDispatchWarnMs = EventDispatchWarnMs,
                 TickDriftWarnMultiplier = TickDriftWarnMultiplier,
             };
@@ -114,15 +167,20 @@ namespace xpTURN.Klotho.Network
         public void CopySessionConfigFrom(Core.ISessionConfig config)
         {
             MaxPlayers = config.MaxPlayers;
+            MinPlayers = config.MinPlayers;
+            MaxSpectators = config.MaxSpectators;
             AllowLateJoin = config.AllowLateJoin;
+            LateJoinDelayTicks = config.LateJoinDelayTicks;
             ReconnectTimeoutMs = config.ReconnectTimeoutMs;
             ReconnectMaxRetries = config.ReconnectMaxRetries;
-            LateJoinDelayTicks = config.LateJoinDelayTicks;
-            ResyncMaxRetries = config.ResyncMaxRetries;
-            DesyncThresholdForResync = config.DesyncThresholdForResync;
+            LateJoinDelaySafety = config.LateJoinDelaySafety;
+            RttSanityMaxMs = config.RttSanityMaxMs;
+            MinStallAbortTicks = config.MinStallAbortTicks;
             CountdownDurationMs = config.CountdownDurationMs;
-            CatchupMaxTicksPerFrame = config.CatchupMaxTicksPerFrame;
-            MinPlayers = config.MinPlayers;
+            AbortGraceMs = config.AbortGraceMs;
+            EndGracePolicy = (int)config.EndGracePolicy;
+            EndGraceMs = config.EndGraceMs;
+            ClientShutdownGraceMs = config.ClientShutdownGraceMs;
         }
 
         /// <summary>
@@ -138,15 +196,20 @@ namespace xpTURN.Klotho.Network
             {
                 RandomSeed = RandomSeed,
                 MaxPlayers = MaxPlayers,
+                MinPlayers = MinPlayers,
+                MaxSpectators = MaxSpectators,
                 AllowLateJoin = AllowLateJoin,
+                LateJoinDelayTicks = LateJoinDelayTicks,
                 ReconnectTimeoutMs = ReconnectTimeoutMs,
                 ReconnectMaxRetries = ReconnectMaxRetries,
-                LateJoinDelayTicks = LateJoinDelayTicks,
-                ResyncMaxRetries = ResyncMaxRetries,
-                DesyncThresholdForResync = DesyncThresholdForResync,
+                LateJoinDelaySafety = LateJoinDelaySafety,
+                RttSanityMaxMs = RttSanityMaxMs,
+                MinStallAbortTicks = MinStallAbortTicks,
                 CountdownDurationMs = CountdownDurationMs,
-                CatchupMaxTicksPerFrame = CatchupMaxTicksPerFrame,
-                MinPlayers = MinPlayers,
+                AbortGraceMs = AbortGraceMs,
+                EndGracePolicy = (Core.EndGracePolicy)EndGracePolicy,
+                EndGraceMs = EndGraceMs,
+                ClientShutdownGraceMs = ClientShutdownGraceMs,
             };
         }
     }

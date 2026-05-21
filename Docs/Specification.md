@@ -213,8 +213,8 @@ Assets/Klotho/
 ### 2.2 Default Configuration Values
 
 Configuration is split into two layers.
-- **`SimulationConfig` / `ISimulationConfig`** — Simulation parameters (affect determinism, identical across all peers). Injected via `KlothoSessionSetup.SimulationConfig`.
-- **`SessionConfig` / `ISessionConfig`** — Session operation parameters (decided by the host, propagated via GameStart / LateJoinAccept / SpectatorAccept messages).
+- **`SimulationConfig` / `ISimulationConfig`** — Simulation parameters (affect determinism, identical across all peers). Injected via `KlothoSessionSetup.SimulationConfig`. Inspector-editable via `USimulationConfig` ScriptableObject.
+- **`SessionConfig` / `ISessionConfig`** — Session operation parameters (decided by the host, propagated via GameStart / LateJoinAccept / SpectatorAccept messages). Injected via `KlothoSessionSetup.SessionConfig` — replaces the previous per-field mirror set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/LateJoinDelayTicks/ReconnectTimeoutMs/ReconnectMaxRetries/LateJoinDelaySafety/RttSanityMaxMs/MinStallAbortTicks/CountdownDurationMs). Inspector-editable via `USessionConfig` ScriptableObject; `Create()` copies the values into the engine-owned `SessionConfig` (assets are never mutated).
 
 #### SimulationConfig Defaults
 
@@ -1069,7 +1069,7 @@ Both host and guest peers run the watchdog locally — either can self-abort whe
 | OnPlayerDisconnected | `Action<IPlayerInfo>` | Player disconnected (awaiting reconnect) |
 | OnPlayerReconnected | `Action<IPlayerInfo>` | Player reconnected (Host) |
 | OnReconnecting | `Action` | Reconnect in progress (Guest) |
-| OnReconnectFailed | `Action<string>` | Reconnect failed (Guest) |
+| OnReconnectFailed | `Action<byte>` | Reconnect failed (Guest). The byte is a `ReconnectRejectReason` value (`InvalidMagic`, `InvalidPlayer`, `TimedOut`, `AlreadyConnected`, `DeviceMismatch`, `TransportStartFailed`, `MaxRetries`, `Unknown`). Use `ReconnectRejectReason.ToName(reason)` for a symbolic name, `ReconnectRejectReason.RequiresUserChoice(reason)` to detect `AlreadyConnected`. Cold-start paths surface the same reason via `ReconnectFailedException.Reason` |
 | OnReconnected | `Action` | Reconnect completed (Guest) |
 | OnLateJoinPlayerAdded | `Action<int, int>` | Late-join player added (playerId, joinTick) |
 

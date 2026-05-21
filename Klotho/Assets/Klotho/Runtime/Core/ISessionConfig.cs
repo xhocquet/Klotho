@@ -6,11 +6,15 @@ namespace xpTURN.Klotho.Core
     /// </summary>
     public interface ISessionConfig
     {
+        // --- Determinism ---
+
         /// <summary>
         /// Deterministic random seed. All peers must initialize the RNG with the same seed to guarantee determinism.
         /// If 0, the host generates one automatically.
         /// </summary>
         int RandomSeed { get; }
+
+        // --- Membership ---
 
         /// <summary>
         /// Maximum number of players. Used by the network service and view initialization.
@@ -26,9 +30,23 @@ namespace xpTURN.Klotho.Core
         int MinPlayers { get; }
 
         /// <summary>
+        /// Maximum number of spectators allowed in the session.
+        /// </summary>
+        int MaxSpectators { get; }
+
+        // --- LateJoin / Reconnect Policy ---
+
+        /// <summary>
         /// Whether Late Join is allowed. If false, requests from new players to join while the game is in progress are rejected.
         /// </summary>
         bool AllowLateJoin { get; }
+
+        /// <summary>
+        /// Tick offset at which the PlayerJoinCommand is inserted on Late Join.
+        /// The join command is scheduled at current tick + LateJoinDelayTicks, giving existing players time to prepare input.
+        /// Range: 1 or greater. Larger values are safer but make joining slower.
+        /// </summary>
+        int LateJoinDelayTicks { get; }
 
         /// <summary>
         /// Reconnect timeout (milliseconds). If a player does not reconnect within this window after disconnecting, they are removed.
@@ -44,34 +62,32 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int ReconnectMaxRetries { get; }
 
-        /// <summary>
-        /// Tick offset at which the PlayerJoinCommand is inserted on Late Join.
-        /// The join command is scheduled at current tick + LateJoinDelayTicks, giving existing players time to prepare input.
-        /// Range: 1 or greater. Larger values are safer but make joining slower.
-        /// </summary>
-        int LateJoinDelayTicks { get; }
+        // --- LateJoin / Reconnect Tuning ---
 
         /// <summary>
-        /// Maximum retry count for Full State Resync.
-        /// When desyncs occur DesyncThresholdForResync times in a row, a Resync is attempted;
-        /// if this count is exceeded, the OnResyncFailed event is raised.
-        /// Range: 1 or greater.
+        /// Safety margin (ticks) added to RTT-based extra-delay computation for LateJoin/Reconnect.
+        /// Also used as the standalone fallback value when the server-side avgRtt is unavailable or out of sane range.
         /// </summary>
-        int ResyncMaxRetries { get; }
+        int LateJoinDelaySafety { get; }
 
         /// <summary>
-        /// Threshold of consecutive desyncs that triggers a full state resync.
-        /// When sync hash mismatches are detected this many times in a row, a Full State Resync is requested instead of a rollback.
-        /// Range: 1 or greater. 1 means an immediate Resync on the first desync.
+        /// Upper bound (ms) for accepting avgRtt as a sane RTT measurement.
+        /// Values exceeding this fall back to <see cref="LateJoinDelaySafety"/> only.
         /// </summary>
-        int DesyncThresholdForResync { get; }
+        int RttSanityMaxMs { get; }
+
+        // --- Chain-Stall Watchdog ---
 
         /// <summary>
-        /// Minimum interval between consecutive corrective resets (milliseconds).
-        /// Prevents broadcast storms when persistent hash divergence fires OnHashMismatch repeatedly.
-        /// Range: 1000 or greater. Default 5000.
+        /// Lower-bound floor (ticks) for the chain-stall abort watchdog.
+        /// Effective threshold = max(ReconnectTimeoutMs / TickIntervalMs + 100, MinStallAbortTicks).
+        /// Guards against misconfigurations where ReconnectTimeoutMs is unusually small or zero —
+        /// without this floor the watchdog would fire almost immediately.
+        /// Default 600 (30s @ 50ms tick).
         /// </summary>
-        int CorrectiveResetCooldownMs { get; }
+        int MinStallAbortTicks { get; }
+
+        // --- Match Start Countdown ---
 
         /// <summary>
         /// Game start countdown duration (milliseconds). After all players are ready,
@@ -81,18 +97,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int CountdownDurationMs { get; }
 
-        /// <summary>
-        /// Maximum number of ticks executed per frame during Late Join catch-up.
-        /// The upper bound on ticks executed in a single frame while catching up to the current tick after a Late Join.
-        /// Larger values catch up faster but may cause frame hitching.
-        /// Range: 1 or greater. Typically 100~500.
-        /// </summary>
-        int CatchupMaxTicksPerFrame { get; }
-
-        /// <summary>
-        /// Maximum number of spectators allowed in the session.
-        /// </summary>
-        int MaxSpectators { get; }
+        // --- Match End Grace ---
 
         /// <summary>
         /// Post-match grace duration on abort (milliseconds). Time between OnMatchAborted fire and

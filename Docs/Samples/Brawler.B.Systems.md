@@ -352,7 +352,7 @@ For entities with `PlatformComponent`:
 ### ItemSpawnSystem (Update)
 
 - Decide whether to spawn an item when `frame.Tick % SpawnIntervalTicks == 0`
-- Use `frame.Random` (DeterministicRandom) to pick the XZ position and item type
+- Pick XZ position and item type with `DeterministicRandom.FromSeed(seed, FeatureKey, frame.Tick)`, where `seed = frame.GetReadOnlySingleton<RandomSeedComponent>().Seed` (engine-injected singleton — same seed across all peers, rollback-stable). Bail out when `seed == 0` (the singleton has not been written yet, e.g. on a freshly-spawned entity that bypassed the framework path)
 - Create with `frame.CreateEntity(ItemPickupPrototype.Id)`
 - Skip if the current item count is ≥ `MaxItems`
 
@@ -375,10 +375,6 @@ Detects proximity to `SpawnMarkerComponent` (trap tag):
 ### BotFSMSystem (PreUpdate)
 
 Tick the HFSM for every entity holding `BotComponent`. For state transitions and Decisions, see [Brawler.D.BotHFSM.md](Brawler.D.BotHFSM.md).
-
-### SavePreviousTransformSystem (PreUpdate)
-
-Runs first in each tick. Backs up `TransformComponent.Position/Rotation` to dedicated `PreviousPosition/PreviousRotation` (used for view interpolation; stored in Frame so it participates in snapshots / rollback).
 
 ### PlatformerCommandSystem (PreUpdate)
 

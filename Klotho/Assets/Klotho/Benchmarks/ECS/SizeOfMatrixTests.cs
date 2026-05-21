@@ -36,7 +36,7 @@ namespace xpTURN.Klotho.ECS.Benchmarks
         // ── Measured values based on Editor (Mono) ──────────────────────────────
         // TODO: Replace with actual values after running PrintSizes in Unity Editor Mono.
         //       The values below are compile-time estimates based on StructLayout(Sequential, Pack=4) rules.
-        private const int Expected_TransformComponent             = 92;  // Not measured — update after running PrintSizes
+        private const int Expected_TransformComponent             = 96;  // FPVector3(24) + FP64(8) + FPVector3(24) + FPVector3(24) + FP64(8) + bool(1) + int(4) + Pack=4 tail padding(3)
         private const int Expected_OwnerComponent                 = 4;
         private const int Expected_ErrorCorrectionTargetComponent = 1;
         private const int Expected_NavAgentComponent              = 708;

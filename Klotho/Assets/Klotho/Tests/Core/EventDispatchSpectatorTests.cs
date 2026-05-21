@@ -179,6 +179,7 @@ namespace xpTURN.Klotho.Core.Tests
             };
 
             engine.StartSpectator(MakeStartInfo());
+            engine.ResetToTick(0);
 
             DriveSpectatorUntilPredictionStarts(engine);
 
@@ -227,6 +228,7 @@ namespace xpTURN.Klotho.Core.Tests
             engine.OnEventCanceled  += (tick, evt) => { if (evt is TestRegularEvent) canceledCount++; };
 
             engine.StartSpectator(MakeStartInfo());
+            engine.ResetToTick(0);
 
             DriveSpectatorUntilPredictionStarts(engine);
 
@@ -289,6 +291,7 @@ namespace xpTURN.Klotho.Core.Tests
             };
 
             engine.StartSpectator(MakeStartInfo());
+            engine.ResetToTick(0);
 
             DriveSpectatorUntilPredictionStarts(engine);
 
@@ -343,6 +346,7 @@ namespace xpTURN.Klotho.Core.Tests
             };
 
             engine.StartSpectator(MakeStartInfo());
+            engine.ResetToTick(0);
 
             DriveSpectatorUntilPredictionStarts(engine);
 

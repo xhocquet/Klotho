@@ -27,7 +27,7 @@ namespace xpTURN.Klotho.Core
 
         private ConnectionResult _result;
         private Action<ConnectionResult> _onCompleted;
-        private Action<string> _onFailed;
+        private Action<Exception> _onFailed;
         private bool _completed;
         private NetworkMessageBase _preJoinMessage;
 
@@ -65,7 +65,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public static KlothoConnection Connect(
             INetworkTransport transport, string host, int port,
-            Action<ConnectionResult> onCompleted, Action<string> onFailed = null,
+            Action<ConnectionResult> onCompleted, Action<Exception> onFailed = null,
             ILogger logger = null,
             NetworkMessageBase preJoinMessage = null,
             IDeviceIdProvider deviceIdProvider = null)
@@ -85,7 +85,7 @@ namespace xpTURN.Klotho.Core
             {
                 connection._completed = true;
                 connection.Dispose();
-                onFailed?.Invoke("Failed to start client transport");
+                onFailed?.Invoke(new Exception("Failed to start client transport"));
             }
 
             return connection;
@@ -100,7 +100,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public static KlothoConnection Reconnect(
             INetworkTransport transport, PersistedReconnectCredentials creds,
-            Action<ConnectionResult> onCompleted, Action<string> onFailed = null,
+            Action<ConnectionResult> onCompleted, Action<Exception> onFailed = null,
             ILogger logger = null)
         {
             var connection = new KlothoConnection(transport, logger);
@@ -118,7 +118,7 @@ namespace xpTURN.Klotho.Core
             {
                 connection._completed = true;
                 connection.Dispose();
-                onFailed?.Invoke("Failed to start client transport");
+                onFailed?.Invoke(new Exception("Failed to start client transport"));
             }
 
             return connection;
@@ -143,7 +143,7 @@ namespace xpTURN.Klotho.Core
                     _completed = true;
                     Dispose();
                     _logger?.ZLogWarning($"[KlothoConnection] Connect timeout after {elapsed}ms (result={(_result != null ? "partial" : "null")}, pendingLateJoin={_pendingLateJoin != null}, pendingReconnect={_pendingReconnect != null}, pendingFullState={_pendingFullState != null})");
-                    _onFailed?.Invoke(_reconnectCreds != null ? "Reconnect timeout" : "LateJoin timeout");
+                    _onFailed?.Invoke(new Exception(_reconnectCreds != null ? "Reconnect timeout" : "LateJoin timeout"));
                 }
             }
         }
@@ -224,7 +224,7 @@ namespace xpTURN.Klotho.Core
                 return;
             }
 
-            _onFailed?.Invoke($"Connection lost during handshake (reason: {reason})");
+            _onFailed?.Invoke(new Exception($"Connection lost during handshake (reason: {reason})"));
         }
 
         private void HandleDataReceived(int peerId, byte[] data, int length)
@@ -343,9 +343,8 @@ namespace xpTURN.Klotho.Core
             _completed = true;
             Dispose();
 
-            string reason = ReconnectRejectReason.ToName(msg.Reason);
-            _logger?.ZLogWarning($"[KlothoConnection] Reconnect rejected: reason={reason}");
-            _onFailed?.Invoke("Reconnect rejected: " + reason);
+            _logger?.ZLogWarning($"[KlothoConnection] Reconnect rejected: reason={ReconnectRejectReason.ToName(msg.Reason)}");
+            _onFailed?.Invoke(new ReconnectFailedException(msg.Reason));
         }
 
         private void HandleFullStateResponse(FullStateResponseMessage msg)

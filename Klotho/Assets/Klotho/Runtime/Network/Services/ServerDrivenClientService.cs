@@ -107,7 +107,7 @@ namespace xpTURN.Klotho.Network
         public event Action<IPlayerInfo> OnPlayerDisconnected;
         public event Action<IPlayerInfo> OnPlayerReconnected;
         public event Action OnReconnecting;
-        public event Action<string> OnReconnectFailed;
+        public event Action<byte> OnReconnectFailed;
         public event Action OnReconnected;
         public event Action<int, int> OnLateJoinPlayerAdded;
 
@@ -621,16 +621,15 @@ namespace xpTURN.Klotho.Network
                 cfg.RandomSeed = msg.RandomSeed;
                 cfg.MaxPlayers = msg.MaxPlayers;
                 cfg.MinPlayers = msg.MinPlayers;
+                cfg.MaxSpectators = msg.MaxSpectators;
                 cfg.AllowLateJoin = msg.AllowLateJoin;
+                cfg.LateJoinDelayTicks = msg.LateJoinDelayTicks;
                 cfg.ReconnectTimeoutMs = msg.ReconnectTimeoutMs;
                 cfg.ReconnectMaxRetries = msg.ReconnectMaxRetries;
-                cfg.LateJoinDelayTicks = msg.LateJoinDelayTicks;
-                cfg.ResyncMaxRetries = msg.ResyncMaxRetries;
-                cfg.DesyncThresholdForResync = msg.DesyncThresholdForResync;
+                cfg.LateJoinDelaySafety = msg.LateJoinDelaySafety;
+                cfg.RttSanityMaxMs = msg.RttSanityMaxMs;
+                cfg.MinStallAbortTicks = msg.MinStallAbortTicks;
                 cfg.CountdownDurationMs = msg.CountdownDurationMs;
-                cfg.CatchupMaxTicksPerFrame = msg.CatchupMaxTicksPerFrame;
-                cfg.CorrectiveResetCooldownMs = msg.CorrectiveResetCooldownMs;
-                cfg.MaxSpectators = msg.MaxSpectators;
                 cfg.AbortGraceMs = msg.AbortGraceMs;
                 cfg.EndGracePolicy = (EndGracePolicy)msg.EndGracePolicy;
                 cfg.EndGraceMs = msg.EndGraceMs;
@@ -808,7 +807,7 @@ namespace xpTURN.Klotho.Network
             // Any reject reason invalidates persisted credentials — discard.
             _reconnectCredentialsStore?.Clear();
 
-            OnReconnectFailed?.Invoke(ReconnectRejectReason.ToName(msg.Reason));
+            OnReconnectFailed?.Invoke(msg.Reason);
         }
 
         private void UpdateReconnect()
@@ -823,7 +822,7 @@ namespace xpTURN.Klotho.Network
             {
                 _reconnectState = ReconnectState.Failed;
                 Phase = SessionPhase.Disconnected;
-                OnReconnectFailed?.Invoke("Timeout");
+                OnReconnectFailed?.Invoke(ReconnectRejectReason.TimedOut);
                 return;
             }
 
@@ -843,7 +842,7 @@ namespace xpTURN.Klotho.Network
                             _logger?.ZLogError($"[SDClientService] Reconnect transport start failed — aborting reconnect");
                             _reconnectState = ReconnectState.Failed;
                             Phase = SessionPhase.Disconnected;
-                            OnReconnectFailed?.Invoke("TransportStartFailed");
+                            OnReconnectFailed?.Invoke(ReconnectRejectReason.TransportStartFailed);
                             return;
                         }
                     }
@@ -857,7 +856,7 @@ namespace xpTURN.Klotho.Network
                         {
                             _reconnectState = ReconnectState.Failed;
                             Phase = SessionPhase.Disconnected;
-                            OnReconnectFailed?.Invoke("MaxRetries");
+                            OnReconnectFailed?.Invoke(ReconnectRejectReason.MaxRetries);
                             return;
                         }
                         SendReconnectRequest();
@@ -987,7 +986,7 @@ namespace xpTURN.Klotho.Network
             OnFullStateReceived?.Invoke(0, null, 0, FullStateKind.Unicast);
             OnPlayerDisconnected?.Invoke(null);
             OnPlayerReconnected?.Invoke(null);
-            OnReconnectFailed?.Invoke(null);
+            OnReconnectFailed?.Invoke(ReconnectRejectReason.Unknown);
             OnReconnected?.Invoke();
             OnLateJoinPlayerAdded?.Invoke(0, 0);
         }

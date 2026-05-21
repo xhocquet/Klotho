@@ -97,11 +97,21 @@ namespace xpTURN.Klotho.Core
                 }
 #endif
 
-                // Collect local input.
-                if (_simulationCallbacks != null)
+                // Pause-grace auto-stop — emit StopCommand instead of game OnPollInput.
+                if (_matchEndedDispatched
+                    && _sessionConfig.EndGracePolicy == EndGracePolicy.Pause)
+                {
+                    var stop = CommandPool.Get<StopCommand>();
+                    InputCommand(stop);
+                }
+                else if (_simulationCallbacks != null)
+                {
                     _simulationCallbacks.OnPollInput(LocalPlayerId, CurrentTick, _commandSender);
+                }
                 else
+                {
                     OnPreTick?.Invoke(CurrentTick);
+                }
 
                 // Execute prediction tick.
                 ExecuteClientPredictionTick();
@@ -395,11 +405,11 @@ namespace xpTURN.Klotho.Core
                 _logger?.ZLogDebug($"[SD] Resim: executionTick={executionTick}, entry.Tick={entry.Tick}, frame.Tick before={_simulation.CurrentTick}, cmds={_tickCommandsCache.Count}");
                 _eventCollector.BeginTick(executionTick);
                 _tickCommandsCache.Sort(s_commandComparer);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                 _inputBuffer.SetResimulating(true);
 #endif
                 _simulation.Tick(_tickCommandsCache);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                 _inputBuffer.SetResimulating(false);
 #endif
                 _logger?.ZLogDebug($"[SD] Resim: frame.Tick after={_simulation.CurrentTick}");
@@ -506,11 +516,11 @@ namespace xpTURN.Klotho.Core
 
                     _eventCollector.BeginTick(resimTick);
                     _tickCommandsCache.Sort(s_commandComparer);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                     _inputBuffer.SetResimulating(true);
 #endif
                     _simulation.Tick(_tickCommandsCache);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                     _inputBuffer.SetResimulating(false);
 #endif
 
@@ -560,11 +570,11 @@ namespace xpTURN.Klotho.Core
             }
 
             _tickCommandsCache.Sort(s_commandComparer);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(true);
 #endif
             _simulation.Tick(_tickCommandsCache);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(false);
 #endif
         }
@@ -784,11 +794,11 @@ namespace xpTURN.Klotho.Core
 
                     _eventCollector.BeginTick(resimTick);
                     _tickCommandsCache.Sort(s_commandComparer);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                     _inputBuffer.SetResimulating(true);
 #endif
                     _simulation.Tick(_tickCommandsCache);
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
                     _inputBuffer.SetResimulating(false);
 #endif
                     for (int ei = 0; ei < _eventCollector.Count; ei++)

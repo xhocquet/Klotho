@@ -59,6 +59,7 @@ namespace xpTURN.Klotho.ECS
         private static readonly DeserializeDelegate[]      _deserializeDispatch      = new DeserializeDelegate[MAX_COMPONENT_TYPES];
         private static readonly ClearDelegate[]            _clearDispatch            = new ClearDelegate[MAX_COMPONENT_TYPES];
         public  static readonly int[]                      PerComponentSize          = new int[MAX_COMPONENT_TYPES];
+        private static readonly bool[]                     _isSingleton              = new bool[MAX_COMPONENT_TYPES];
 
         // === Editor-debug reflector dispatch ===
         private static readonly IStorageReflector[] _reflectors = new IStorageReflector[MAX_COMPONENT_TYPES];
@@ -71,6 +72,7 @@ namespace xpTURN.Klotho.ECS
         {
             public static int Id;
             public static StorageLayout Layout;
+            public static bool IsSingleton;
             public static int CachedGeneration = -1;   // -1 : not yet populated
         }
 
@@ -88,7 +90,7 @@ namespace xpTURN.Klotho.ECS
         public static bool TryGetFixedArrayReader(Type componentType, string fieldName, out Func<object, int[]> reader)
             => _fixedArrayReaders.TryGetValue((componentType, fieldName), out reader);
 
-        public static bool Register<T>(int typeId) where T : unmanaged, IComponent
+        public static bool Register<T>(int typeId, bool isSingleton = false) where T : unmanaged, IComponent
         {
             if (_frozen)
                 throw new InvalidOperationException(
@@ -110,11 +112,16 @@ namespace xpTURN.Klotho.ECS
             _typeToId[typeof(T)] = typeId;
             _idToType[typeId] = typeof(T);
             _componentSizes[typeof(T)] = Unsafe.SizeOf<T>();
+            _isSingleton[typeId] = isSingleton;
             if (typeId > MaxTypeId) MaxTypeId = typeId;
 
             RegisterDispatch<T>(typeId);
             return true;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsSingleton(int typeId)
+            => (uint)typeId < MAX_COMPONENT_TYPES && _isSingleton[typeId];
 
         // Registers the dispatch entry, reflector, and PerComponentSize for the given typeId in one go.
         private static void RegisterDispatch<T>(int typeId) where T : unmanaged, IComponent
@@ -248,6 +255,7 @@ namespace xpTURN.Klotho.ECS
                 TypeIdCache<T>.Id     = id;
                 if (_layouts != null && id < _layouts.Length)
                     TypeIdCache<T>.Layout = _layouts[id];
+                TypeIdCache<T>.IsSingleton = _isSingleton[id];
                 TypeIdCache<T>.CachedGeneration = _generation;
             }
             return TypeIdCache<T>.Id;

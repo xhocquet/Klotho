@@ -31,8 +31,8 @@ namespace xpTURN.Klotho.Network
             var (newExtraDelay, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
                 smoothedRtt,
                 _simConfig.TickIntervalMs,
-                _simConfig.LateJoinDelaySafety,
-                _simConfig.RttSanityMaxMs,
+                _sessionConfig.LateJoinDelaySafety,
+                _sessionConfig.RttSanityMaxMs,
                 _simConfig.MaxRollbackTicks);
 
             int prev = _lastPushedExtraDelay.TryGetValue(peerId, out var p) ? p : 0;

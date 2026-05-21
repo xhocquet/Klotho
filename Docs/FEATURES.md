@@ -24,8 +24,18 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **SimulationConfig / ISimulationConfig** — tick interval, input delay, max rollback, sync-check interval, prediction toggle
 - **SessionConfig / ISessionConfig** — session-init parameters (network mode, player info, etc.)
 - **KlothoSession / IKlothoSession** — session lifecycle management (a wrapper around KlothoEngine)
-  - **KlothoSessionSetup** — session-construction helper
+  - **KlothoSessionSetup** — session-construction helper. Field-injected:
+    - `CredentialsStore` (IReconnectCredentialsStore) — warm-reconnect save/clear, formerly wired by the game after Create
+    - `LifecycleObserver` (IKlothoSessionObserver) — bulk-subscribed at Create and bulk-unsubscribed at Stop (replaces per-event `+=` wiring)
+    - `AppVersion` / `DeviceIdProvider` — reconnect credential issuance inputs
+  - **KlothoSession.CreateSpectator** — spectator-mode factory (takes `SpectatorSessionSetup` + `CallbacksFactory` that runs after server config arrives)
+  - **SpectatorSessionSetup / SpectatorCallbacks** — spectator-only setup; no `SessionConfig`/`CredentialsStore` (server-authoritative arrival via `SpectatorAcceptMessage`)
+  - **IKlothoSessionObserver** — aggregated session-level lifecycle callbacks (`OnPlayerDisconnected/Reconnected`, `OnReconnecting/Failed/Reconnected`, `OnCatchupComplete`, `OnResyncCompleted`, `OnGameStart`, `OnMatchAborted/Ended/Reset`, `OnSessionStopped`)
+  - **ReconnectFailedException** — thrown by `KlothoConnectionAsync.ReconnectAsync` / `KlothoConnection.Reconnect` on server reject; carries the rejection `Reason` byte (see `ReconnectRejectReason`)
   - **ISimulationCallbacks** — engine-lifecycle callback interface
+  - **Replay initial-state snapshot auto-inject** — `Engine.StartReplay` automatically replays `InitialStateSnapshot` from the metadata, removing the game-side `OnGameStart += InjectInitialStateSnapshot` wiring
+  - **Pause-grace StopCommand auto-inject** — during the `EndGracePolicy.Pause` grace window, the engine emits the per-tick `StopCommand` automatically; games no longer hand-roll the grace-window command stream
+  - **DynamicInputDelayPolicy** — built-in client-reactive PastTick + rollback-burst escalation policy (formerly hand-rolled in the sample); thresholds sourced from `SessionConfig`, attached automatically on non-host sessions
 - **KlothoEngine / IKlothoEngine** — engine state machine (Idle, WaitingForPlayers, BootstrapPending, Running, Paused, Ending, Finished, Aborted)
   - **NetworkMode** — selectable P2P / ServerDriven topology
   - Partials: Rollback, TimeSync, ErrorCorrection, FullStateResync, LateJoin, Reconnect, Spectator, ServerDriven, ServerDrivenClient, Replay, FrameVerification, SyncTest, EventHelpers
@@ -177,6 +187,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **IComponent** — `unmanaged` component marker interface
 - **IEntityPrototype / EntityPrototypeRegistry** — entity-prototype interface and registry (data-driven entity creation)
 - **[KlothoComponent(typeId)]** — component-type-registration attribute (source-generator integration; UserMinId=100)
+- **[KlothoSingletonComponent]** — marks a component type as singleton (exactly one carrier entity per frame). `Frame.Add<T>` throws on a second carrier; read via `Frame.GetSingleton<T>` / `GetReadOnlySingleton<T>` / `TryGetSingleton<T>`. Source generator emits an `IsSingleton` flag onto `ComponentStorageRegistry.TypeIdCache<T>`
 - **[FrameData]** — frame-data field-serialization attribute
 - **SystemPhase** — PreUpdate / Update / PostUpdate / LateUpdate
 - **ISystem** — `Update(ref Frame)` system interface
@@ -190,7 +201,8 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **EcsStateSnapshot** — IStateSnapshot adapter (built on Frame.CopyFrom)
 - **EcsSimulation** — ISimulation implementation (owns Frame + SystemRunner; pluggable into KlothoEngine)
 - **FixedString32 / FixedString64** — `unmanaged` fixed-size UTF-8 strings (for component fields)
-- **Built-in components** — TransformComponent, VelocityComponent, MovementComponent, HealthComponent, CombatComponent, OwnerComponent, PhysicsBodyComponent, NavigationComponent, SessionParticipantComponent (engine writes one per active player at `Start()` for a deterministic all-participants-spawned gate)
+- **Built-in components** — TransformComponent, VelocityComponent, MovementComponent, HealthComponent, CombatComponent, OwnerComponent, PhysicsBodyComponent, NavigationComponent, SessionParticipantComponent (engine writes one per active player at `Start()` for a deterministic all-participants-spawned gate), RandomSeedComponent (singleton — engine-injected at session start; restored on LateJoin / Reconnect / Spectator / Replay via FullState)
+- **TransformComponent prev-snapshot** — `PreviousPosition` / `PreviousRotation` / `PreviousInitialized` marker. Engine auto-initializes Previous* on first `Frame.Add` and via a PreUpdate `SavePrev` pass. Use `Frame.RefreshPreviousTransform(entity)` after a post-Add ref-set to keep Previous* in lockstep with `Position` (suppresses unwanted one-frame interpolation; see GameDevAPI §4.1)
 - **Built-in systems** — MovementSystem, CombatSystem, PhysicsSystem, NavigationSystem, CommandSystem, EventSystem
 
 ## Replay
@@ -219,11 +231,13 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 - **UKlothoBehaviour** — MonoBehaviour-based Klotho integration base class
 - **USimulationConfig** — ScriptableObject SimulationConfig (inspector-editable, implements `ISimulationConfig`)
+- **USessionConfig** — ScriptableObject SessionConfig (inspector-editable, implements `ISessionConfig`). All 16 session-level fields (MaxPlayers/MinPlayers/MaxSpectators, late-join/reconnect policy, chain-stall watchdog, countdown, match-end grace) author in one asset; `KlothoSessionSetup.SessionConfig` replaces the previous mirror-field set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/…)
 - **EcsDebugBridge** — editor debug bridge
 - **View layer** (IMP24)
   - **EntityView / EntityViewComponent** — entity-view base class and view-component interface
-  - **EntityViewFactory / IEntityViewPool / DefaultEntityViewPool** — view creation / pooling
-  - **EntityViewUpdater** — simulation state → view sync
+  - **EntityViewFactory / IEntityViewPool / DefaultEntityViewPool** — view creation / pooling. The base `EntityViewFactory` resolves `BindBehaviour` / `ViewFlags` from a 5-flag decision (rolls up `RequiresBindBehaviour`, `HasViewComponentInterpolation`, `RequiresErrorCorrection`, `RequiresSnapshotInterpolation`, `RequiresViewComponentBinding`) — games override only when a sample-specific override is required
+  - **EntityViewUpdater** — simulation state → view sync; owns the built-in **PlayerViewRegistry\<TView\>** (lifted from sample). EVU drives `Register` / `Unregister` automatically from `OwnerComponent` add/remove; game code uses `Get(playerId)` for lookup and subscribes to `OnViewRegistered` / `OnLocalViewRegistered` / `OnLocalViewUnregistered` for player-view event hooks
+  - **KlothoConnectionAsync / KlothoSpectatorAsync** — UniTask-based async-connect / async-spectator-bootstrap helpers (live under `Assets/Klotho/Unity/`)
   - **VerifiedFrameInterpolator** — interpolation based on verified frames
   - **BindBehaviour** — component-binding MonoBehaviour
   - **UpdatePositionParameter / ViewFlags / ErrorVisualState** — auxiliary types
@@ -242,9 +256,9 @@ Supports client-side prediction, rollback, and frame synchronization.
   - **BrawlerPlayerConfig / BrawlerReplayConfig** — sample configuration
   - **CombatHelper** — combat helper
   - **Commands** — AttackCommand, MoveInputCommand, SpawnCharacterCommand, UseSkillCommand
-  - **Components** — BotComponent, CharacterComponent, GameSeedComponent, GameTimerStateComponent, ItemComponent, KnockbackComponent, PlatformComponent, SkillCooldownComponent, SpawnMarkerComponent
+  - **Components** — BotComponent, CharacterComponent, GameTimerStateComponent (singleton), ItemComponent, KnockbackComponent, PlatformComponent, SkillCooldownComponent, SpawnMarkerComponent (the sample's `GameSeedComponent` was replaced by the engine-provided singleton `RandomSeedComponent`)
   - **Events** — ActionCompletedEvent, AttackActionEvent, AttackHitEvent, CharacterKilledEvent, CharacterSpawnedEvent, DashEvent, GameOverEvent, GroundSlamEvent, ItemPickedUpEvent, JumpEvent, RoundTimerEvent, SkillActionEvent, TrapTriggeredEvent
-  - **Systems** — ActionLockSystem, BotFSMSystem, BoundaryCheckSystem, CombatSystem, GameOverSystem, GroundClampSystem, ItemSpawnSystem, KnockbackSystem, ObstacleMovementSystem, PlatformerCommandSystem, RespawnSystem, SavePreviousTransformSystem, SkillCooldownSystem, TimerSystem, TopdownMovementSystem, TrapTriggerSystem
+  - **Systems** — ActionLockSystem, BotFSMSystem, BoundaryCheckSystem, CombatSystem, GameOverSystem, GroundClampSystem, ItemSpawnSystem, KnockbackSystem, ObstacleMovementSystem, PlatformerCommandSystem, RespawnSystem, SkillCooldownSystem, TimerSystem, TopdownMovementSystem, TrapTriggerSystem (the sample's `SavePreviousTransformSystem` was removed — `TransformComponent.PreviousPosition/Rotation` is engine-maintained)
   - **Bot HFSM** — BotHFSMRoot, BotActions, BotDecisions, BotFSMHelper (hierarchical-FSM-based bot AI)
   - **Prototypes** — `IEntityPrototype` implementations (KnightPrototype, MagePrototype, RoguePrototype, WarriorPrototype, ItemPickupPrototype, MovingPlatformPrototype)
   - **View** — CharacterView, CharacterAnimatorViewComponent, CharacterActionVfxViewComponent, ItemView, PlatformView, BrawlerCameraController, GameHUD, GameMenu, ResultScreen
@@ -263,4 +277,4 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 ---
 
-*Last updated: 2026-04-24*
+*Last updated: 2026-05-20*

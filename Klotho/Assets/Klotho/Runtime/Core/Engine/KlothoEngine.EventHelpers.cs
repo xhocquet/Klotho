@@ -16,9 +16,9 @@ namespace xpTURN.Klotho.Core
         // and by Spectator.ResetToTick (per-tick re-emit).
         private int _syncedDispatchHighWaterMark = -1;
 
-        // True after OnMatchEnded has fired at least once. Exposed via IKlothoEngine.IsMatchEnded
-        // for game-side OnPollInput to apply EndGracePolicy-specific behavior during the post-match
-        // grace window (e.g., send StopCommand when EndGracePolicy == Pause). Also used by the
+        // True after OnMatchEnded has fired at least once. Drives the engine's Pause-grace
+        // StopCommand emission at the OnPollInput dispatch site, exposed via IKlothoEngine.IsMatchEnded
+        // for game-side hooks (UI / audio / Continue-policy input filtering), and used by the
         // ClientTick hard-limit warning to demote the log to Debug. Not reset within an engine instance.
         private bool _matchEndedDispatched;
 

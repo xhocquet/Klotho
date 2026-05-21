@@ -7,10 +7,16 @@ namespace Brawler
     public struct KnightPrototype : IEntityPrototype
     {
         public const int Id = 103;
+        public FPVector3 SpawnPosition;
+        public FP64 SpawnRotation;
         public void Apply(Frame frame, EntityRef entity)
         {
             var stats = frame.AssetRegistry.Get<CharacterStatsAsset>(1103);
-            frame.Add(entity, new TransformComponent());
+            frame.Add(entity, new TransformComponent
+            {
+                Position = SpawnPosition,
+                Rotation = SpawnRotation,
+            });
             var rb = FPRigidBody.CreateDynamic(stats.Mass);
             rb.friction = stats.Friction;
             frame.Add(entity, new PhysicsBodyComponent

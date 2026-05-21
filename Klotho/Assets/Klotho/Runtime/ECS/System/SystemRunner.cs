@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using xpTURN.Klotho.Core;
 
 namespace xpTURN.Klotho.ECS
@@ -68,10 +69,29 @@ namespace xpTURN.Klotho.ECS
         public void RunUpdateSystems(ref Frame frame)
         {
             EnsureSorted();
+            // Built-in: capture previous transform before any PreUpdate system runs.
+            // Relies on SystemPhase.PreUpdate == 0 so this placement is equivalent to
+            // running ahead of the first PreUpdate-phase ISystem after EnsureSorted ordering.
+            Debug.Assert((int)SystemPhase.PreUpdate == 0,
+                "SystemPhase.PreUpdate must remain the first enum value (0). " +
+                "If the enum order changes, move SaveAllPreviousTransforms accordingly.");
+            SaveAllPreviousTransforms(ref frame);
             for (int i = 0; i < _sorted.Length; i++)
             {
                 if (_sorted[i].System is ISystem sys)
                     sys.Update(ref frame);
+            }
+        }
+
+        private static void SaveAllPreviousTransforms(ref Frame frame)
+        {
+            var filter = frame.Filter<TransformComponent>();
+            while (filter.Next(out var entity))
+            {
+                ref var t = ref frame.Get<TransformComponent>(entity);
+                t.PreviousPosition = t.Position;
+                t.PreviousRotation = t.Rotation;
+                t.PreviousInitialized = true;
             }
         }
 

@@ -1,11 +1,11 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 using Microsoft.Extensions.Logging;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 using ZLogger;
 
+using xpTURN.Klotho;
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
 using Cysharp.Threading.Tasks;
@@ -30,26 +30,29 @@ namespace Brawler
 
         private KlothoEngine _engine;
         private EcsSimulation _simulation;
-        private int _maxPlayers;
+        private EntityViewUpdater _evu;
         private ILogger _logger;
 
         private bool _platformsAssigned;
 
-        // After EVU creates CharacterView, holds the self-register result from OnActivate.
-        // Referenced by camera follow and GameHUD when finding the local player's view.
-        private readonly Dictionary<int, CharacterView> _characterViews = new();
-
-        public void Initialize(KlothoEngine engine, EcsSimulation simulation, int maxPlayers, ILogger logger = null)
+        public void Initialize(KlothoEngine engine, EcsSimulation simulation, EntityViewUpdater evu, ILogger logger = null)
         {
             _engine = engine;
             _simulation = simulation;
-            _maxPlayers = maxPlayers;
+            _evu = evu;
             _logger = logger;
 
             _platformsAssigned = false;
 
             engine.OnTickExecuted += OnTickExecuted;
             engine.OnSyncedEvent  += OnSyncedEvent;
+
+            if (_evu != null && _evu.PlayerViews != null)
+            {
+                _evu.PlayerViews.OnViewRegistered        += HandleViewRegistered;
+                _evu.PlayerViews.OnLocalViewRegistered   += HandleLocalViewRegistered;
+                _evu.PlayerViews.OnLocalViewUnregistered += HandleLocalViewUnregistered;
+            }
 
             _gameHUD?.Initialize(engine);
             _resultScreen?.Initialize(engine);
@@ -63,10 +66,38 @@ namespace Brawler
                 _engine.OnSyncedEvent  -= OnSyncedEvent;
             }
 
-            _characterViews.Clear();
+            if (_evu != null && _evu.PlayerViews != null)
+            {
+                _evu.PlayerViews.OnViewRegistered        -= HandleViewRegistered;
+                _evu.PlayerViews.OnLocalViewRegistered   -= HandleLocalViewRegistered;
+                _evu.PlayerViews.OnLocalViewUnregistered -= HandleLocalViewUnregistered;
+            }
+
             _platformsAssigned = false;
             _engine = null;
             _simulation = null;
+            _evu = null;
+        }
+
+        private void HandleViewRegistered(int playerId, EntityView view)
+        {
+            if (view is CharacterView ch)
+                _gameHUD?.RegisterCharacterView(playerId, ch);
+        }
+
+        private void HandleLocalViewRegistered(EntityView view)
+        {
+            if (view is CharacterView ch)
+            {
+                _cameraController?.SetFollowTarget(ch.transform);
+                OnLocalCharacterSpawned?.Invoke();
+            }
+        }
+
+        private void HandleLocalViewUnregistered(EntityView view)
+        {
+            _cameraController?.ClearFollowTarget();
+            OnLocalCharacterDespawned?.Invoke();
         }
 
         private void OnTickExecuted(int tick)
@@ -130,62 +161,6 @@ namespace Brawler
                 Destroy(results[0], ps.main.duration + ps.main.startLifetime.constantMax);
             else
                 Destroy(results[0], 3f);
-        }
-
-        // ── EVU self-register entry point (called from CharacterView.OnActivate) ──
-        // Inherits Registry's OnLocalCharacterSpawned wiring — guarantees no regression in camera / GameHUD / BrawlerGameController.
-
-        /// <summary>Called when CharacterView is activated by EVU — wires camera follow / HUD.</summary>
-        public void RegisterCharacter(int playerId, CharacterView view)
-        {
-            if (view == null) return;
-            if (_characterViews.TryGetValue(playerId, out var existing) && existing == view)
-            {
-                _logger?.ZLogDebug($"[ViewBind][Dedup] playerId={playerId}, viewIID={view.GetInstanceID()} (same instance, skip rebind)");
-                return;
-            }
-
-            int prevIID = existing != null ? existing.GetInstanceID() : 0;
-            _characterViews[playerId] = view;
-            _gameHUD?.RegisterCharacterView(playerId, view);
-
-            if (_engine != null && playerId == _engine.LocalPlayerId)
-            {
-                _cameraController?.SetFollowTarget(view.transform);
-                OnLocalCharacterSpawned?.Invoke();
-                _logger?.ZLogDebug($"[ViewBind][New] playerId={playerId}, viewIID={view.GetInstanceID()}, prevIID={prevIID}, isLocal=true (OnLocalCharacterSpawned invoked)");
-            }
-            else
-            {
-                _logger?.ZLogDebug($"[ViewBind][New] playerId={playerId}, viewIID={view.GetInstanceID()}, prevIID={prevIID}, isLocal=false");
-            }
-        }
-
-        /// <summary>Called when CharacterView is deactivated — releases camera follow / keeps HUD slot (e.g., shows stock 0).</summary>
-        public void UnregisterCharacter(int playerId, CharacterView view)
-        {
-            if (_characterViews.TryGetValue(playerId, out var current) && current != view)
-            {
-                _logger?.ZLogDebug($"[ViewBind][UnregSkip] playerId={playerId}, requesterIID={view?.GetInstanceID()}, currentIID={current.GetInstanceID()}");
-                return;
-            }
-
-            if (!_characterViews.Remove(playerId))
-            {
-                _logger?.ZLogDebug($"[ViewBind][UnregMiss] playerId={playerId} not in map");
-                return;
-            }
-
-            if (_engine != null && playerId == _engine.LocalPlayerId)
-            {
-                _cameraController?.ClearFollowTarget();
-                OnLocalCharacterDespawned?.Invoke();
-                _logger?.ZLogDebug($"[ViewBind][Unreg] playerId={playerId}, isLocal=true (OnLocalCharacterDespawned invoked)");
-            }
-            else
-            {
-                _logger?.ZLogDebug($"[ViewBind][Unreg] playerId={playerId}, isLocal=false");
-            }
         }
 
         private void OnDestroy()

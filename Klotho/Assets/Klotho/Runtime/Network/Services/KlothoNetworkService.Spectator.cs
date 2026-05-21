@@ -17,7 +17,7 @@ namespace xpTURN.Klotho.Network
 
             var spectator = new SpectatorInfo { SpectatorId = _nextSpectatorId--, PeerId = peerId };
 
-            int snapshotTick = _engine?.GetNearestSnapshotTickWithinBuffer() ?? -1;
+            int snapshotTick = _engine?.LastVerifiedTick ?? -1;
 
             if (snapshotTick >= 0)
             {
@@ -64,16 +64,16 @@ namespace xpTURN.Klotho.Network
                     StartTime = _gameStartTime,
                     RandomSeed = RandomSeed,
                     MaxPlayers = _players.Count,
+                    MinPlayers = _sessionConfig.MinPlayers,
+                    MaxSpectators = _sessionConfig.MaxSpectators,
                     AllowLateJoin = _sessionConfig.AllowLateJoin,
+                    LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
                     ReconnectTimeoutMs = _sessionConfig.ReconnectTimeoutMs,
                     ReconnectMaxRetries = _sessionConfig.ReconnectMaxRetries,
-                    LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
-                    ResyncMaxRetries = _sessionConfig.ResyncMaxRetries,
-                    DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
+                    LateJoinDelaySafety = _sessionConfig.LateJoinDelaySafety,
+                    RttSanityMaxMs = _sessionConfig.RttSanityMaxMs,
+                    MinStallAbortTicks = _sessionConfig.MinStallAbortTicks,
                     CountdownDurationMs = _sessionConfig.CountdownDurationMs,
-                    CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
-                    CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
-                    MaxSpectators = _sessionConfig.MaxSpectators,
                     AbortGraceMs = _sessionConfig.AbortGraceMs,
                     EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
                     EndGraceMs = _sessionConfig.EndGraceMs,

@@ -17,6 +17,11 @@ namespace xpTURN.Klotho.Core
         private int _prevSpectatorLastConfirmedTick = -1;
         private const int MAX_SPECTATOR_PREDICTION_TICKS = SPECTATOR_INPUT_INTERVAL + 2;
 
+        // True after first ResetToTick (= FullState arrival). Until then, spectator simulation
+        // ticks are blocked — RandomSeedComponent / GameTimerStateComponent singletons are not
+        // yet populated, so any system that calls GetReadOnlySingleton would throw.
+        private bool _spectatorBootstrapped;
+
         public bool IsSpectatorMode => _isSpectatorMode;
  
         #region Spectator
@@ -35,6 +40,7 @@ namespace xpTURN.Klotho.Core
             _prevSpectatorLastConfirmedTick = -1;
             _accumulator = 0;
             _lastBatchedTick = -1;
+            _spectatorBootstrapped = false;
 
             State = KlothoState.Running;
         }
@@ -49,11 +55,32 @@ namespace xpTURN.Klotho.Core
 
         private void HandleSpectatorUpdate(float deltaTime)
         {
+            // Block all tick execution until first FullState arrival (RestoreFromFullState +
+            // ResetToTick). Before bootstrap, simulation state is empty — required singletons
+            // (RandomSeedComponent, GameTimerStateComponent, ...) do not exist and Update systems
+            // that call GetReadOnlySingleton would throw. Drain accumulator to avoid burst tick
+            // catch-up on bootstrap.
+            if (!_spectatorBootstrapped)
+            {
+                _accumulator = 0;
+                return;
+            }
+
+            // Clear previous-frame deltas before any rollback this frame.
+            ClearErrorDeltas();
+
             _accumulator += deltaTime * 1000f;
 
             // Apply inputs confirmed by batch arrival first, and re-simulate via rollback if needed.
-            if (_spectatorLastConfirmedTick > _prevSpectatorLastConfirmedTick)
+            // Capture/Compute only on batch arrival — mirrors SD client's UpdateServerDrivenClient EC pair,
+            // but gated at the call site since spectator does not use _pendingVerifiedQueue.
+            bool batchArrived = _spectatorLastConfirmedTick > _prevSpectatorLastConfirmedTick;
+            if (batchArrived)
+            {
+                CapturePreRollbackTransforms();
                 SpectatorHandleConfirmedInput();
+                ComputeErrorDeltas();
+            }
 
             // If only the confirmed tick is behind without any prediction, run a catch-up loop regardless of accumulated time.
             while (CurrentTick + 1 < _spectatorLastConfirmedTick)
@@ -154,6 +181,11 @@ namespace xpTURN.Klotho.Core
 
         public void ResetToTick(int tick)
         {
+            if (!_spectatorBootstrapped)
+            {
+                _spectatorBootstrapped = true;
+                _logger?.ZLogDebug($"[KlothoEngine][Spectator] Bootstrap complete at tick={tick}");
+            }
             CurrentTick = tick;
             _lastVerifiedTick = tick - 1;
             _spectatorLastConfirmedTick = tick - 1;
@@ -184,6 +216,7 @@ namespace xpTURN.Klotho.Core
         private void ExecuteSpectatorVerifiedTick()
         {
             var commands = _inputBuffer.GetCommandList(CurrentTick);
+            _logger?.ZLogDebug($"[Spectator] VerifiedTick: tick={CurrentTick}, cmds={commands.Count}, frame.Tick before={_simulation.CurrentTick}");
             SaveSnapshot(CurrentTick);
 
             _eventCollector.BeginTick(CurrentTick);
@@ -202,12 +235,15 @@ namespace xpTURN.Klotho.Core
             _viewCallbacks?.OnTickExecuted(executedTick);
             OnTickExecutedWithState?.Invoke(executedTick, FrameState.Verified);
             DispatchTickEvents(executedTick, FrameState.Verified);
+            _logger?.ZLogDebug($"[Spectator] VerifiedTick: executedTick={executedTick}, frame.Tick after={_simulation.CurrentTick}");
         }
 
         private void ExecuteSpectatorPredictedTick()
         {
             if (_spectatorPredictionStartTick < 0)
                 _spectatorPredictionStartTick = CurrentTick;
+
+            _logger?.ZLogDebug($"[Spectator] PredictedTick: tick={CurrentTick}, predictionStart={_spectatorPredictionStartTick}, confirmedTick={_spectatorLastConfirmedTick}, frame.Tick before={_simulation.CurrentTick}");
 
             SaveSnapshot(CurrentTick);
 
@@ -234,6 +270,7 @@ namespace xpTURN.Klotho.Core
             _viewCallbacks?.OnTickExecuted(executedTick);
             OnTickExecutedWithState?.Invoke(executedTick, FrameState.Predicted);
             DispatchTickEvents(executedTick, FrameState.Predicted);
+            _logger?.ZLogDebug($"[Spectator] PredictedTick: executedTick={executedTick}, frame.Tick after={_simulation.CurrentTick}");
         }
 
         private void SpectatorHandleConfirmedInput()
@@ -247,9 +284,12 @@ namespace xpTURN.Klotho.Core
             {
                 if (!ecsSim.HasSnapshot(rollbackTo))
                 {
+                    _logger?.ZLogWarning($"[Spectator] Rollback skipped (ECS): no snapshot at rollbackTo={rollbackTo}, frame.Tick={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}");
                     _spectatorPredictionStartTick = -1;
                     return;
                 }
+
+                _logger?.ZLogDebug($"[Spectator] Rollback (ECS): rollbackTo={rollbackTo}, frame.Tick before={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}, resimRange=[{rollbackTo},{_spectatorLastConfirmedTick}], predictedDepth={CurrentTick - rollbackTo}");
 
                 _rollbackOldEventsCache.Clear();
                 for (int t = rollbackTo; t < CurrentTick; t++)
@@ -283,6 +323,8 @@ namespace xpTURN.Klotho.Core
 
                 DiffRollbackEvents(rollbackTo);
 
+                _logger?.ZLogDebug($"[Spectator] Rollback (ECS) complete: frame.Tick after={_simulation.CurrentTick}, lastVerifiedTick={_lastVerifiedTick}");
+
                 for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
                     EventPool.Return(_rollbackOldEventsCache[i]);
                 _rollbackOldEventsCache.Clear();
@@ -294,9 +336,12 @@ namespace xpTURN.Klotho.Core
                 var snapshot = _snapshotManager.GetSnapshot(rollbackTo);
                 if (snapshot == null)
                 {
+                    _logger?.ZLogWarning($"[Spectator] Rollback skipped (Snapshot): no snapshot at rollbackTo={rollbackTo}, frame.Tick={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}");
                     _spectatorPredictionStartTick = -1;
                     return;
                 }
+
+                _logger?.ZLogDebug($"[Spectator] Rollback (Snapshot): rollbackTo={snapshot.Tick}, frame.Tick before={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}, resimRange=[{snapshot.Tick},{_spectatorLastConfirmedTick}], predictedDepth={CurrentTick - snapshot.Tick}");
 
                 _rollbackOldEventsCache.Clear();
                 for (int t = snapshot.Tick; t < CurrentTick; t++)
@@ -329,6 +374,8 @@ namespace xpTURN.Klotho.Core
                 }
 
                 DiffRollbackEvents(snapshot.Tick);
+
+                _logger?.ZLogDebug($"[Spectator] Rollback (Snapshot) complete: frame.Tick after={_simulation.CurrentTick}, lastVerifiedTick={_lastVerifiedTick}");
 
                 for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
                     EventPool.Return(_rollbackOldEventsCache[i]);

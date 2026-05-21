@@ -56,6 +56,30 @@ namespace xpTURN.Klotho
         // The value is preserved on Pool Return, so EVU.EnsureInitialized becomes a no-op on re-rent.
         private bool _hasInitialized;
 
+        // PlayerViewRegistry unbind key — written by EVU at spawn time via SetCachedOwner.
+        // _hasCachedOwner is an explicit flag because OwnerId valid range is not guaranteed
+        // to be non-negative (avoids sentinel-collision with valid id 0 / negative bot ids).
+        private int  _cachedOwnerId;
+        private bool _hasCachedOwner;
+
+        internal bool TryGetCachedOwner(out int ownerId)
+        {
+            ownerId = _cachedOwnerId;
+            return _hasCachedOwner;
+        }
+
+        internal void SetCachedOwner(int ownerId)
+        {
+            _cachedOwnerId  = ownerId;
+            _hasCachedOwner = true;
+        }
+
+        internal void ClearCachedOwner()
+        {
+            _cachedOwnerId  = 0;
+            _hasCachedOwner = false;
+        }
+
         protected virtual void Awake()
         {
             _components = GetComponentsInChildren<EntityViewComponent>(includeInactive: false);

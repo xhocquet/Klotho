@@ -52,18 +52,42 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public ISimulationConfig SimulationConfig { get; set; }
 
-        // ── SessionConfig fields (decided by host; ignored on guest — received via GameStartMessage) ──
+        // ── SessionConfig ──
 
-        public int RandomSeed { get; set; } = 0;
-        public int MaxPlayers { get; set; } = 4;
-        public int MinPlayers { get; set; } = 2;
-        public bool AllowLateJoin { get; set; } = true;
-        public int ReconnectTimeoutMs { get; set; } = 60000;
-        public int ReconnectMaxRetries { get; set; } = 3;
-        public int LateJoinDelayTicks { get; set; } = 10;
-        public int ResyncMaxRetries { get; set; } = 3;
-        public int DesyncThresholdForResync { get; set; } = 3;
-        public int CountdownDurationMs { get; set; } = 3000;
-        public int CatchupMaxTicksPerFrame { get; set; } = 200;
+        /// <summary>
+        /// Host: specify the config directly (typically a USessionConfig ScriptableObject).
+        /// Guest: ignored — received via GameStartMessage / LateJoinAcceptMessage / ReconnectAcceptMessage.
+        /// Null falls back to a default SessionConfig instance.
+        /// </summary>
+        public ISessionConfig SessionConfig { get; set; }
+
+        // ── Reconnect Credentials (cold-start Reconnect persistence) ──
+
+        /// <summary>
+        /// Store for persisting cold-start Reconnect credentials.
+        /// Optional — when null, cold-start credentials are not persisted (host or anonymous client).
+        /// </summary>
+        public Network.IReconnectCredentialsStore CredentialsStore { get; set; } = null;
+
+        /// <summary>
+        /// App version stamp recorded into persisted credentials for version compatibility checks
+        /// during cold-start Reconnect. Typically passed Application.version from the game side.
+        /// </summary>
+        public string AppVersion { get; set; } = null;
+
+        /// <summary>
+        /// Provides a stable device identifier embedded into persisted credentials.
+        /// Optional — when null, GetDeviceId returns string.Empty.
+        /// </summary>
+        public Network.IDeviceIdProvider DeviceIdProvider { get; set; } = null;
+
+        // ── Lifecycle Observer ──
+
+        /// <summary>
+        /// Optional aggregated lifecycle callback receiver. When non-null, KlothoSession.Create
+        /// subscribes its methods to NetworkService / Engine events; KlothoSession.Stop unsubscribes.
+        /// Replaces per-game manual +=/-= wiring across StartHost / JoinGameAsync / ReconnectAsync / StopGame.
+        /// </summary>
+        public IKlothoSessionObserver LifecycleObserver { get; set; } = null;
     }
 }

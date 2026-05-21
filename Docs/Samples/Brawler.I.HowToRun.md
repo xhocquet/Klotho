@@ -38,14 +38,16 @@ If any `.bytes` slot is empty, regenerate it via the editor menus listed in [Bra
 
 | Field | Type | Description |
 |---|---|---|
-| `_mode` | `NetworkMode` | `P2P` or `ServerDriven` |
 | `_hostAddress` | string | IP / hostname to host on or connect to |
 | `_port` | int | Default `777` |
 | `_roomId` | int | SD multi-room only (`-1` = single-room; ignored in P2P) |
 | `_isHost` | bool | P2P only — toggled at runtime by the **Host / Guest** buttons |
-| `_maxPlayers` | int | P2P host capacity |
 | `_botCount` | int | Bots spawned by the host (P2P) or server (SD) |
 | `_characterClass` | int | `0=Warrior, 1=Mage, 2=Rogue, 3=Knight` |
+
+> **Mode** is sourced from `_simulationConfig.Mode` (`USimulationConfig` asset), not `BrawlerSettings._mode`. Edit `Samples/Brawler/Config/SimulationConfig.asset` to switch between `P2P` / `ServerDriven`.
+>
+> **MaxPlayers** is sourced from `_sessionConfig.MaxPlayers` (`USessionConfig` asset), not `BrawlerSettings._maxPlayers`. Edit `Samples/Brawler/Config/SessionConfig.asset` to change the host capacity (single source of truth).
 
 ### I-1-3. GameMenu buttons
 
@@ -77,22 +79,25 @@ In P2P, one peer is the host (authoritative) and the rest are guests. No dedicat
 
 ### I-2-1. Host (Player 1)
 
-1. Inspector → `BrawlerSettings`:
-   - `_mode = P2P`
+1. Inspector → `_simulationConfig` (`SimulationConfig.asset`):
+   - `Mode = P2P`
+2. Inspector → `_sessionConfig` (`SessionConfig.asset`):
+   - `MaxPlayers` = total players (e.g. `2`)
+3. Inspector → `BrawlerSettings`:
    - `_hostAddress = localhost` (listen on all interfaces) or LAN IP
    - `_port = 777`
-   - `_maxPlayers` = total players (e.g. `2`)
-   - `_botCount` = bots to fill (optional — `_maxPlayers + _botCount` must not exceed the room entity budget)
+   - `_botCount` = bots to fill (optional — `_sessionConfig.MaxPlayers + _botCount` must not exceed the room entity budget)
    - `_characterClass` = class to use
-2. Press Play
-3. In the **Game Menu**, click **Host** (label flips to **Create Room**)
-4. Click **Create Room** → label becomes **Ready**
-5. Wait for guests (`Players: N` should update), then click **Ready**
+4. Press Play
+5. In the **Game Menu**, click **Host** (label flips to **Create Room**)
+6. Click **Create Room** → label becomes **Ready**
+7. Wait for guests (`Players: N` should update), then click **Ready**
 
 ### I-2-2. Guest (Player 2+)
 
-1. Inspector → `BrawlerSettings`:
-   - `_mode = P2P`
+1. Inspector → `_simulationConfig` (`SimulationConfig.asset`):
+   - `Mode = P2P`
+2. Inspector → `BrawlerSettings`:
    - `_hostAddress` = host IP (`localhost` if same machine, LAN IP otherwise)
    - `_port = 777`
    - `_characterClass` = class to use
@@ -112,8 +117,8 @@ Use `localhost` for the guest's `_hostAddress`.
 ### I-2-4. Notes
 
 - The P2P host is **not** a cold-start reconnect target — if the host quits, the match ends for all peers. Guests can auto-reconnect to a live host (see `PlayerPrefsReconnectCredentialsStore`).
-- `BrawlerGameController.StartHost()` overrides `SimulationConfig.Mode = NetworkMode.P2P` regardless of the asset's value.
-- `_roomId` is forced to `-1` in `Start()` whenever `_mode != ServerDriven`.
+- `BrawlerGameController.StartHost()` overrides `_simulationConfig.Mode = NetworkMode.P2P` regardless of the asset's value (mutates the SO directly — be aware when reusing the asset across modes).
+- `_roomId` is forced to `-1` in `Start()` whenever `_simulationConfig.Mode != ServerDriven`.
 
 ---
 
@@ -137,16 +142,17 @@ The server prints a banner with the bound endpoint once it is ready to accept cl
 
 ### I-3-2. Client (every player)
 
-1. Inspector → `BrawlerSettings`:
-   - `_mode = ServerDriven`
+1. Inspector → `_simulationConfig` (`SimulationConfig.asset`):
+   - `Mode = ServerDriven`
+2. Inspector → `BrawlerSettings`:
    - `_hostAddress` = server IP
    - `_port` = server port (`7777` per §I-3-1)
    - `_roomId = -1` (single-room)
    - `_characterClass` = class to use
-2. Press Play
-3. Click **Guest** (the **Host** button has no meaning for SD clients — every client is a guest)
-4. Click **Join Room** → handshake runs; on success the label becomes **Ready**
-5. Click **Ready**
+3. Press Play
+4. Click **Guest** (the **Host** button has no meaning for SD clients — every client is a guest)
+5. Click **Join Room** → handshake runs; on success the label becomes **Ready**
+6. Click **Ready**
 
 Once `MinPlayers` (`sessionconfig.json`, default `2`) are connected and ready, the server starts the match.
 
@@ -182,15 +188,16 @@ Listens on `0.0.0.0:7777`, hosts up to `4` rooms. See [Brawler.H.DedicatedServer
 
 The Brawler client identifies the target room via `BrawlerSettings._roomId`, sent as `RoomHandshakeMessage` before `PlayerJoinMessage` (see `BrawlerGameController.JoinGameAsync`).
 
-1. Inspector → `BrawlerSettings`:
-   - `_mode = ServerDriven`
+1. Inspector → `_simulationConfig` (`SimulationConfig.asset`):
+   - `Mode = ServerDriven`
+2. Inspector → `BrawlerSettings`:
    - `_hostAddress` = server IP
    - `_port` = server port
    - `_roomId` = room to join (e.g. `0`, `1`, `2`, `3` for `--multi ... 4 ...`)
    - `_characterClass` = class to use
-2. Press Play
-3. Click **Guest** → **Join Room**
-4. Click **Ready**
+3. Press Play
+4. Click **Guest** → **Join Room**
+5. Click **Ready**
 
 Each room is fully isolated. Messages do not cross between rooms (`RoomManager` + `RoomRouter`). Over-capacity → connection rejected; non-existent `_roomId` → connection rejected.
 

@@ -104,7 +104,7 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<IPlayerInfo> OnPlayerDisconnected;
             public event Action<IPlayerInfo> OnPlayerReconnected;
             public event Action OnReconnecting;
-            public event Action<string> OnReconnectFailed;
+            public event Action<byte> OnReconnectFailed;
             public event Action OnReconnected;
             public event Action<int, int> OnLateJoinPlayerAdded;
 

@@ -8,12 +8,29 @@ namespace xpTURN.Klotho.Core
     /// </summary>
     public interface ISimulationConfig
     {
+        // --- Tick Loop ---
+
         /// <summary>
         /// Tick interval (milliseconds). Determines the simulation period.
         /// 25ms = 40 ticks/sec, 50ms = 20 ticks/sec. Smaller values give faster response but increase network load.
         /// Range: 1 or greater. Typically 16~50ms.
         /// </summary>
         int TickIntervalMs { get; }
+
+        /// <summary>
+        /// Maximum number of entities. Determines the EntityManager array size in EcsSimulation.
+        /// </summary>
+        int MaxEntities { get; }
+
+        /// <summary>
+        /// Maximum number of ticks executed per frame during Late Join catch-up.
+        /// The upper bound on ticks executed in a single frame while catching up to the current tick after a Late Join.
+        /// Larger values catch up faster but may cause frame hitching.
+        /// Range: 1 or greater. Typically 100~500.
+        /// </summary>
+        int CatchupMaxTicksPerFrame { get; }
+
+        // --- Input ---
 
         /// <summary>
         /// Input delay tick count. Shifts the tick of local input commands to <c>CurrentTick + InputDelayTicks</c>
@@ -29,12 +46,16 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int InputDelayTicks { get; }
 
+        // --- Rollback ---
+
         /// <summary>
         /// Maximum rollback tick count. The maximum range that can be rewound on prediction mismatch.
         /// Determines the snapshot ring buffer size and the input buffer retention range.
         /// Range: 1 or greater, must be at least SyncCheckInterval. Typically 30~100.
         /// </summary>
         int MaxRollbackTicks { get; }
+
+        // --- Sync / Resync ---
 
         /// <summary>
         /// Sync hash verification interval (in ticks). State hashes are exchanged every N ticks to detect desyncs.
@@ -44,15 +65,36 @@ namespace xpTURN.Klotho.Core
         int SyncCheckInterval { get; }
 
         /// <summary>
+        /// Maximum retry count for Full State Resync.
+        /// When desyncs occur DesyncThresholdForResync times in a row, a Resync is attempted;
+        /// if this count is exceeded, the OnResyncFailed event is raised.
+        /// Range: 1 or greater.
+        /// </summary>
+        int ResyncMaxRetries { get; }
+
+        /// <summary>
+        /// Threshold of consecutive desyncs that triggers a full state resync.
+        /// When sync hash mismatches are detected this many times in a row, a Full State Resync is requested instead of a rollback.
+        /// Range: 1 or greater. 1 means an immediate Resync on the first desync.
+        /// </summary>
+        int DesyncThresholdForResync { get; }
+
+        /// <summary>
+        /// Minimum interval between consecutive corrective resets (milliseconds).
+        /// Prevents broadcast storms when persistent hash divergence fires OnHashMismatch repeatedly.
+        /// Range: 1000 or greater. Default 5000.
+        /// </summary>
+        int CorrectiveResetCooldownMs { get; }
+
+        // --- Prediction ---
+
+        /// <summary>
         /// Whether prediction is enabled. If true, missing remote inputs are predicted to advance ticks, and rollback occurs on mismatch.
         /// If false, the engine waits for all inputs to arrive (transitions to Paused state).
         /// </summary>
         bool UsePrediction { get; }
 
-        /// <summary>
-        /// Maximum number of entities. Determines the EntityManager array size in EcsSimulation.
-        /// </summary>
-        int MaxEntities { get; }
+        // --- Network Mode ---
 
         /// <summary>
         /// Network mode (P2P / ServerDriven).
@@ -102,7 +144,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int SDInputLeadTicks { get; }
 
-        // --- ErrorCorrection ---
+        // --- Error Correction ---
 
         /// <summary>
         /// Whether Error Correction is enabled. If false (default), all EC computation is disabled.
@@ -118,17 +160,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int InterpolationDelayTicks { get; }
 
-        /// <summary>
-        /// Safety margin (ticks) added to RTT-based extra-delay computation for LateJoin/Reconnect.
-        /// Also used as the standalone fallback value when the server-side avgRtt is unavailable or out of sane range.
-        /// </summary>
-        int LateJoinDelaySafety { get; }
-
-        /// <summary>
-        /// Upper bound (ms) for accepting avgRtt as a sane RTT measurement.
-        /// Values exceeding this fall back to <see cref="LateJoinDelaySafety"/> only.
-        /// </summary>
-        int RttSanityMaxMs { get; }
+        // --- P2P Quorum-Miss Watchdog ---
 
         /// <summary>
         /// P2P quorum-miss watchdog threshold (ticks). If a remote peer's input is missing at
@@ -141,14 +173,53 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int QuorumMissDropTicks { get; }
 
+        // --- Reactive Dynamic InputDelay ---
+
         /// <summary>
-        /// Lower-bound floor (ticks) for the chain-stall abort watchdog.
-        /// Effective threshold = max(SessionConfig.ReconnectTimeoutMs / TickIntervalMs + 100, MinStallAbortTicks).
-        /// Guards against misconfigurations where ReconnectTimeoutMs is unusually small or zero —
-        /// without this floor the watchdog would fire almost immediately.
-        /// Default 600 (30s @ 50ms tick).
+        /// Sliding-window length (ticks) over which non-spawn PastTick reject counts accumulate
+        /// for client-reactive Dynamic InputDelay escalation. Resets the reject counter when the
+        /// current tick advances past windowStart + ReactiveWindowTicks.
         /// </summary>
-        int MinStallAbortTicks { get; }
+        int ReactiveWindowTicks { get; }
+
+        /// <summary>
+        /// Reject count within ReactiveWindowTicks that triggers a reactive EscalateExtraDelay call.
+        /// </summary>
+        int ReactiveEscalateThreshold { get; }
+
+        /// <summary>
+        /// Step size (ticks) added to RecommendedExtraDelay per reactive escalation.
+        /// </summary>
+        int ReactiveStep { get; }
+
+        /// <summary>
+        /// Upper bound (ticks) on RecommendedExtraDelay enforced by reactive escalation.
+        /// </summary>
+        int ReactiveMax { get; }
+
+        /// <summary>
+        /// Grace window (ticks) following a server-pushed ExtraDelay change during which
+        /// reactive triggers are suppressed (absorbs in-flight commands and resim residue).
+        /// </summary>
+        int ServerPushGraceTicks { get; }
+
+        /// <summary>
+        /// Minimum gap (ticks) between successive reactive escalations to prevent runaway bumps.
+        /// </summary>
+        int ReactiveEscalateCooldownTicks { get; }
+
+        // --- Rollback Burst ---
+
+        /// <summary>
+        /// Rollback event count within RollbackWindowTicks that triggers a reactive escalation
+        /// on the P2P guest fallback path.
+        /// </summary>
+        int RollbackBurstCount { get; }
+
+        /// <summary>
+        /// Sliding-window length (ticks) over which rollback events accumulate for burst detection.
+        /// </summary>
+        int RollbackWindowTicks { get; }
 
         // --- Diagnostics (DEVELOPMENT_BUILD / UNITY_EDITOR only) ---
 

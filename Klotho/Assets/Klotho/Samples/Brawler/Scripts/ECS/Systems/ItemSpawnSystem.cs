@@ -15,7 +15,7 @@ namespace Brawler
     /// Determinism guarantees:
     ///   - The RNG is not stored on a system field; instead it is derived from frame.Tick on each call.
     ///   - DeterministicRandom.FromSeed(worldSeed, featureKey, tick) produces the same value on rollback.
-    ///   - worldSeed is read from the per-frame GameSeedComponent singleton, so it is rollback-safe.
+    ///   - worldSeed is read from the per-frame RandomSeedComponent singleton, so it is rollback-safe.
     /// </summary>
     public class ItemSpawnSystem : ISystem
     {
@@ -59,11 +59,9 @@ namespace Brawler
 
             if (frame.Tick % config.SpawnIntervalTicks != 0) return;
 
-            // Read the seed from the frame (skip if unset)
-            var seedFilter = frame.Filter<GameSeedComponent>();
-            if (!seedFilter.Next(out var seedEntity)) return;
-            ref readonly var seedComp = ref frame.GetReadOnly<GameSeedComponent>(seedEntity);
-            if (seedComp.WorldSeed == 0) return;
+            // Read the seed from the frame
+            ref readonly var seedComp = ref frame.GetReadOnlySingleton<RandomSeedComponent>();
+            if (seedComp.Seed == 0) return;
 
             // Check current item count
             int count = 0;
@@ -72,7 +70,7 @@ namespace Brawler
             if (count >= config.MaxItems) return;
 
             // Tick-based RNG — guarantees the same value across rollback re-execution
-            var rng = DeterministicRandom.FromSeed(seedComp.WorldSeed, FeatureKey, (ulong)frame.Tick);
+            var rng = DeterministicRandom.FromSeed(seedComp.Seed, FeatureKey, (ulong)frame.Tick);
 
             int itemType = rng.NextIntInclusive(0, 2); // 0=Shield, 1=Boost, 2=Bomb
 

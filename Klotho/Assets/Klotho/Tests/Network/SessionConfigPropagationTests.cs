@@ -49,16 +49,15 @@ namespace xpTURN.Klotho.Network.Tests
                 RandomSeed = 12345,
                 MaxPlayers = 6,
                 MinPlayers = 3,
+                MaxSpectators = 9,
                 AllowLateJoin = false,
+                LateJoinDelayTicks = 20,
                 ReconnectTimeoutMs = 30000,
                 ReconnectMaxRetries = 5,
-                LateJoinDelayTicks = 20,
-                ResyncMaxRetries = 7,
-                DesyncThresholdForResync = 4,
+                LateJoinDelaySafety = 4,
+                RttSanityMaxMs = 200,
+                MinStallAbortTicks = 500,
                 CountdownDurationMs = 2000,
-                CatchupMaxTicksPerFrame = 150,
-                CorrectiveResetCooldownMs = 8000,
-                MaxSpectators = 9,
                 AbortGraceMs = 2500,
                 EndGracePolicy = (int)EndGracePolicy.Pause,
                 EndGraceMs = 6000,
@@ -75,16 +74,15 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.AreEqual(12345, afterCfg.RandomSeed);
             Assert.AreEqual(6, afterCfg.MaxPlayers);
             Assert.AreEqual(3, afterCfg.MinPlayers);
+            Assert.AreEqual(9, afterCfg.MaxSpectators);
             Assert.AreEqual(false, afterCfg.AllowLateJoin);
+            Assert.AreEqual(20, afterCfg.LateJoinDelayTicks);
             Assert.AreEqual(30000, afterCfg.ReconnectTimeoutMs);
             Assert.AreEqual(5, afterCfg.ReconnectMaxRetries);
-            Assert.AreEqual(20, afterCfg.LateJoinDelayTicks);
-            Assert.AreEqual(7, afterCfg.ResyncMaxRetries);
-            Assert.AreEqual(4, afterCfg.DesyncThresholdForResync);
+            Assert.AreEqual(4, afterCfg.LateJoinDelaySafety);
+            Assert.AreEqual(200, afterCfg.RttSanityMaxMs);
+            Assert.AreEqual(500, afterCfg.MinStallAbortTicks);
             Assert.AreEqual(2000, afterCfg.CountdownDurationMs);
-            Assert.AreEqual(150, afterCfg.CatchupMaxTicksPerFrame);
-            Assert.AreEqual(8000, afterCfg.CorrectiveResetCooldownMs);
-            Assert.AreEqual(9, afterCfg.MaxSpectators);
             Assert.AreEqual(2500, afterCfg.AbortGraceMs);
             Assert.AreEqual(EndGracePolicy.Pause, afterCfg.EndGracePolicy);
             Assert.AreEqual(6000, afterCfg.EndGraceMs);

@@ -154,11 +154,10 @@ Every component is `[KlothoComponent(ID)]` + `partial struct` + `IComponent`. ID
 | `KnockbackComponent` | 103 | Force (FPVector2), DurationTicks |
 | `SkillCooldownComponent` | 104 | Skill0/1Cooldown, ShieldTicks |
 | `SpawnMarkerComponent` | 105 | SpawnPosition, PlayerId |
-| `GameTimerStateComponent` | 106 | StartTick, LastReportedSeconds, GameOverFired |
-| `GameSeedComponent` | 107 | WorldSeed (injected at OnGameStart) |
+| `GameTimerStateComponent` | 106 | StartTick, LastReportedSeconds, GameOverFired (singleton — `[KlothoSingletonComponent]`) |
 | `BotComponent` | 110 | State, Difficulty, TargetEntity, ActionCooldown |
 
-**Built-in components used**: `TransformComponent`, `PhysicsBodyComponent` (RigidBody + Collider + ColliderOffset), `OwnerComponent` (OwnerId), `NavAgentComponent` (bots only).
+**Built-in components used**: `TransformComponent`, `PhysicsBodyComponent` (RigidBody + Collider + ColliderOffset), `OwnerComponent` (OwnerId), `NavAgentComponent` (bots only), `RandomSeedComponent` (engine-injected singleton — game reads `frame.GetReadOnlySingleton<RandomSeedComponent>().Seed`; replaces the prior sample-side `GameSeedComponent`).
 
 ---
 
@@ -265,7 +264,6 @@ The other three character prototypes are identical except for `Get<CharacterStat
 
 | System | Phase | Role |
 |---|---|---|
-| `SavePreviousTransformSystem` | PreUpdate | Save PrevPos/PrevRot for interpolation |
 | `BotFSMSystem` | PreUpdate | HFSM tick / Action execution / Decision evaluation |
 | `PlatformerCommandSystem` | PreUpdate | Process the 4 commands; per-class skill branching (`ICommandSystem` + `ISyncEventSystem`) |
 | `ObstacleMovementSystem` | Update | PlatformComponent reciprocating motion |
@@ -295,8 +293,8 @@ public static void RegisterSystems(EcsSimulation sim, ILogger logger)
 
     var events = new EventSystem();
 
-    // PreUpdate
-    sim.AddSystem(new SavePreviousTransformSystem(), SystemPhase.PreUpdate);
+    // PreUpdate — TransformComponent prev-snapshot is engine-provided (see GameDevAPI §4.1);
+    // games do not register a sample-side SavePreviousTransformSystem any more.
     sim.AddSystem(new BotFSMSystem(/* NavMesh deps */), SystemPhase.PreUpdate);
     sim.AddSystem(new PlatformerCommandSystem(events, logger), SystemPhase.PreUpdate);
 

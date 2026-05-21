@@ -30,6 +30,18 @@ namespace xpTURN.Klotho.Tests
             var dataAssets = BrawlerSimSetup.CreateDefaultDataAssets();
             BrawlerSimSetup.RegisterSystems(sim, logger: null, dataAssets: dataAssets, botFSMSystem: botFSMSystem);
             sim.Initialize();
+
+            var seedEntity = sim.Frame.CreateEntity();
+            sim.Frame.Add(seedEntity, new RandomSeedComponent { Seed = 12345UL });
+
+            var timerEntity = sim.Frame.CreateEntity();
+            sim.Frame.Add(timerEntity, new GameTimerStateComponent
+            {
+                StartTick = -1,
+                LastReportedSeconds = -1,
+                GameOverFired = false,
+            });
+
             return sim;
         }
 

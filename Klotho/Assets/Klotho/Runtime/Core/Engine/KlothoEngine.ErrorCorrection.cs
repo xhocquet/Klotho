@@ -58,8 +58,8 @@ namespace xpTURN.Klotho.Core
 
         private void CapturePreRollbackTransforms()
         {
-            // Skip computation in modes without a view render path (Replay/Spectator/SD-Server).
-            if (_isReplayMode || _isSpectatorMode || IsServer) return;
+            // Skip computation in modes without a view render path (Replay/SD-Server).
+            if (_isReplayMode || IsServer) return;
             if (!_simConfig.EnableErrorCorrection) return;
             if (_pendingVerifiedQueue.Count == 0) return;
 
@@ -80,7 +80,7 @@ namespace xpTURN.Klotho.Core
         private void ComputeErrorDeltas()
         {
             // Same guard as CapturePreRollbackTransforms. Missing either side causes NullRef or incorrect deltas.
-            if (_isReplayMode || _isSpectatorMode || IsServer) return;
+            if (_isReplayMode || IsServer) return;
             if (!_simConfig.EnableErrorCorrection) return;
             if (_preRollbackPos.Count == 0) return;
             if (_simulation is not ECS.EcsSimulation ecsSim) return;

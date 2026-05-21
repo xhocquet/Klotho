@@ -127,10 +127,10 @@ namespace xpTURN.Klotho.Tests
                 ReconnectTimeoutMs = 15000,
                 ReconnectMaxRetries = 5,
                 LateJoinDelayTicks = 8,
-                ResyncMaxRetries = 2,
-                DesyncThresholdForResync = 4,
+                LateJoinDelaySafety = 3,
+                RttSanityMaxMs = 200,
+                MinStallAbortTicks = 500,
                 CountdownDurationMs = 5000,
-                CatchupMaxTicksPerFrame = 150,
                 PlayerIds = new List<int> { 0, 1, 2 },
             };
 
@@ -143,10 +143,10 @@ namespace xpTURN.Klotho.Tests
             Assert.AreEqual(original.ReconnectTimeoutMs, restored.ReconnectTimeoutMs);
             Assert.AreEqual(original.ReconnectMaxRetries, restored.ReconnectMaxRetries);
             Assert.AreEqual(original.LateJoinDelayTicks, restored.LateJoinDelayTicks);
-            Assert.AreEqual(original.ResyncMaxRetries, restored.ResyncMaxRetries);
-            Assert.AreEqual(original.DesyncThresholdForResync, restored.DesyncThresholdForResync);
+            Assert.AreEqual(original.LateJoinDelaySafety, restored.LateJoinDelaySafety);
+            Assert.AreEqual(original.RttSanityMaxMs, restored.RttSanityMaxMs);
+            Assert.AreEqual(original.MinStallAbortTicks, restored.MinStallAbortTicks);
             Assert.AreEqual(original.CountdownDurationMs, restored.CountdownDurationMs);
-            Assert.AreEqual(original.CatchupMaxTicksPerFrame, restored.CatchupMaxTicksPerFrame);
             Assert.AreEqual(original.StartTime, restored.StartTime);
             Assert.AreEqual(original.PlayerIds.Count, restored.PlayerIds.Count);
         }

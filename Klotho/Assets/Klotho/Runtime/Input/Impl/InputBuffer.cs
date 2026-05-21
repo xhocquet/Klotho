@@ -37,7 +37,7 @@ namespace xpTURN.Klotho.Input
 
         public void SetLogger(ILogger logger) => _logger = logger;
 
-#if DEBUG
+#if DEBUG || DEVELOPMENT_BUILD
         private bool _resimulating;
 
         internal void SetResimulating(bool value) => _resimulating = value;
@@ -62,10 +62,14 @@ namespace xpTURN.Klotho.Input
             if (command == null)
                 return;
 
-#if DEBUG
-            System.Diagnostics.Debug.Assert(!_resimulating,
-                "InputBuffer.AddCommand must not be called during re-simulation. " +
-                "Predicted commands should only go into _tickCommandsCache/_pendingCommands.");
+#if DEBUG || DEVELOPMENT_BUILD
+            if (_resimulating)
+            {
+                _logger?.ZLogError($"[InputBuffer] AddCommand called during re-simulation: tick={command.Tick}, playerId={command.PlayerId}, type={command.GetType().Name}. Predicted commands must go into _tickCommandsCache/_pendingCommands only.");
+                System.Diagnostics.Debug.Assert(false,
+                    "InputBuffer.AddCommand must not be called during re-simulation. " +
+                    "Predicted commands should only go into _tickCommandsCache/_pendingCommands.");
+            }
 #endif
 
             if (command is ISystemCommand)

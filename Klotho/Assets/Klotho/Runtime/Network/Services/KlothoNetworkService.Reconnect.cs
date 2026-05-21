@@ -364,11 +364,11 @@ namespace xpTURN.Klotho.Network
 
             int lag = _engine.CurrentTick - _engine.LastVerifiedTick;
             int reconnectTimeoutTicks = _sessionConfig.ReconnectTimeoutMs / _simConfig.TickIntervalMs;
-            int threshold = System.Math.Max(reconnectTimeoutTicks + 100, _simConfig.MinStallAbortTicks);
+            int threshold = System.Math.Max(reconnectTimeoutTicks + 100, _sessionConfig.MinStallAbortTicks);
             if (lag < threshold) return;
 
             _logger?.ZLogWarning($"[KlothoNetworkService][ChainStallWatchdog] Aborting match — lag={lag} >= threshold={threshold} " +
-                                 $"(ReconnectTimeoutMs={_sessionConfig.ReconnectTimeoutMs}, MinStallAbortTicks={_simConfig.MinStallAbortTicks}, " +
+                                 $"(ReconnectTimeoutMs={_sessionConfig.ReconnectTimeoutMs}, MinStallAbortTicks={_sessionConfig.MinStallAbortTicks}, " +
                                  $"TickIntervalMs={_simConfig.TickIntervalMs}, CurrentTick={_engine.CurrentTick}, LastVerifiedTick={_engine.LastVerifiedTick})");
 
             _engine.AbortMatch(AbortReason.ChainStallTimeout);
@@ -422,7 +422,7 @@ namespace xpTURN.Klotho.Network
             {
                 _reconnectState = ReconnectState.Failed;
                 Phase = SessionPhase.Disconnected;
-                OnReconnectFailed?.Invoke("Timeout");
+                OnReconnectFailed?.Invoke(ReconnectRejectReason.TimedOut);
                 return;
             }
 
@@ -448,7 +448,7 @@ namespace xpTURN.Klotho.Network
                         {
                             _reconnectState = ReconnectState.Failed;
                             Phase = SessionPhase.Disconnected;
-                            OnReconnectFailed?.Invoke("MaxRetries");
+                            OnReconnectFailed?.Invoke(ReconnectRejectReason.MaxRetries);
                             return;
                         }
                         SendReconnectRequest();
@@ -463,7 +463,7 @@ namespace xpTURN.Klotho.Network
                         {
                             _reconnectState = ReconnectState.Failed;
                             Phase = SessionPhase.Disconnected;
-                            OnReconnectFailed?.Invoke("MaxRetries");
+                            OnReconnectFailed?.Invoke(ReconnectRejectReason.MaxRetries);
                             return;
                         }
                         if (_transport.IsConnected)
@@ -527,7 +527,7 @@ namespace xpTURN.Klotho.Network
             // Any reject reason invalidates persisted credentials — discard.
             _reconnectCredentialsStore?.Clear();
 
-            OnReconnectFailed?.Invoke(ReconnectRejectReason.ToName(msg.Reason));
+            OnReconnectFailed?.Invoke(msg.Reason);
         }
 
         #endregion
@@ -625,16 +625,15 @@ namespace xpTURN.Klotho.Network
             _reconnectAcceptCache.RandomSeed = RandomSeed;
             _reconnectAcceptCache.MaxPlayers = _sessionConfig.MaxPlayers;
             _reconnectAcceptCache.MinPlayers = _sessionConfig.MinPlayers;
+            _reconnectAcceptCache.MaxSpectators = _sessionConfig.MaxSpectators;
             _reconnectAcceptCache.AllowLateJoin = _sessionConfig.AllowLateJoin;
+            _reconnectAcceptCache.LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks;
             _reconnectAcceptCache.ReconnectTimeoutMs = _sessionConfig.ReconnectTimeoutMs;
             _reconnectAcceptCache.ReconnectMaxRetries = _sessionConfig.ReconnectMaxRetries;
-            _reconnectAcceptCache.LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks;
-            _reconnectAcceptCache.ResyncMaxRetries = _sessionConfig.ResyncMaxRetries;
-            _reconnectAcceptCache.DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync;
+            _reconnectAcceptCache.LateJoinDelaySafety = _sessionConfig.LateJoinDelaySafety;
+            _reconnectAcceptCache.RttSanityMaxMs = _sessionConfig.RttSanityMaxMs;
+            _reconnectAcceptCache.MinStallAbortTicks = _sessionConfig.MinStallAbortTicks;
             _reconnectAcceptCache.CountdownDurationMs = _sessionConfig.CountdownDurationMs;
-            _reconnectAcceptCache.CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame;
-            _reconnectAcceptCache.CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs;
-            _reconnectAcceptCache.MaxSpectators = _sessionConfig.MaxSpectators;
             _reconnectAcceptCache.AbortGraceMs = _sessionConfig.AbortGraceMs;
             _reconnectAcceptCache.EndGracePolicy = (int)_sessionConfig.EndGracePolicy;
             _reconnectAcceptCache.EndGraceMs = _sessionConfig.EndGraceMs;

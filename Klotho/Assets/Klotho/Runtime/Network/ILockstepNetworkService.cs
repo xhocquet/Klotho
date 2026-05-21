@@ -247,9 +247,10 @@ namespace xpTURN.Klotho.Network
         event Action OnReconnecting;
 
         /// <summary>
-        /// Reconnect failed event (guest side)
+        /// Reconnect failed event (guest side). The byte value is one of
+        /// <see cref="ReconnectRejectReason"/> constants.
         /// </summary>
-        event Action<string> OnReconnectFailed;
+        event Action<byte> OnReconnectFailed;
 
         /// <summary>
         /// Reconnect completed event (guest side)

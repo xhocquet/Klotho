@@ -33,7 +33,6 @@ namespace Brawler
         internal EntityRef CachedEntity => EntityRef;
 
         private bool _wasDead;
-        private BrawlerViewSync _viewSync;
 
         // Rollback view re-bind diagnostic counters.
         private int _activateCount;
@@ -45,17 +44,14 @@ namespace Brawler
             _wasDead = false;
 
             // Resolve playerId via OwnerComponent (overrides prefab default _playerId).
+            // The game-facing _playerId is kept in sync with EVU's cached owner — both read
+            // the same OwnerComponent from the spawn-decision frame, so they always agree.
             var f = frame.Frame;
             if (f != null && f.Has<OwnerComponent>(EntityRef))
                 _playerId = f.GetReadOnly<OwnerComponent>(EntityRef).OwnerId;
 
             _activateCount++;
             Engine?.Logger?.ZLogDebug($"[ViewLife][Activate] playerId={_playerId}, entity={EntityRef.Index}, viewIID={GetInstanceID()}, activateCount={_activateCount}");
-
-            // Wire camera follow / GameHUD.
-            if (_viewSync == null)
-                _viewSync = FindFirstObjectByType<BrawlerViewSync>();
-            _viewSync?.RegisterCharacter(_playerId, this);
         }
 
         public override void OnDeactivate()
@@ -63,7 +59,6 @@ namespace Brawler
             base.OnDeactivate();
             _deactivateCount++;
             Engine?.Logger?.ZLogDebug($"[ViewLife][Deactivate] playerId={_playerId}, entity={EntityRef.Index}, viewIID={GetInstanceID()}, deactivateCount={_deactivateCount}");
-            _viewSync?.UnregisterCharacter(_playerId, this);
         }
 
         /// <summary>

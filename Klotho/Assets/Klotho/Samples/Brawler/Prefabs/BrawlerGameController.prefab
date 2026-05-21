@@ -46,15 +46,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: xpTURN.Klotho.Manager.Brawler::Brawler.BrawlerGameController
   _logLevel: 2
   _brawlerSettings:
-    _mode: 1
     _hostAddress: localhost
     _port: 7777
     _roomId: 0
     _isHost: 0
-    _maxPlayers: 4
     _botCount: 1
     _characterClass: 1
   _simulationConfig: {fileID: 11400000, guid: a8bcc9ab45c7e4c14b07725c3b103952, type: 2}
+  _sessionConfig: {fileID: 11400000, guid: 9e6f2c1a8b5d44329a7f3e1c8d4b6a25, type: 2}
   _gameMenu: {fileID: 0}
   _viewSync: {fileID: 0}
   _entityViewUpdater: {fileID: 0}

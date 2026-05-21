@@ -36,18 +36,29 @@
 │ │ new ViewCallbacks│  │    .ConnectAsync(...)    │           │
 │ │ KlothoSession    │  │  new SimCallbacks        │           │
 │ │   .Create        │  │  new ViewCallbacks       │           │
-│ │ HostGame +       │  │  KlothoSession.Create    │           │
-│ │   Transport.Listen  │    (Connection = result) │           │
-│ │ SendPlayerConfig │  │  Subscribe Reconnect /   │           │
-│ │ InitializeViewSync  │   Catchup / Resync evts  │           │
-│ └──────────────────┘  │  SendPlayerConfig        │           │
-│                       │  InitializeViewSync      │           │
+│ │ (LifecycleObserver=this)│ KlothoSession.Create │           │
+│ │ HostGame +       │  │  (Connection = result    │           │
+│ │   Transport.Listen  │   CredentialsStore /     │           │
+│ │ SendPlayerConfig │  │   LifecycleObserver=this)│           │
+│ │ InitializeViewSync  │  SendPlayerConfig        │           │
+│ └──────────────────┘  │  InitializeViewSync      │           │
 │                       └──────────────────────────┘           │
+│                                                              │
+│ ┌─ StartSpectator() ──────────────────────┐                  │
+│ │ StartSpectatorAsync (UniTask)           │                  │
+│ │  KlothoSpectatorAsync.CreateAsync(      │                  │
+│ │   SpectatorSessionSetup {               │                  │
+│ │     Transport, HostAddress, Port, RoomId│                  │
+│ │     LifecycleObserver = this            │                  │
+│ │     CallbacksFactory(simCfg, sessionCfg)│                  │
+│ │   })                                    │                  │
+│ │  InitializeViewSync                     │                  │
+│ └─────────────────────────────────────────┘                  │
 │                                                              │
 │ [Game loop starts]                                           │
 │   • Update() → session.Update(dt) (direct call)              │
 │   • ISimulationCallbacks.OnInitializeWorld (once)            │
-│   • Engine.OnGameStart → InjectInitialStateSnapshot          │
+│   • Engine auto-injects InitialStateSnapshot on replay path  │
 │   • IViewCallbacks.OnGameStart (once, on game start)         │
 │   • Per tick: OnPollInput → Simulation.Tick → OnTickExecuted │
 └──────────────────────────────────────────────────────────────┘
@@ -59,7 +70,7 @@
 
 ```csharp
 [DefaultExecutionOrder(-100)]
-public class BrawlerGameController : MonoBehaviour
+public class BrawlerGameController : MonoBehaviour, IKlothoSessionObserver
 {
     const string KLOTHO_CONNECTION_KEY = "xpTURN.Brawler";
 
@@ -69,6 +80,7 @@ public class BrawlerGameController : MonoBehaviour
     [Header("Settings")]
     [SerializeField] private BrawlerSettings _brawlerSettings = new BrawlerSettings();
     [SerializeField] private USimulationConfig _simulationConfig;
+    [SerializeField] private USessionConfig    _sessionConfig;  // host-decided session policy (MaxPlayers / grace / late-join…)
 
     [Header("Scene References")]
     [SerializeField] private GameMenu _gameMenu;
@@ -101,13 +113,10 @@ public class BrawlerGameController : MonoBehaviour
     private BrawlerSimulationCallbacks _simCallbacks;
     private BrawlerViewCallbacks _viewCallbacks;
 
-    // Spectator mode (no KlothoSession — engine/sim built directly)
-    private SpectatorService _spectatorService;
-    private KlothoEngine _spectatorEngine;
-    private EcsSimulation _spectatorSimulation;
-    private CommandFactory _spectatorCommandFactory;
-    private ISimulationConfig _pendingSpectatorSimConfig;
-    private ISessionConfig _pendingSpectatorSessionConfig;
+    // Spectator-mode bootstrap is delegated to KlothoSpectatorAsync.CreateAsync — the resulting
+    // KlothoSession is stored in _session (same field as host / guest paths). The previous
+    // _spectatorEngine / _spectatorSimulation / _pendingSpectator* fields were removed when the
+    // framework took over Engine/Simulation construction for spectator mode.
 
     private long _lastTicks;
     private string _replayPath = Application.dataPath + "/../Replays/brawler.rply";
@@ -121,25 +130,25 @@ public class BrawlerGameController : MonoBehaviour
 
     public bool IsHost => _brawlerSettings._isHost;
     public SessionPhase Phase => _session?.NetworkService?.Phase ?? SessionPhase.None;
-    private KlothoEngine    ActiveEngine     => _session?.Engine     ?? _spectatorEngine;
-    private EcsSimulation   ActiveSimulation => _session?.Simulation ?? _spectatorSimulation;
+    private KlothoEngine  ActiveEngine     => _session?.Engine;       // spectator session also lives in _session now
+    private EcsSimulation ActiveSimulation => _session?.Simulation;
 }
 
 [Serializable]
 public class BrawlerSettings
 {
     [Header("ServerSettings")]
-    [SerializeField] public NetworkMode _mode = NetworkMode.ServerDriven;
     [SerializeField] public string _hostAddress = "localhost";
     [SerializeField] public int _port = 777;
+    // NetworkMode is sourced from _simulationConfig.Mode (single SoT — was BrawlerSettings._mode).
 
     [Header("ServerDriven")]
     [SerializeField] public int _roomId = 0;          // SD: 0 = single room / N = multi-room slot. P2P: forced to -1 at Start()
 
     [Header("P2P")]
     [SerializeField] public bool _isHost = true;
-    [SerializeField] public int _maxPlayers = 2;
     [SerializeField] public int _botCount = 0;
+    // _maxPlayers removed — MaxPlayers is sourced from _sessionConfig.MaxPlayers (single SoT).
 
     [Header("PlayerSettings")]
     [SerializeField] public int _characterClass = 0;  // 0=Warrior, 1=Mage, 2=Rogue, 3=Knight
@@ -147,9 +156,10 @@ public class BrawlerSettings
 ```
 
 Notes:
-- The Unity-side update driver is **not** `UKlothoBehaviour` — `BrawlerGameController.Update()` calls `_session.Update(dt)` directly (or `_spectatorEngine.Update(dt)` in spectator mode). `UKlothoBehaviour` still exists in `Assets/Klotho/Unity/ULockstepBehaviour.cs` but is unused by this sample.
-- `_entityViewUpdater` is the EntityViewUpdater field name (renamed from the older `_viewUpdater`); its setup runs via `InitializeViewSync(engine, simulation)` rather than a direct `Initialize(engine)` call.
-- `_credentialsStore` underpins cold-start auto-reconnect (`Start()` → `TryAutoReconnect()` → `ReconnectAsync(ct)`).
+- The Unity-side update driver is **not** `UKlothoBehaviour` — `BrawlerGameController.Update()` calls `_session.Update(dt)` directly (the spectator path also routes through the same `_session.Update(dt)` since the framework now returns a `KlothoSession` from `KlothoSpectatorAsync.CreateAsync`). `UKlothoBehaviour` still exists in `Assets/Klotho/Unity/ULockstepBehaviour.cs` but is unused by this sample.
+- `_entityViewUpdater` is the EntityViewUpdater field name (renamed from the older `_viewUpdater`); its setup runs via `InitializeViewSync(engine, simulation)` rather than a direct `Initialize(engine)` call. EVU also owns the built-in **PlayerViewRegistry** (player ↔ view lookup) — previously a sample-side helper.
+- `_credentialsStore` underpins cold-start auto-reconnect (`Start()` → `TryAutoReconnect()` → `ReconnectAsync(ct)`). It is injected into `KlothoSession` via `KlothoSessionSetup.CredentialsStore` — no separate `InjectCredentialsStoreIntoSession()` call.
+- `BrawlerGameController` implements `IKlothoSessionObserver`, and `KlothoSessionSetup.LifecycleObserver = this` registers it as the single subscription site for session lifecycle (replaces per-event `+=` wiring across StartHost / JoinGame / Reconnect / StopGame).
 
 ---
 
@@ -210,14 +220,14 @@ private void Start()
     _input.Enable();
 
     // 4) P2P uses _roomId = -1 by convention; SD keeps the Inspector value (0..N).
-    if (_brawlerSettings._mode != NetworkMode.ServerDriven)
+    if (_simulationConfig.Mode != NetworkMode.ServerDriven)
         _brawlerSettings._roomId = -1;
 
     _gameMenu.IsHost = IsHost;
 
     // 5) Cold-start auto-reconnect probe — SD clients and P2P guests only.
     //    P2P host's death ends the session, so it is never a reconnect target.
-    bool isP2PHost = _brawlerSettings._mode == NetworkMode.P2P && _brawlerSettings._isHost;
+    bool isP2PHost = _simulationConfig.Mode == NetworkMode.P2P && _brawlerSettings._isHost;
     if (!isP2PHost && TryAutoReconnect())
         return;
     _gameMenu.SetActionType(_brawlerSettings._isHost
@@ -272,12 +282,16 @@ private void StartHost()
     }
 
     // 2) Build callbacks — dataAssets are NOT passed (registry is shared via AssetRegistry).
+    //    MaxPlayers is sourced from _sessionConfig (single SoT, set per-prefab).
     _simCallbacks = new BrawlerSimulationCallbacks(
         _input, _logger, _staticColliders, _navMesh,
-        _brawlerSettings._maxPlayers, _brawlerSettings._botCount);
+        _sessionConfig.MaxPlayers, _brawlerSettings._botCount);
     _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
 
-    // 3) Create the session
+    // 3) Create the session. LifecycleObserver = this bulk-subscribes the IKlothoSessionObserver
+    //    callbacks (OnPlayerDisconnected/Reconnected, OnReconnecting/Failed/Reconnected,
+    //    OnCatchupComplete, OnResyncCompleted, OnGameStart, OnMatchAborted/Ended/Reset,
+    //    OnSessionStopped) — no per-event += wiring is needed below.
     _session = KlothoSession.Create(new KlothoSessionSetup
     {
         Transport           = _transport,
@@ -286,7 +300,8 @@ private void StartHost()
         ViewCallbacks       = _viewCallbacks,
         AssetRegistry       = _assetRegistry,
         SimulationConfig    = simulationConfig,
-        MaxPlayers          = _brawlerSettings._maxPlayers,
+        SessionConfig       = _sessionConfig,   // host-decided ISessionConfig (USessionConfig SO)
+        LifecycleObserver   = this,
     });
     _simCallbacks.SetNetworkService(_session.NetworkService);   // no-op in current SimCallbacks
 
@@ -295,28 +310,23 @@ private void StartHost()
 #endif
 
     // 4) Start host + transport listen. Early-return on bind failure.
-    _session.HostGame("Game", _brawlerSettings._maxPlayers);
+    _session.HostGame("Game", _sessionConfig.MaxPlayers);
     if (!_transport.Listen(_brawlerSettings._hostAddress,
                            _brawlerSettings._port,
-                           _brawlerSettings._maxPlayers))
+                           _sessionConfig.MaxPlayers))
     {
         _logger?.ZLogError($"[Brawler] Failed to host on port {_brawlerSettings._port}");
         StopGame();
         return;
     }
 
-    // 5) Event wiring — host needs OnPlayerDisconnected/Reconnected + state-snapshot inject.
-    _session.NetworkService.OnPlayerDisconnected += OnPlayerDisconnected;
-    _session.NetworkService.OnPlayerReconnected  += OnPlayerReconnected;
-    _session.Engine.OnGameStart += InjectInitialStateSnapshot;
-
-    // 6) Broadcast the local player's character selection.
+    // 5) Broadcast the local player's character selection.
     _session.SendPlayerConfig(new BrawlerPlayerConfig
     {
         SelectedCharacterClass = _brawlerSettings._characterClass,
     });
 
-    // 7) Wire the EntityViewUpdater + BrawlerViewSync to the freshly-created engine + sim.
+    // 6) Wire the EntityViewUpdater + BrawlerViewSync to the freshly-created engine + sim.
     InitializeViewSync(_session.Engine, _session.Simulation);
 
     _gameMenu.SetActionType(GameMenu.ActionType.Ready);
@@ -327,12 +337,13 @@ Notes:
 - The host path is P2P-only. SD does not use `StartHost()` — the dedicated server (Appendix H) is the SD authority.
 - `BrawlerSimulationCallbacks` constructor's optional `dataAssets` parameter is intentionally left default (the asset registry is already shared via `AssetRegistry`).
 - No `UKlothoBehaviour.Bind(...)` call: `BrawlerGameController.Update()` drives `_session.Update(dt)` directly (see E-1).
+- The host no longer needs `OnGameStart += InjectInitialStateSnapshot`. The replay snapshot is auto-injected by `Engine.StartReplay`; the live host path does not need it.
 
 ---
 
 ## E-5. JoinGame — Guest Flow (async)
 
-`JoinGame()` (synchronous entry) cancels any in-flight token and dispatches `JoinGameAsync(ct).Forget()`. Both P2P and SD clients reach the server through the same `KlothoConnectionAsync` path; the only divergence is the `preJoin` message for SD multi-room routing.
+`JoinGame()` (synchronous entry) cancels any in-flight token and dispatches `JoinGameAsync(ct).Forget()`. Both P2P and SD clients reach the server through the same `KlothoConnectionAsync` path (lifted to `Assets/Klotho/Unity/KlothoConnectionAsync.cs` from its earlier sample location); the only divergence is the `preJoin` message for SD multi-room routing.
 
 ```csharp
 private void JoinGame()
@@ -355,7 +366,7 @@ private async UniTaskVoid JoinGameAsync(CancellationToken ct)
         //    RoomId = 0 for single-room, N for multi-room slot. -1 means P2P.
         NetworkMessageBase preJoin = null;
         int roomId = -1;
-        if (_brawlerSettings._mode == NetworkMode.ServerDriven)
+        if (_simulationConfig.Mode == NetworkMode.ServerDriven)
         {
             roomId  = _brawlerSettings._roomId;
             preJoin = new RoomHandshakeMessage { RoomId = roomId };
@@ -368,13 +379,17 @@ private async UniTaskVoid JoinGameAsync(CancellationToken ct)
             ct, _logger, preJoin,
             deviceIdProvider: new UnityDeviceIdProvider());
 
-        // 3) Build callbacks (same shape as host; dataAssets not passed).
+        // 3) Build callbacks (same shape as host; dataAssets not passed). MaxPlayers here is just
+        //    a local guess — the server-authoritative value lands via GameStartMessage /
+        //    ReconnectAcceptMessage shortly after, so InitialMaxPlayersGuess() is used.
         _simCallbacks = new BrawlerSimulationCallbacks(
             _input, _logger, _staticColliders, _navMesh,
-            _brawlerSettings._maxPlayers, _brawlerSettings._botCount);
+            InitialMaxPlayersGuess(), _brawlerSettings._botCount);
         _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
 
-        // 4) Create the session — when Connection is set, Transport/SimulationConfig come from Connection.
+        // 4) Create the session. Connection.Kind drives the Create branch; the warm-reconnect path
+        //    is picked automatically when Connection was produced by ReconnectAsync. All session
+        //    lifecycle events flow through IKlothoSessionObserver (LifecycleObserver = this).
         _session = KlothoSession.Create(new KlothoSessionSetup
         {
             Connection          = result,
@@ -383,22 +398,18 @@ private async UniTaskVoid JoinGameAsync(CancellationToken ct)
             ViewCallbacks       = _viewCallbacks,
             AssetRegistry       = _assetRegistry,
             RoomId              = roomId,
+            CredentialsStore    = _credentialsStore,                    // formerly InjectCredentialsStoreIntoSession()
+            AppVersion          = Application.version,
+            DeviceIdProvider    = new UnityDeviceIdProvider(),
+            LifecycleObserver   = this,
         });
         _simCallbacks.SetNetworkService(_session.NetworkService);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         ConnectPhysicsProvider();
 #endif
-        InjectCredentialsStoreIntoSession();   // wires _credentialsStore for warm reconnect save/clear
 
-        // 5) Guest-side event wiring.
-        _session.NetworkService.OnReconnecting   += OnReconnecting;
-        _session.NetworkService.OnReconnectFailed += OnReconnectFailed;
-        _session.NetworkService.OnReconnected     += OnReconnected;
-        _session.Engine.OnCatchupComplete         += OnLateJoinActive;
-        _session.Engine.OnResyncCompleted         += OnResyncCompleted;
-        _session.Engine.OnGameStart               += InjectInitialStateSnapshot;
-
+        // 5) Game-side intent send. No event subscriptions here — IKlothoSessionObserver covers them.
         _session.SendPlayerConfig(new BrawlerPlayerConfig
         {
             SelectedCharacterClass = _brawlerSettings._characterClass,
@@ -414,7 +425,48 @@ private async UniTaskVoid JoinGameAsync(CancellationToken ct)
 }
 ```
 
-`ReconnectAsync(ct)` mirrors this shape but calls `KlothoConnectionAsync.ReconnectAsync(_transport, creds, ct, _logger)` and reads `roomId` from the persisted credentials (`creds.RoomId`). The event subscriptions and `InitializeViewSync` step are identical.
+`ReconnectAsync(ct)` mirrors this shape but calls `KlothoConnectionAsync.ReconnectAsync(_transport, creds, ct, _logger)` and reads `roomId` from the persisted credentials (`creds.RoomId`). It also catches `ReconnectFailedException` and branches on `e.Reason` (a `ReconnectRejectReason` byte; e.g. `AlreadyConnected` triggers a user-choice fallback flow). The `InitializeViewSync` step is identical.
+
+IKlothoSessionObserver wires the lifecycle callbacks once at `Create`. The forwarded handler names match the prior `OnReconnecting / OnReconnectFailed(byte) / OnReconnected / OnLateJoinActive (forwarded from `IKlothoSessionObserver.OnCatchupComplete`) / OnResyncCompleted(int)` shape; the framework unsubscribes them at `Stop()` and then dispatches `OnSessionStopped()` so the game can do its own teardown (transport disconnect, null-out `_session`, etc.).
+
+---
+
+## E-5b. StartSpectator — Spectator Flow (async, framework-driven)
+
+`StartSpectator()` delegates to `KlothoSpectatorAsync.CreateAsync` (lives in `Assets/Klotho/Unity/`). The framework owns `SpectatorService` / two-config await / Engine + Simulation construction. The game supplies a `CallbacksFactory` that fires **after** `SpectatorAcceptMessage` delivers server-authoritative `SimulationConfig` + `SessionConfig`, so callback objects (e.g. `BrawlerSimulationCallbacks(maxPlayers=...)`) can size against server values rather than the local Inspector field.
+
+```csharp
+private async UniTaskVoid StartSpectatorAsync(CancellationToken ct)
+{
+    var spectatorTransport = new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY);
+    _session = await KlothoSpectatorAsync.CreateAsync(new SpectatorSessionSetup
+    {
+        Logger            = _logger,
+        AssetRegistry     = _assetRegistry,
+        Transport         = spectatorTransport,
+        HostAddress       = _brawlerSettings._hostAddress,
+        Port              = _brawlerSettings._port,
+        RoomId            = _brawlerSettings._roomId,
+        LifecycleObserver = this,
+        CallbacksFactory = (simCfg, sessionCfg) =>
+        {
+            _simCallbacks = new BrawlerSimulationCallbacks(
+                _input, _logger, _staticColliders, _navMesh,
+                sessionCfg.MaxPlayers, _brawlerSettings._botCount);
+            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
+            return new SpectatorCallbacks(_simCallbacks, _viewCallbacks);
+        },
+    }, ct);
+
+    InitializeViewSync(_session.Engine, _session.Simulation);
+    _gameMenu.SetActionType(GameMenu.ActionType.Playing);
+}
+```
+
+Notes:
+- The returned `_session` is an ordinary `KlothoSession` — the same `_session.Update(dt)` loop drives the spectator tick. There is no separate `_spectatorEngine` / `_spectatorSimulation` field any more.
+- Spectator mode uses the same `IKlothoSessionObserver` for lifecycle (`OnSessionStopped`, `OnResyncCompleted`, etc.). Error-correction (capture-pre-rollback / PuP) is enabled in spectator mode just like the regular client; the EC pair is wired internally when a batch of verified input arrives.
+- `SpectatorSessionSetup` has no `CredentialsStore` / `SessionConfig` / `MaxPlayers` fields — those values arrive over the wire and are owned by the framework. Only `CallbacksFactory` is required.
 
 ---
 
@@ -449,25 +501,6 @@ public class BrawlerSimulationCallbacks : ISimulationCallbacks
     private bool _capHitLogged = false;
     private int  _capHitRejectCount = 0;
 
-    // (F-3) Client-reactive PastTick fallback — engine-tick-based sliding window + post-push grace.
-    private int _lastServerPushTick     = int.MinValue;
-    private int _reactiveWindowStartTick = int.MinValue;
-    private int _reactiveRejectCount     = 0;
-    private const int SERVER_PUSH_GRACE_TICKS    = 40;   // ~1s — ignore rejects within grace of last server push
-    private const int REACTIVE_WINDOW_TICKS      = 80;   // ~2s — reject-count reset
-    private const int REACTIVE_ESCALATE_THRESHOLD = 3;
-    private const int REACTIVE_STEP               = 4;
-    private const int REACTIVE_MAX                = 40;  // matches SPAWN_DELAY_MAX
-
-    // (F-4) Rollback-amplitude reactive — primary fallback for P2P guests (no CommandRejectedMessage).
-    // Counts rollback events in a fixed window; baseline matches measure 0, RTT-spike matches multiple per 5s.
-    private int _lastRollbackBurstWindowStartTick = int.MinValue;
-    private int _rollbackCountInWindow             = 0;
-    private int _lastReactiveEscalateTick          = int.MinValue;
-    private const int ROLLBACK_BURST_COUNT              = 3;
-    private const int ROLLBACK_WINDOW_TICKS             = 200;  // ~5s @ 40Hz
-    private const int REACTIVE_ESCALATE_COOLDOWN_TICKS  = 80;   // ~2s minimum gap between escalations
-
     public FPNavMesh     NavMesh      => _navMesh;
     public FPNavMeshQuery NavQuery    { get; private set; }
     public BotFSMSystem  BotFSMSystem { get; private set; }
@@ -488,15 +521,15 @@ public class BrawlerSimulationCallbacks : ISimulationCallbacks
 }
 ```
 
+> The previous client-reactive PastTick / rollback-burst escalation fields (`_lastServerPushTick`, `_reactiveWindowStartTick`, `SERVER_PUSH_GRACE_TICKS`, `REACTIVE_*`, `ROLLBACK_*`) were lifted into the framework class **`DynamicInputDelayPolicy`** (`Assets/Klotho/Runtime/Core/Engine/DynamicInputDelayPolicy.cs`). The policy is attached automatically by `KlothoSession` on non-host sessions; thresholds are sourced from `SessionConfig` (`ServerPushGraceTicks`, `ReactiveWindowTicks`, `ReactiveEscalateThreshold`, `ReactiveStep`, `ReactiveMax`, `RollbackBurstCount`, `RollbackWindowTicks`, `ReactiveEscalateCooldownTicks`). The sample only keeps the spawn-cmd-specific escalation (above).
+
 ### E-6-2. Engine wiring — `SetEngine`
 
 ```csharp
 public void SetEngine(IKlothoEngine engine)
 {
     _engine = engine;
-    engine.OnCommandRejected   += HandleCommandRejected;     // SD CommandRejectedMessage surface
-    engine.OnExtraDelayChanged += HandleExtraDelayChanged;   // grace-window anchor refresh
-    engine.OnRollbackExecuted  += HandleRollback;            // P2P guest rollback-burst fallback
+    engine.OnCommandRejected += HandleCommandRejected;       // spawn-cmd-specific only
 }
 
 public void OnInitializeWorld(IKlothoEngine engine)
@@ -561,22 +594,15 @@ private static bool HasOwnCharacter(Frame frame, int playerId)
 }
 ```
 
-### E-6-4. Rejection / rollback hooks
+### E-6-4. Rejection hook (spawn-cmd only)
 
 ```csharp
-private void HandleExtraDelayChanged(int newDelay)
-    => _lastServerPushTick = _engine.CurrentTick;   // refresh grace anchor on every server push
-
+// Receives only LocalPlayer's command rejections (server-unicast CommandRejectedMessage).
+// Non-spawn PastTick / rollback-burst handling lives in DynamicInputDelayPolicy now.
 private void HandleCommandRejected(int tick, int cmdTypeId, RejectionReason reason)
 {
-    // Non-spawn PastTick → reactive fallback (F-3). Avoids double-bump with spawn-only escalation.
-    if (cmdTypeId != SpawnCharacterCommand.TYPE_ID)
-    {
-        if (reason == RejectionReason.PastTick) HandleReactivePastTick(tick);
-        return;
-    }
+    if (cmdTypeId != SpawnCharacterCommand.TYPE_ID) return;
 
-    // Spawn-cmd specific responses:
     if (reason == RejectionReason.Duplicate) { _lastSpawnAttemptTick = -1; return; }
     if (reason == RejectionReason.PastTick)
     {
@@ -584,15 +610,6 @@ private void HandleCommandRejected(int tick, int cmdTypeId, RejectionReason reas
         if (_extraSpawnDelay < SPAWN_DELAY_MAX) _extraSpawnDelay += SPAWN_DELAY_STEP;
         else /* one-shot Error log + post-cap reject counter */;
     }
-}
-
-private void HandleReactivePastTick(int tick) { /* sliding window + grace check → EscalateExtraDelay */ }
-
-private void HandleRollback(int fromTick, int toTick)
-{
-    if (_engine.IsHost) return;                                   // host has direct push authority
-    if (_engine.RecommendedExtraDelay >= REACTIVE_MAX) return;    // cap reached
-    // Fixed-window rollback count + grace + cooldown → EscalateExtraDelay
 }
 ```
 
@@ -694,11 +711,11 @@ private void StartReplay()
 
     InitializeViewSync(_session.Engine, _session.Simulation);
 
-    _session.Engine.StartReplay(replayData);   // LZ4 decompression is handled automatically on load
+    _session.Engine.StartReplay(replayData);   // LZ4 decompression + InitialStateSnapshot auto-inject
 }
 ```
 
-> **Correction**: `KlothoSession.CreateForReplay` / `StartReplayFromFile` do not exist. Replay is launched via the combination `KlothoSession.Create` + `Engine.StartReplay(IReplayData)`.
+> **Note**: There is no session-level replay factory — `KlothoSession.CreateForReplay` does not exist. The launch path is `KlothoSession.Create` (Transport / Connection omitted) followed by `Engine.StartReplay(IReplayData)`. A file-path convenience exists on the engine: `Engine.StartReplayFromFile(string filePath)` internally calls `_replaySystem.LoadFromFile` then forwards to `StartReplay`. `StartReplay` auto-injects the `InitialStateSnapshot` from `IReplayData.Metadata` via `Simulation.RestoreFromFullState`, so the game no longer needs `OnGameStart += InjectInitialStateSnapshot`.
 
 ---
 

@@ -316,9 +316,8 @@ namespace Brawler
                 }
 
                 tMut.Position  = new FPVector3(dest.x, destY, dest.y);
-                tMut.PreviousPosition = tMut.Position;
-                tMut.PreviousRotation = tMut.Rotation;
                 tMut.TeleportTick = frame.Tick;
+                frame.RefreshPreviousTransform(caster);
                 return null;
             }
         }
@@ -417,7 +416,15 @@ namespace Brawler
                 return;
             }
 
-            var entity = frame.CreateEntity(_stats[classId].PrototypeId);
+            var spawnPos = new FPVector3(cmd.SpawnPosition.x, FP64.FromDouble(0.5), cmd.SpawnPosition.y);
+            EntityRef entity = classId switch
+            {
+                0 => frame.CreateEntity(new WarriorPrototype { SpawnPosition = spawnPos }),
+                1 => frame.CreateEntity(new MagePrototype    { SpawnPosition = spawnPos }),
+                2 => frame.CreateEntity(new RoguePrototype   { SpawnPosition = spawnPos }),
+                3 => frame.CreateEntity(new KnightPrototype  { SpawnPosition = spawnPos }),
+                _ => throw new System.ArgumentOutOfRangeException(nameof(classId)),
+            };
             frame.Add(entity, new ErrorCorrectionTargetComponent());
 
             ref var character  = ref frame.Get<CharacterComponent>(entity);
@@ -426,11 +433,6 @@ namespace Brawler
 
             ref var owner  = ref frame.Get<OwnerComponent>(entity);
             owner.OwnerId  = cmd.PlayerId;
-
-            ref var transform = ref frame.Get<TransformComponent>(entity);
-            transform.Position = new FPVector3(cmd.SpawnPosition.x, FP64.FromDouble(0.5), cmd.SpawnPosition.y);
-            transform.PreviousPosition = transform.Position;
-            transform.PreviousRotation = transform.Rotation;
 
             // Create respawn position marker (referenced by RespawnSystem)
             var marker = frame.CreateEntity();

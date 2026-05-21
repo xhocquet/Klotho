@@ -27,10 +27,7 @@ namespace Brawler
 
         public void Update(ref Frame frame)
         {
-            var stateFilter = frame.Filter<GameTimerStateComponent>();
-            if (!stateFilter.Next(out var stateEntity)) return;
-
-            ref var state = ref frame.Get<GameTimerStateComponent>(stateEntity);
+            ref var state = ref frame.GetSingleton<GameTimerStateComponent>();
 
             if (state.GameOverFired) return;
 

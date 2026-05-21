@@ -84,9 +84,7 @@ namespace Brawler
         // ────────────────────────────────────────────
         void HandleItemPickup(ref Frame frame)
         {
-            var seedFilter = frame.Filter<GameSeedComponent>();
-            if (!seedFilter.Next(out var seedEntity)) return;
-            ref readonly var seedComp = ref frame.GetReadOnly<GameSeedComponent>(seedEntity);
+            ref readonly var seedComp = ref frame.GetReadOnlySingleton<RandomSeedComponent>();
 
             var itemAsset = frame.AssetRegistry.Get<ItemConfigAsset>(1400);
             _destroyBuffer.Clear();
@@ -121,7 +119,7 @@ namespace Brawler
                 else
                 {
                     var rng = DeterministicRandom.FromSeed(
-                        seedComp.WorldSeed, ItemPickupFeatureKey, (ulong)frame.Tick ^ (ulong)item.Index);
+                        seedComp.Seed, ItemPickupFeatureKey, (ulong)frame.Tick ^ (ulong)item.Index);
                     picker = _candidateBuffer[rng.NextInt(0, _candidateBuffer.Count)];
                 }
 

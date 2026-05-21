@@ -43,9 +43,8 @@ namespace Brawler
 
                 ref var transform = ref frame.Get<TransformComponent>(entity);
                 transform.Position = new FPVector3(spawnPos.x, rules.CharacterSpawnY, spawnPos.y);
-                transform.PreviousPosition = transform.Position;
-                transform.PreviousRotation = transform.Rotation;
                 transform.TeleportTick = frame.Tick;
+                frame.RefreshPreviousTransform(entity);
 
                 ref var physics = ref frame.Get<PhysicsBodyComponent>(entity);
                 physics.RigidBody.velocity = FPVector3.Zero;

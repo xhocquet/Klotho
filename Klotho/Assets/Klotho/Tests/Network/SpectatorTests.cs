@@ -274,7 +274,7 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<IPlayerInfo> OnPlayerDisconnected;
             public event Action<IPlayerInfo> OnPlayerReconnected;
             public event Action OnReconnecting;
-            public event Action<string> OnReconnectFailed;
+            public event Action<byte> OnReconnectFailed;
             public event Action OnReconnected;
             public event Action<int, int> OnLateJoinPlayerAdded;
 
@@ -524,6 +524,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             Assert.AreEqual(0, engine.CurrentTick);
 
@@ -545,6 +546,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             engine.Update(1.0f); // large deltaTime, no commands
 
@@ -569,6 +571,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // No confirmed tick (_spectatorLastConfirmedTick = -1)
             // accumulator sufficient → advances within prediction range
@@ -591,6 +594,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             networkService.FireCommandReceived(new EmptyCommand(0, 0));
             networkService.FireCommandReceived(new EmptyCommand(0, 1));
@@ -638,6 +642,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             var verifiedTicks = new List<int>();
             var predictedTicks = new List<int>();
@@ -959,6 +964,7 @@ namespace xpTURN.Klotho.Network.Tests
             engine.Initialize(simulation, networkService, _logger);
 
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // No commands added. If InputDelay fill had run, ticks 0..3 would have EmptyCommand
             // and confirmed ticks would have advanced. Since it did not run, no confirmed input at tick 0.
@@ -1333,6 +1339,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // Confirm tick 0
             networkService.FireCommandReceived(new EmptyCommand(0, 0));
@@ -1360,6 +1367,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // Confirm tick 0
             networkService.FireCommandReceived(new EmptyCommand(0, 0));
@@ -1391,6 +1399,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // Confirm tick 0 + advance prediction
             networkService.FireCommandReceived(new EmptyCommand(0, 0));
@@ -1423,6 +1432,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // 0ms Update → neither prediction nor confirmation
             engine.Update(0f);
@@ -1452,6 +1462,7 @@ namespace xpTURN.Klotho.Network.Tests
             var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
             engine.Initialize(simulation, networkService, _logger);
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             // Advance prediction
             networkService.FireCommandReceived(new EmptyCommand(0, 0));
@@ -1463,6 +1474,7 @@ namespace xpTURN.Klotho.Network.Tests
 
             // Restart
             engine.StartSpectator(MakeStartInfo(1));
+            engine.ResetToTick(0);
 
             Assert.AreEqual(0, engine.CurrentTick, "CurrentTick must reset");
 
@@ -1470,6 +1482,61 @@ namespace xpTURN.Klotho.Network.Tests
             engine.Update(0.030f);
             Assert.LessOrEqual(engine.CurrentTick, 4,
                 "After restart, prediction must work fresh without stale rollback");
+        }
+
+        #endregion
+
+        #region Tests: Spectator Bootstrap Gate
+
+        /// <summary>
+        /// Before first ResetToTick (= FullState arrival), HandleSpectatorUpdate must skip all tick execution
+        /// — RandomSeedComponent / GameTimerStateComponent singletons are not yet populated.
+        /// </summary>
+        [Test]
+        public void SpectatorBootstrap_BlocksTicksUntilResetToTick()
+        {
+            var simulation = new MockSimulation();
+            var networkService = new MockNetworkService { PlayerCount = 1 };
+            var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
+            engine.Initialize(simulation, networkService, _logger);
+            engine.StartSpectator(MakeStartInfo(1));
+
+            // Even with a confirmed tick available, Update before ResetToTick must not advance —
+            // bootstrap gate drains accumulator and returns.
+            networkService.FireCommandReceived(new EmptyCommand(0, 0));
+            engine.ConfirmSpectatorTick(0);
+            engine.Update(1.0f);
+
+            Assert.AreEqual(0, engine.CurrentTick,
+                "Tick must not advance before first ResetToTick (bootstrap gate)");
+            Assert.AreEqual(0, simulation.TickCallCount,
+                "Simulation.Tick must not be called before bootstrap");
+        }
+
+        /// <summary>
+        /// After ResetToTick (= FullState arrival), HandleSpectatorUpdate resumes normal tick execution.
+        /// </summary>
+        [Test]
+        public void SpectatorBootstrap_TicksResumeAfterResetToTick()
+        {
+            var simulation = new MockSimulation();
+            var networkService = new MockNetworkService { PlayerCount = 1 };
+            var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
+            engine.Initialize(simulation, networkService, _logger);
+            engine.StartSpectator(MakeStartInfo(1));
+
+            // Pre-bootstrap Update is ignored (drained).
+            engine.Update(1.0f);
+            Assert.AreEqual(0, engine.CurrentTick, "Pre-bootstrap Update must not advance");
+
+            // FullState arrives: ResetToTick(0) sets _spectatorBootstrapped = true.
+            engine.ResetToTick(0);
+
+            // Post-bootstrap Update: prediction ticks advance within MAX_SPECTATOR_PREDICTION_TICKS.
+            engine.Update(0.2f);
+
+            Assert.GreaterOrEqual(engine.CurrentTick, 1,
+                "Tick must advance after ResetToTick (bootstrap complete)");
         }
 
         #endregion

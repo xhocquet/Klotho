@@ -182,7 +182,10 @@ namespace xpTURN.Klotho.Generator.Emitters
             sb.AppendLine("    [xpTURN.Klotho.ECS.Preserve]");
             sb.AppendLine("    internal static void Register()");
             sb.AppendLine("    {");
-            sb.AppendLine($"        ComponentStorageRegistry.Register<{fullTypeName}>({fullTypeName}.TYPE_ID);");
+            if (info.IsSingleton)
+                sb.AppendLine($"        ComponentStorageRegistry.Register<{fullTypeName}>({fullTypeName}.TYPE_ID, isSingleton: true);");
+            else
+                sb.AppendLine($"        ComponentStorageRegistry.Register<{fullTypeName}>({fullTypeName}.TYPE_ID);");
             sb.AppendLine("    }");
             sb.AppendLine("}");
         }

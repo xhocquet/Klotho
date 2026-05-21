@@ -15,5 +15,13 @@
   "AbortGraceMs": 1500,
   "EndGracePolicy": "Pause",
   "EndGraceMs": 5000,
-  "ClientShutdownGraceMs": 4500
+  "ClientShutdownGraceMs": 4500,
+  "ReactiveWindowTicks": 80,
+  "ReactiveEscalateThreshold": 3,
+  "ReactiveStep": 4,
+  "ReactiveMax": 40,
+  "ServerPushGraceTicks": 40,
+  "ReactiveEscalateCooldownTicks": 80,
+  "RollbackBurstCount": 3,
+  "RollbackWindowTicks": 200
 }

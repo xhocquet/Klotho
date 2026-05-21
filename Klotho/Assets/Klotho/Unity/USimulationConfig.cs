@@ -13,11 +13,15 @@ namespace xpTURN.Klotho
     public class USimulationConfig : ScriptableObject, ISimulationConfig
     {
         [field: SerializeField] public int TickIntervalMs { get; set; } = 25;
+        [field: SerializeField] public int MaxEntities { get; set; } = 256;
+        [field: SerializeField] public int CatchupMaxTicksPerFrame { get; set; } = 200;
         [field: SerializeField] public int InputDelayTicks { get; set; } = 4;
         [field: SerializeField] public int MaxRollbackTicks { get; set; } = 50;
         [field: SerializeField] public int SyncCheckInterval { get; set; } = 30;
+        [field: SerializeField] public int ResyncMaxRetries { get; set; } = 3;
+        [field: SerializeField] public int DesyncThresholdForResync { get; set; } = 3;
+        [field: SerializeField] public int CorrectiveResetCooldownMs { get; set; } = 5000;
         [field: SerializeField] public bool UsePrediction { get; set; } = true;
-        [field: SerializeField] public int MaxEntities { get; set; } = 256;
         [field: SerializeField] public NetworkMode Mode { get; set; } = NetworkMode.P2P;
 
         [Header("ServerDriven")]
@@ -33,11 +37,20 @@ namespace xpTURN.Klotho
         [Header("View Interpolation")]
         [field: SerializeField, Range(1, 3)] public int InterpolationDelayTicks { get; set; } = 3;
 
-        [Header("LateJoin/Reconnect")]
-        [field: SerializeField] public int LateJoinDelaySafety { get; set; } = 2;
-        [field: SerializeField] public int RttSanityMaxMs { get; set; } = 240;
+        [Header("P2P Quorum-Miss Watchdog")]
         [field: SerializeField] public int QuorumMissDropTicks { get; set; } = 20;
-        [field: SerializeField] public int MinStallAbortTicks { get; } = 600;
+
+        [Header("Reactive Dynamic InputDelay")]
+        [field: SerializeField] public int ReactiveWindowTicks { get; set; } = 80;
+        [field: SerializeField] public int ReactiveEscalateThreshold { get; set; } = 3;
+        [field: SerializeField] public int ReactiveStep { get; set; } = 4;
+        [field: SerializeField] public int ReactiveMax { get; set; } = 40;
+        [field: SerializeField] public int ServerPushGraceTicks { get; set; } = 40;
+        [field: SerializeField] public int ReactiveEscalateCooldownTicks { get; set; } = 80;
+
+        [Header("Rollback Burst")]
+        [field: SerializeField] public int RollbackBurstCount { get; set; } = 3;
+        [field: SerializeField] public int RollbackWindowTicks { get; set; } = 200;
 
         [Header("Diagnostics")]
         [field: SerializeField] public int EventDispatchWarnMs { get; set; } = 5;

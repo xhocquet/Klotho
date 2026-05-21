@@ -6,6 +6,7 @@
         "UnityEditor.TestRunner",
         "Unity.PerformanceTesting",
         "ZLogger.Unity",
+        "xpTURN.Polyfill.Runtime",
         "xpTURN.Klotho.Runtime",
         "xpTURN.Klotho.Runtime.Unity",
         "xpTURN.Klotho.Gameplay",

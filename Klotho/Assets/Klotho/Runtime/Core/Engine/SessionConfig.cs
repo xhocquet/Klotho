@@ -7,8 +7,12 @@ namespace xpTURN.Klotho.Core
     /// </summary>
     public class SessionConfig : ISessionConfig
     {
+        // --- Determinism ---
+
         /// <inheritdoc />
         public int RandomSeed { get; set; } = 0;
+
+        // --- Membership ---
 
         /// <inheritdoc />
         public int MaxPlayers { get; set; } = 4;
@@ -17,7 +21,15 @@ namespace xpTURN.Klotho.Core
         public int MinPlayers { get; set; } = 2;
 
         /// <inheritdoc />
+        public int MaxSpectators { get; set; } = 0;
+
+        // --- LateJoin / Reconnect Policy ---
+
+        /// <inheritdoc />
         public bool AllowLateJoin { get; set; } = true;
+
+        /// <inheritdoc />
+        public int LateJoinDelayTicks { get; set; } = 10;
 
         /// <inheritdoc />
         public int ReconnectTimeoutMs { get; set; } = 60000;
@@ -25,26 +37,25 @@ namespace xpTURN.Klotho.Core
         /// <inheritdoc />
         public int ReconnectMaxRetries { get; set; } = 3;
 
-        /// <inheritdoc />
-        public int LateJoinDelayTicks { get; set; } = 10;
+        // --- LateJoin / Reconnect Tuning ---
 
         /// <inheritdoc />
-        public int ResyncMaxRetries { get; set; } = 3;
+        public int LateJoinDelaySafety { get; set; } = 2;
 
         /// <inheritdoc />
-        public int DesyncThresholdForResync { get; set; } = 3;
+        public int RttSanityMaxMs { get; set; } = 240;
+
+        // --- Chain-Stall Watchdog ---
 
         /// <inheritdoc />
-        public int CorrectiveResetCooldownMs { get; set; } = 5000;
+        public int MinStallAbortTicks { get; set; } = 600;
+
+        // --- Match Start Countdown ---
 
         /// <inheritdoc />
         public int CountdownDurationMs { get; set; } = 3000;
 
-        /// <inheritdoc />
-        public int CatchupMaxTicksPerFrame { get; set; } = 200;
-
-        /// <inheritdoc />
-        public int MaxSpectators { get; set; } = 0;
+        // --- Match End Grace ---
 
         /// <inheritdoc />
         public int AbortGraceMs { get; set; } = 1500;

@@ -232,7 +232,7 @@ namespace xpTURN.Klotho.Network
         public event Action<IPlayerInfo> OnPlayerDisconnected;
         public event Action<IPlayerInfo> OnPlayerReconnected;
         public event Action OnReconnecting;
-        public event Action<string> OnReconnectFailed;
+        public event Action<byte> OnReconnectFailed;
         public event Action OnReconnected;
         public event Action<int, int> OnLateJoinPlayerAdded;
 
@@ -540,16 +540,15 @@ namespace xpTURN.Klotho.Network
                 RandomSeed = Environment.TickCount,
                 MaxPlayers = _players.Count,
                 MinPlayers = _sessionConfig.MinPlayers,
+                MaxSpectators = _sessionConfig.MaxSpectators,
                 AllowLateJoin = _sessionConfig.AllowLateJoin,
+                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
                 ReconnectTimeoutMs = _sessionConfig.ReconnectTimeoutMs,
                 ReconnectMaxRetries = _sessionConfig.ReconnectMaxRetries,
-                LateJoinDelayTicks = _sessionConfig.LateJoinDelayTicks,
-                ResyncMaxRetries = _sessionConfig.ResyncMaxRetries,
-                DesyncThresholdForResync = _sessionConfig.DesyncThresholdForResync,
+                LateJoinDelaySafety = _sessionConfig.LateJoinDelaySafety,
+                RttSanityMaxMs = _sessionConfig.RttSanityMaxMs,
+                MinStallAbortTicks = _sessionConfig.MinStallAbortTicks,
                 CountdownDurationMs = _sessionConfig.CountdownDurationMs,
-                CatchupMaxTicksPerFrame = _sessionConfig.CatchupMaxTicksPerFrame,
-                CorrectiveResetCooldownMs = _sessionConfig.CorrectiveResetCooldownMs,
-                MaxSpectators = _sessionConfig.MaxSpectators,
                 AbortGraceMs = _sessionConfig.AbortGraceMs,
                 EndGracePolicy = (int)_sessionConfig.EndGracePolicy,
                 EndGraceMs = _sessionConfig.EndGraceMs,
@@ -894,16 +893,15 @@ namespace xpTURN.Klotho.Network
                 cfg.RandomSeed = msg.RandomSeed;
                 cfg.MaxPlayers = msg.MaxPlayers;
                 cfg.MinPlayers = msg.MinPlayers;
+                cfg.MaxSpectators = msg.MaxSpectators;
                 cfg.AllowLateJoin = msg.AllowLateJoin;
+                cfg.LateJoinDelayTicks = msg.LateJoinDelayTicks;
                 cfg.ReconnectTimeoutMs = msg.ReconnectTimeoutMs;
                 cfg.ReconnectMaxRetries = msg.ReconnectMaxRetries;
-                cfg.LateJoinDelayTicks = msg.LateJoinDelayTicks;
-                cfg.ResyncMaxRetries = msg.ResyncMaxRetries;
-                cfg.DesyncThresholdForResync = msg.DesyncThresholdForResync;
+                cfg.LateJoinDelaySafety = msg.LateJoinDelaySafety;
+                cfg.RttSanityMaxMs = msg.RttSanityMaxMs;
+                cfg.MinStallAbortTicks = msg.MinStallAbortTicks;
                 cfg.CountdownDurationMs = msg.CountdownDurationMs;
-                cfg.CatchupMaxTicksPerFrame = msg.CatchupMaxTicksPerFrame;
-                cfg.CorrectiveResetCooldownMs = msg.CorrectiveResetCooldownMs;
-                cfg.MaxSpectators = msg.MaxSpectators;
                 cfg.AbortGraceMs = msg.AbortGraceMs;
                 cfg.EndGracePolicy = (EndGracePolicy)msg.EndGracePolicy;
                 cfg.EndGraceMs = msg.EndGraceMs;

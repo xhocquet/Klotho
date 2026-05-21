@@ -85,7 +85,7 @@ namespace xpTURN.Klotho.Core
             if (State.IsEnded()) return;
 
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (now - _lastCorrectiveResetMs < _sessionConfig.CorrectiveResetCooldownMs)
+            if (now - _lastCorrectiveResetMs < _simConfig.CorrectiveResetCooldownMs)
             {
                 _logger?.ZLogWarning($"[KlothoEngine][CorrectiveReset] cooldown active, skip (elapsed={now - _lastCorrectiveResetMs}ms)");
                 return;
@@ -133,7 +133,7 @@ namespace xpTURN.Klotho.Core
             _resyncRetryCount++;
             _resyncRequestTotalCount++;
 
-            if (_resyncRetryCount > _sessionConfig.ResyncMaxRetries)
+            if (_resyncRetryCount > _simConfig.ResyncMaxRetries)
             {
                 _logger?.ZLogError($"[KlothoEngine][FullStateResync] failed: max retry count exceeded");
                 OnResyncFailed?.Invoke();
@@ -143,7 +143,7 @@ namespace xpTURN.Klotho.Core
             _resyncState = ResyncState.Requested;
             _resyncElapsedMs = 0;
 
-            _logger?.ZLogWarning($"[KlothoEngine][FullStateResync] requested (attempt {_resyncRetryCount}/{_sessionConfig.ResyncMaxRetries})");
+            _logger?.ZLogWarning($"[KlothoEngine][FullStateResync] requested (attempt {_resyncRetryCount}/{_simConfig.ResyncMaxRetries})");
             _networkService.SendFullStateRequest(CurrentTick);
         }
 
@@ -358,9 +358,9 @@ namespace xpTURN.Klotho.Core
                 _consecutiveDesyncPeak = _consecutiveDesyncCount;
             if (_hasCompletedResync)
                 _postResyncDesyncCount++;
-            _logger?.ZLogWarning($"[KlothoEngine][FullStateResync] Desync consecutiveCount={_consecutiveDesyncCount}/{_sessionConfig.DesyncThresholdForResync}, lastMatchedSyncTick={_lastMatchedSyncTick}, currentTick={CurrentTick}");
+            _logger?.ZLogWarning($"[KlothoEngine][FullStateResync] Desync consecutiveCount={_consecutiveDesyncCount}/{_simConfig.DesyncThresholdForResync}, lastMatchedSyncTick={_lastMatchedSyncTick}, currentTick={CurrentTick}");
 
-            if (_consecutiveDesyncCount >= _sessionConfig.DesyncThresholdForResync)
+            if (_consecutiveDesyncCount >= _simConfig.DesyncThresholdForResync)
             {
                 _consecutiveDesyncCount = 0;
                 RequestFullStateResync();
