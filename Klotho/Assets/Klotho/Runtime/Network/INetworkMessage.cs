@@ -56,6 +56,9 @@ namespace xpTURN.Klotho.Network
         // Dynamic InputDelay — server→client push when smoothed RTT change crosses asymmetric threshold.
         RecommendedExtraDelayUpdate = 74,
 
+        // Late join notification — host (P2P) / server (SD) broadcast to existing peers on new player completion.
+        LateJoinNotification = 75,
+
         // Server-driven
         ClientInput = 80,
         VerifiedState = 81,

@@ -202,7 +202,11 @@ namespace xpTURN.Klotho.Network
                 IsReady = false,
                 Ping = avgRtt
             };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
 
             // Sync (normal join) path: NO extraDelay seed in P2P. Unlike SD where the server tolerates
             // late cmds within a window, P2P's host chain requires every peer's cmd at every tick to
@@ -327,9 +331,13 @@ namespace xpTURN.Klotho.Network
                             if (info == null)
                             {
                                 _logger?.ZLogWarning($"[KlothoNetworkService][HandlePeerDisconnected] Disconnected player pool exhausted, removing player {playerId}");
+                                int prevPlayerCount = _players.Count;
+                                bool prevAllReady = AllPlayersReady;
                                 _players.Remove(player);
                                 _engine?.NotifyPlayerLeft(playerId);
                                 OnPlayerLeft?.Invoke(player);
+                                RaisePlayerCountIfChanged(prevPlayerCount);
+                                RaiseAllPlayersReadyIfChanged(prevAllReady);
                             }
                             else
                             {
@@ -355,8 +363,12 @@ namespace xpTURN.Klotho.Network
                     {
                         // Disconnect before Playing or guest-side → remove immediately (existing logic)
                         _logger?.ZLogInformation($"[KlothoNetworkService][HandlePeerDisconnected] Player {playerId} removed (IsHost={IsHost}, Phase={Phase})");
+                        int prevPlayerCount = _players.Count;
+                        bool prevAllReady = AllPlayersReady;
                         _players.Remove(player);
                         OnPlayerLeft?.Invoke(player);
+                        RaisePlayerCountIfChanged(prevPlayerCount);
+                        RaiseAllPlayersReadyIfChanged(prevAllReady);
                     }
                 }
                 _peerToPlayer.Remove(peerId);

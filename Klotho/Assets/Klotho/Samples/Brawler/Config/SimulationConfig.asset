@@ -13,11 +13,15 @@ MonoBehaviour:
   m_Name: SimulationConfig
   m_EditorClassIdentifier: xpTURN.Klotho.Runtime.Unity::xpTURN.Klotho.USimulationConfig
   <TickIntervalMs>k__BackingField: 50
+  <MaxEntities>k__BackingField: 256
+  <CatchupMaxTicksPerFrame>k__BackingField: 200
   <InputDelayTicks>k__BackingField: 4
   <MaxRollbackTicks>k__BackingField: 50
   <SyncCheckInterval>k__BackingField: 30
+  <ResyncMaxRetries>k__BackingField: 3
+  <DesyncThresholdForResync>k__BackingField: 3
+  <CorrectiveResetCooldownMs>k__BackingField: 5000
   <UsePrediction>k__BackingField: 1
-  <MaxEntities>k__BackingField: 256
   <Mode>k__BackingField: 1
   <HardToleranceMs>k__BackingField: 0
   <InputResendIntervalMs>k__BackingField: 50
@@ -26,5 +30,14 @@ MonoBehaviour:
   <SDInputLeadTicks>k__BackingField: 0
   <EnableErrorCorrection>k__BackingField: 1
   <InterpolationDelayTicks>k__BackingField: 3
+  <QuorumMissDropTicks>k__BackingField: 20
+  <ReactiveWindowTicks>k__BackingField: 80
+  <ReactiveEscalateThreshold>k__BackingField: 3
+  <ReactiveStep>k__BackingField: 4
+  <ReactiveMax>k__BackingField: 40
+  <ServerPushGraceTicks>k__BackingField: 40
+  <ReactiveEscalateCooldownTicks>k__BackingField: 80
+  <RollbackBurstCount>k__BackingField: 3
+  <RollbackWindowTicks>k__BackingField: 200
   <EventDispatchWarnMs>k__BackingField: 5
   <TickDriftWarnMultiplier>k__BackingField: 2

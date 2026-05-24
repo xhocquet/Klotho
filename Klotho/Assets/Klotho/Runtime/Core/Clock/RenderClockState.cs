@@ -42,8 +42,5 @@ namespace xpTURN.Klotho.Core
                 return raw > 1.0 ? 1f : (raw < 0.0 ? 0f : (float)raw);
             }
         }
-
-        [Obsolete("Use PredictedAlpha or VerifiedAlpha explicitly")]
-        public float Alpha => PredictedAlpha;
     }
 }

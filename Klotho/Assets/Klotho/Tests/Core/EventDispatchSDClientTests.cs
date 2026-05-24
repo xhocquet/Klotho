@@ -153,6 +153,9 @@ namespace xpTURN.Klotho.Core.Tests
             public event Action<int, byte[], long> OnServerFullStateReceived;
             public event Action<int, long> OnBootstrapBegin;
             public event Action<int, int, RejectionReason> OnCommandRejected;
+            public event Action<SessionPhase> OnPhaseChanged;
+            public event Action<int> OnPlayerCountChanged;
+            public event Action<bool> OnAllPlayersReadyChanged;
 
             public void Initialize(INetworkTransport t, ICommandFactory f, ILogger l) { }
             public void CreateRoom(string n, int m) { }

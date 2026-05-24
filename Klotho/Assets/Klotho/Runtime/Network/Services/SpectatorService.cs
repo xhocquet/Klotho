@@ -39,15 +39,23 @@ namespace xpTURN.Klotho.Network
         private readonly Queue<(int tick, byte[] data, int dataLen)> _pendingVerifiedStates
             = new Queue<(int, byte[], int)>();
 
+        // Player count surface — seeded from SpectatorAcceptMessage.PlayerIds, mutated by
+        // LateJoinNotificationMessage arrivals. UI/Session layer reads via PlayerCount /
+        // OnPlayerCountChanged; mid-match LateJoin accumulation lives here (not in
+        // _pendingStartInfo, which is cleared after first OnSpectatorStarted fire).
+        private readonly List<int> _playerIds = new List<int>();
+
         public SpectatorState State => _state;
         public int LatestReceivedTick => _latestReceivedTick;
         public int DelayFrames => (_latestReceivedTick >= 0 && _engine != null) ? _latestReceivedTick - _engine.CurrentTick : 0;
+        public int PlayerCount => _playerIds.Count;
 
         public event Action<SpectatorStartInfo> OnSpectatorStarted;
         public event Action<int, ICommand> OnConfirmedInputReceived;
         public event Action<int> OnTickConfirmed;
         public event Action<string> OnSpectatorStopped;
         public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
+        public event Action<int> OnPlayerCountChanged;
 
         /// <summary>
         /// Raised when SimulationConfig is received from SpectatorAcceptMessage.
@@ -152,7 +160,20 @@ namespace xpTURN.Klotho.Network
                     _pendingSimulationConfig = accept.ToSimulationConfig();
                     OnSimulationConfigReceived?.Invoke(_pendingSimulationConfig);
                     _pendingSessionConfig = accept.ToSessionConfig();
+                    // OnSessionConfigReceived drives KlothoSession.FinishSpectatorBootstrap →
+                    // SubscribeStateForwarders within this synchronous call. Seed _playerIds
+                    // AFTER the call returns so the forwarder is already wired by the time
+                    // OnPlayerCountChanged fires — otherwise the initial push is dropped and
+                    // UI shows 0 until the next change.
                     OnSessionConfigReceived?.Invoke(_pendingSessionConfig);
+
+                    int prevCount = _playerIds.Count;
+                    _playerIds.Clear();
+                    for (int i = 0; i < accept.PlayerIds.Count; i++)
+                        _playerIds.Add(accept.PlayerIds[i]);
+                    if (prevCount != _playerIds.Count)
+                        OnPlayerCountChanged?.Invoke(_playerIds.Count);
+
                     if (accept.LastVerifiedTick >= 0)
                     {
                         _fullStateRequestCache.RequestTick = accept.LastVerifiedTick;
@@ -219,6 +240,10 @@ namespace xpTURN.Klotho.Network
                     }
                     break;
 
+                case LateJoinNotificationMessage notification:
+                    HandleLateJoinNotification(peerId, notification);
+                    break;
+
                 // SD server sends VerifiedStateMessage each tick instead of SpectatorInputMessage
                 case VerifiedStateMessage verifiedMsg:
                     if (_state == SpectatorState.Synchronizing)
@@ -256,6 +281,31 @@ namespace xpTURN.Klotho.Network
                 OnConfirmedInputReceived?.Invoke(executionTick, commands[i]);
             OnTickConfirmed?.Invoke(executionTick);
             _latestReceivedTick = Math.Max(_latestReceivedTick, executionTick);
+        }
+
+        private void HandleLateJoinNotification(int peerId, LateJoinNotificationMessage msg)
+        {
+            // Spectator only receives from host. In client-mode LiteNetLibTransport the server
+            // peer is exposed as peerId=0 — drop forged sends from any other source.
+            if (peerId != 0)
+            {
+                _logger?.ZLogWarning($"[SpectatorService][HandleLateJoinNotification] Ignored from non-host peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _playerIds.Count; i++)
+            {
+                if (_playerIds[i] == msg.PlayerId)
+                {
+                    _logger?.ZLogDebug($"[SpectatorService][HandleLateJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
+
+            _playerIds.Add(msg.PlayerId);
+            OnPlayerCountChanged?.Invoke(_playerIds.Count);
+
+            _logger?.ZLogInformation($"[SpectatorService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
         }
 
         private void ProcessSpectatorInput(int startTick, int tickCount, byte[] inputData, int dataLength)

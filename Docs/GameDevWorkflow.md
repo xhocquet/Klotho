@@ -134,23 +134,61 @@ public class MyViewCallbacks : IViewCallbacks
     public void OnLateJoinActivated(IKlothoEngine engine)   { /* late-join initial logic */ }
 }
 
-// Create a session and start the game — KlothoSession.Create(KlothoSessionSetup)
-var session = KlothoSession.Create(new KlothoSessionSetup
+// Construct a KlothoSessionFlow once during startup and reuse it for every mode.
+// KlothoFlowSetup carries the long-lived dependencies — entry methods only take per-call params.
+_flow = new KlothoSessionFlow(new KlothoFlowSetup
 {
-    Logger              = logger,
-    SimulationCallbacks = new MySimulationCallbacks(),
-    ViewCallbacks       = new MyViewCallbacks(),
-    Transport           = transport,             // host
-    // Connection       = connectionResult,      // guest (when set, host fields are ignored)
-    SimulationConfig    = uSimulationConfig,     // USimulationConfig (SO) or any ISimulationConfig
-    SessionConfig       = uSessionConfig,        // USessionConfig (SO) or any ISessionConfig — host only (MaxPlayers/MinPlayers/MaxSpectators/late-join/reconnect/grace policy)
-    AssetRegistry       = dataAssetRegistry,     // optional: externally built registry
+    Logger            = logger,
+    Transport         = transport,
+    AssetRegistry     = dataAssetRegistry,
+    CredentialsStore  = credentialsStore,         // optional — warm-reconnect ticket persistence
+    AppVersion        = Application.version,
+    DeviceIdProvider  = new UnityDeviceIdProvider(),
+    LifecycleObserver = this,                     // bulk-subscribed IKlothoSessionObserver
+    CallbacksFactory  = (simCfg, sessionCfg) =>
+        new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),
+
+    // Auto-send PlayerConfig on guest / reconnect paths (skipped on spectator / replay).
+    // The factory runs per-session so it always observes the latest user selection.
+    InitialPlayerConfigFactory = () => new MyPlayerConfig { /* ... */ },
+
+    // Spectator transport — library calls this from `SpectateAsync(host, port, roomId, ct)`.
+    SpectatorTransportFactory  = () => new LiteNetLibTransport(logger, connectionKey: ConnectionKey),
 });
 
-session.HostGame("MyRoom", uSessionConfig.MaxPlayers);   // host
-// or
-session.JoinGame("MyRoom");                              // client
+// Wire per-mode session-created callbacks alongside the generic OnSessionCreated.
+// Mode dispatching is folded into the flow — game code does not branch on simCfg.Mode anymore.
+_flow.OnSessionCreated          += s => _sessionDriver.Attach(s);
+_flow.OnHostSessionCreated      += OnHostOrGuestSessionCreated;
+_flow.OnGuestSessionCreated     += OnHostOrGuestSessionCreated;
+_flow.OnReplaySessionCreated    += OnReplayOrSpectatorSessionCreated;
+_flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated;
+
+// Subscribe to session state-change events on the create callback (no per-frame polling).
+void OnAnyFlowSessionCreated(KlothoSession session)
+{
+    session.StateChanged           += s => UpdateStateUI(s);
+    session.PhaseChanged           += p => UpdatePhaseUI(p);
+    session.PlayerCountChanged     += n => UpdatePlayerCountUI(n);
+    session.AllPlayersReadyChanged += r => UpdateReadyUI(r);
+}
+
+// Entry points — pick one per game mode. Branch by KlothoModeStrategy.Resolve(simCfg),
+// not by inspecting simCfg.Mode directly.
+_session = _flow.StartHost(uSimulationConfig, uSessionConfig);                                 // P2P host
+_session = await _flow.JoinP2PAsync(transport, host, port, uSessionConfig, ct);                // P2P guest
+_session = await _flow.JoinServerDrivenAsync(transport, host, port, roomId, uSessionConfig, ct); // SD client
+_session = await _flow.ReconnectAsync(transport, creds, uSessionConfig, ct);                   // cold-start reconnect (creds: PersistedReconnectCredentials)
+_session = await _flow.SpectateAsync(host, port, roomId, ct);                                  // spectator (transport via factory)
+_session = _flow.StartReplayFromFile(replayPath);                                              // replay (throws ReplayLoadException)
+
+// FaultInjection: macro-agnostic — call without #if KLOTHO_FAULT_INJECTION. Undefined builds
+// return a null stub (release cost stays at zero — library-internal readers retain their macro guards).
+FaultInjectionRuntime.AttachToSession(_session, transport, logger, /* roleLabel */ "host",
+    onReconnect: ct => ReconnectAsync(ct), _sessionDriver);
 ```
+
+> **Escape hatch — `KlothoSession.Create(KlothoSessionSetup)`**: the direct factory is still available for games whose architecture does not fit the Flow pattern (custom retry orchestration, multi-session test harnesses, etc.). The Flow is a recommended thin wrapper, not a wall.
 
 ### Step 5: Define Events
 

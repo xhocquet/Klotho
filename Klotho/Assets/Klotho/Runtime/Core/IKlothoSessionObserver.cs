@@ -52,6 +52,16 @@ namespace xpTURN.Klotho.Core
         /// Fired at the end of <c>KlothoSession.Stop()</c> after framework cleanup
         /// (Engine.Stop / NetworkService.LeaveRoom / observer unsubscribe). Game-side teardown
         /// (transport disconnect, session reference null-out, UI cleanup) should run here.
+        ///
+        /// Invariants at call time:
+        ///   session.IsStopped     == true   (Stop() entered before dispatch)
+        ///   driver.IsStopping     may be either true (path 1 — DetachAndStop triggered Stop) or false
+        ///                                   (path 2 — external Stop, e.g. spectator drop).
+        ///
+        /// Re-entry policy: invoking <c>session.Stop()</c> from this handler is a no-op (idempotent).
+        /// Invoking <c>driver.DetachAndStop()</c> from this handler is a no-op when driver.IsStopping == true
+        /// (path 1); on path 2 it re-enters DetachAndStop and re-fires the <c>Stopping</c> hook for game
+        /// cleanup (s.Stop() inside is then a no-op via the _stopped guard).
         /// </summary>
         void OnSessionStopped() { }
     }

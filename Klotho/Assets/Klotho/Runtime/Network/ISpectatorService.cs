@@ -38,6 +38,12 @@ namespace xpTURN.Klotho.Network
 
         int LatestReceivedTick { get; }
 
+        /// <summary>
+        /// Player count snapshot. Seeded from <see cref="SpectatorAcceptMessage.PlayerIds"/> on
+        /// bootstrap, mutated by <c>LateJoinNotificationMessage</c> arrivals.
+        /// </summary>
+        int PlayerCount { get; }
+
         event Action<SpectatorStartInfo> OnSpectatorStarted;
 
         event Action<int, ICommand> OnConfirmedInputReceived;
@@ -47,5 +53,10 @@ namespace xpTURN.Klotho.Network
         event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
 
         event Action<ISessionConfig> OnSessionConfigReceived;
+
+        /// <summary>
+        /// Fired when <see cref="PlayerCount"/> changes. Argument is the new count.
+        /// </summary>
+        event Action<int> OnPlayerCountChanged;
     }
 }

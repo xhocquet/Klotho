@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
 using xpTURN.Klotho.ECS.FSM;
 using xpTURN.Klotho.Deterministic.Navigation;
@@ -23,6 +24,9 @@ namespace xpTURN.Klotho.Unity
         void Awake()
         {
             Instance = this;
+#if UNITY_EDITOR
+            KlothoSession.OnSessionCreated += HandleSessionCreated;
+#endif
         }
 
         public void Register(EcsSimulation simulation)
@@ -71,11 +75,28 @@ namespace xpTURN.Klotho.Unity
 
         void OnDestroy()
         {
+#if UNITY_EDITOR
+            KlothoSession.OnSessionCreated -= HandleSessionCreated;
+#endif
             if (Instance == this) Instance = null;
             NavMesh = null;
             NavQuery = null;
             NavAgentSnapshotProvider = null;
             AgentSnapshotCount = 0;
         }
+
+#if UNITY_EDITOR
+        private void HandleSessionCreated(KlothoSession session)
+        {
+            if (session?.Simulation == null) return;
+            Register(session.Simulation);
+
+            var cb = session.SimulationCallbacks;
+            if (cb is INavMeshProvider navMesh)
+                RegisterNavMesh(navMesh.NavMesh, navMesh.NavQuery);
+            if (cb is INavAgentProvider agentProvider)
+                RegisterNavAgentProvider(agentProvider.NavAgentSnapshotProvider);
+        }
+#endif
     }
 }

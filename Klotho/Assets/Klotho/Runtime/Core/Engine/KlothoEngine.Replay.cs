@@ -76,20 +76,6 @@ namespace xpTURN.Klotho.Core
         }
 
         /// <summary>
-        /// Starts replay from a file.
-        /// </summary>
-        public void StartReplayFromFile(string filePath)
-        {
-            _replaySystem.LoadFromFile(filePath);
-            var replayData = _replaySystem.CurrentReplayData;
-
-            if (replayData != null)
-            {
-                StartReplay(replayData);
-            }
-        }
-
-        /// <summary>
         /// Stops replay playback.
         /// </summary>
         public void StopReplay()

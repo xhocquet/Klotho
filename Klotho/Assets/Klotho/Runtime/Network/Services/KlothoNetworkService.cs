@@ -214,6 +214,9 @@ namespace xpTURN.Klotho.Network
                     }
                 }
                 _logger?.ZLogInformation($"[KlothoNetworkService] Session phase: {_phase}, SharedClock: {SharedClock.SharedNow}ms");
+
+                if (prev != value)
+                    OnPhaseChanged?.Invoke(value);
             }
         }
 
@@ -235,6 +238,25 @@ namespace xpTURN.Klotho.Network
         public event Action<byte> OnReconnectFailed;
         public event Action OnReconnected;
         public event Action<int, int> OnLateJoinPlayerAdded;
+
+        // State-change events (fired on transition only).
+        public event Action<SessionPhase> OnPhaseChanged;
+        public event Action<int> OnPlayerCountChanged;
+        public event Action<bool> OnAllPlayersReadyChanged;
+
+        private void RaisePlayerCountIfChanged(int prevCount)
+        {
+            int newCount = _players.Count;
+            if (prevCount != newCount)
+                OnPlayerCountChanged?.Invoke(newCount);
+        }
+
+        private void RaiseAllPlayersReadyIfChanged(bool prevValue)
+        {
+            bool newValue = AllPlayersReady;
+            if (prevValue != newValue)
+                OnAllPlayersReadyChanged?.Invoke(newValue);
+        }
 
         public void SetLocalTick(int tick) { _localTick = tick; }
 
@@ -391,7 +413,11 @@ namespace xpTURN.Klotho.Network
                 PlayerName = "Host",
                 IsReady = false
             };
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Add(hostPlayer);
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
         }
 
         public void JoinRoom(string roomName)
@@ -415,7 +441,11 @@ namespace xpTURN.Klotho.Network
             // Discard cold-start Reconnect credentials on graceful session end.
             _reconnectCredentialsStore?.Clear();
 
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Clear();
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
             _spectators.Clear();
             _peerToPlayer.Clear();
             _peerSyncStates.Clear();
@@ -800,6 +830,10 @@ namespace xpTURN.Klotho.Network
                     HandleLateJoinAccept(lateJoinAcceptMsg);
                     break;
 
+                case LateJoinNotificationMessage lateJoinNotification:
+                    HandleLateJoinNotification(lateJoinNotification);
+                    break;
+
                 case SpectatorInputMessage catchupMsg:
                     HandleCatchupInputMessage(catchupMsg);
                     break;
@@ -909,6 +943,8 @@ namespace xpTURN.Klotho.Network
             }
 
             // Update the player list
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
@@ -919,6 +955,8 @@ namespace xpTURN.Klotho.Network
                 };
                 _players.Add(player);
             }
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
 
             RandomSeed = msg.RandomSeed;
             _gameStartTime = msg.StartTime;
@@ -933,7 +971,9 @@ namespace xpTURN.Klotho.Network
             var player = _players.Find(p => p.PlayerId == msg.PlayerId);
             if (player != null)
             {
+                bool prevReady = AllPlayersReady;
                 player.IsReady = msg.IsReady;
+                RaiseAllPlayersReadyIfChanged(prevReady);
             }
 
             if (IsHost && fromPeerId != -1)

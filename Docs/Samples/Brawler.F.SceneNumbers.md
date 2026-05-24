@@ -95,8 +95,7 @@ The C# field default is `MoveSpeed = 0` (i.e., the value must come from JSON). R
 
 | Component | Role | Field Wiring |
 |---|---|---|
-| `BrawlerGameController` (MonoBehaviour) | Game controller | `_staticCollidersAsset`, `_navMeshAsset`, `_dataAsset`, `_simulationConfig`, `_uKlotho`, `_viewSync`, `_viewUpdater`, `_gameMenu`, `_brawlerSettings` |
-| `UKlothoBehaviour` | Session bind / Update | (auto) |
+| `BrawlerGameController` (MonoBehaviour) | Game controller | `_staticCollidersAsset`, `_navMeshAsset`, `_dataAsset`, `_simulationConfig`, `_sessionConfig`, `_viewSync`, `_entityViewUpdater`, `_gameMenu`, `_brawlerSettings` |
 | `BrawlerViewSync` | Holds view references | `_gameHUD`, `_resultScreen`, `_movingPlatforms` |
 | `EntityViewUpdater` | Entity ↔ View reconcile | `_factory` = `BrawlerEntityViewFactory.asset`, `_pool` (optional) |
 | `BrawlerCameraController` | Camera follow | `_cinemachineCamera`, `_proxy` |
@@ -210,7 +209,6 @@ BrawlerScene
 │   └── MovingPlatform (MovingPlatform.prefab)
 │
 ├── BrawlerGameController (BrawlerGameController.prefab)
-│   ├── UKlothoBehaviour
 │   ├── BrawlerGameController
 │   ├── BrawlerViewSync
 │   ├── EntityViewUpdater
@@ -260,9 +258,9 @@ Add `Samples/Brawler/Scenes/BrawlerScene` in `File > Build Settings`. Verify the
 | `_navMeshAsset` | `Data/NavMeshData.bytes` |
 | `_dataAsset` | `Data/DataAssets.bytes` |
 | `_simulationConfig` | `Config/SimulationConfig.asset` |
-| `_uKlotho` | `UKlothoBehaviour` on the same object |
+| `_sessionConfig` | `Config/SessionConfig.asset` |
 | `_viewSync` | `BrawlerViewSync` on the same object |
-| `_viewUpdater` | `EntityViewUpdater` on the same object |
+| `_entityViewUpdater` | `EntityViewUpdater` on the same object |
 | `_gameMenu` | `GameMenu` in the scene |
 | `EntityViewUpdater._factory` | `Config/BrawlerEntityViewFactory.asset` |
 | `BrawlerEntityViewFactory._characterPrefabs` | `Prefabs/Characters/Warrior/Mage/Rogue/Knight` |

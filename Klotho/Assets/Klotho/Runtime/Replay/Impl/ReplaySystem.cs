@@ -382,16 +382,21 @@ namespace xpTURN.Klotho.Replay
 
         public void LoadFromFile(string filePath)
         {
+            if (string.IsNullOrEmpty(filePath))
+                throw new ArgumentException("Replay file path is required.", nameof(filePath));
+            if (!File.Exists(filePath))
+                throw new ReplayLoadException($"Replay file not found: {filePath}");
+
+            byte[] fileData;
+            try { fileData = File.ReadAllBytes(filePath); }
+            catch (Exception e)
+            {
+                throw new ReplayLoadException($"Replay file read failed: {filePath}", e);
+            }
+
+            ReplayData replayData;
             try
             {
-                if (!File.Exists(filePath))
-                {
-                    _logger?.ZLogError($"[ReplaySystem] Replay file not found: {filePath}");
-                    return;
-                }
-
-                byte[] fileData = File.ReadAllBytes(filePath);
-
                 // Format detection: RPLY magic = uncompressed, otherwise LZ4Pickler
                 byte[] raw;
                 if (fileData.Length >= 4 && BinaryPrimitives.ReadUInt32LittleEndian(fileData) == RPLY_MAGIC)
@@ -399,18 +404,19 @@ namespace xpTURN.Klotho.Replay
                 else
                     raw = LZ4Pickler.Unpickle(fileData);
 
-                var replayData = new ReplayData(_commandFactory);
+                replayData = new ReplayData(_commandFactory);
                 replayData.Deserialize(raw);
-
-                _currentReplayData = replayData;
                 _player.Load(replayData, _logger);
-
-                _logger?.ZLogInformation($"[ReplaySystem] Replay loaded: {filePath} ({fileData.Length} bytes)");
             }
             catch (Exception e)
             {
-                _logger?.ZLogError($"[ReplaySystem] Failed to load replay: {e.Message}");
+                // Atomicity: _currentReplayData is only assigned after every step above succeeds, so
+                // a partial failure leaves the previous _currentReplayData / _player state untouched.
+                throw new ReplayLoadException($"Replay deserialize failed: {filePath}", e);
             }
+
+            _currentReplayData = replayData;
+            _logger?.ZLogInformation($"[ReplaySystem] Replay loaded: {filePath} ({fileData.Length} bytes)");
         }
 
         #endregion

@@ -59,6 +59,7 @@
 //             Phase-1 self-heal still allows the initial spawn to
 //             succeed once the offset is absorbed.
 // =====================================================================
+#endif
 
 using System.Collections.Generic;
 
@@ -66,8 +67,10 @@ namespace xpTURN.Klotho.Diagnostics
 {
     /// <summary>
     /// Static toggles for reproducing fault scenarios from code (RTT emulation, server GC pause,
-    /// spawn-cmd drop, bootstrap-ack suppression). Compiled out unless KLOTHO_FAULT_INJECTION is defined,
-    /// so production builds carry zero overhead.
+    /// spawn-cmd drop, bootstrap-ack suppression). External surface compiles unconditionally so
+    /// game code can read these without macro guards; when KLOTHO_FAULT_INJECTION is undefined,
+    /// collections remain empty and Reset() is not exposed — readers see Contains == false and
+    /// production builds carry effectively zero overhead.
     /// </summary>
     public static class FaultInjection
     {
@@ -132,6 +135,7 @@ namespace xpTURN.Klotho.Diagnostics
         /// </summary>
         public static int ForceTickOffsetDelta;
 
+#if KLOTHO_FAULT_INJECTION
         /// <summary>Reset all toggles to defaults. Call from test [SetUp] / [TearDown] for hygiene.</summary>
         public static void Reset()
         {
@@ -145,6 +149,6 @@ namespace xpTURN.Klotho.Diagnostics
             ForceSpawnRetryPlayerIds.Clear();
             ForceTickOffsetDelta = 0;
         }
+#endif
     }
 }
-#endif

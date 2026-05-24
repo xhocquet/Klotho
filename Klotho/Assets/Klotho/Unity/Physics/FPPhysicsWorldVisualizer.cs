@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Geometry;
 using xpTURN.Klotho.Deterministic.Physics;
@@ -88,6 +89,20 @@ namespace xpTURN.Klotho.Unity.Physics
         {
             DontDestroyOnLoad(gameObject);
             if (targetCamera == null) targetCamera = Camera.main;
+            KlothoSession.OnSessionCreated += HandleSessionCreated;
+        }
+
+        void OnDestroy()
+        {
+            KlothoSession.OnSessionCreated -= HandleSessionCreated;
+            Provider = null;
+        }
+
+        private void HandleSessionCreated(KlothoSession session)
+        {
+            var cb = session?.SimulationCallbacks;
+            if (cb is IFPPhysicsProviderSource src)
+                Provider = src.PhysicsProvider;
         }
 
         void OnEnable()

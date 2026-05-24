@@ -53,5 +53,25 @@ namespace xpTURN.Klotho.Network
         {
             return reason == AlreadyConnected;
         }
+
+        /// <summary>
+        /// Default English user-facing message for a reason byte. Games needing localization
+        /// should write their own switch; this is a one-line fallback. Always returns non-null.
+        /// </summary>
+        public static string ToDefaultMessage(byte reason)
+        {
+            switch (reason)
+            {
+                case InvalidMagic:         return "Previous session has ended";
+                case InvalidPlayer:
+                case TimedOut:             return "Reconnect timed out";
+                case AlreadyConnected:     return "Already connected on another device";
+                case DeviceMismatch:       return "Device mismatch";
+                case TransportStartFailed: return "Network unavailable";
+                case MaxRetries:           return "Reconnect failed (max retries)";
+                case Unknown:              return "Reconnect failed";
+                default:                   return "Reconnect failed";
+            }
+        }
     }
 }

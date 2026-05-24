@@ -113,6 +113,9 @@ namespace xpTURN.Klotho.Core.Tests
             public event Action<byte> OnReconnectFailed;
             public event Action OnReconnected;
             public event Action<int, int> OnLateJoinPlayerAdded;
+            public event Action<SessionPhase> OnPhaseChanged;
+            public event Action<int> OnPlayerCountChanged;
+            public event Action<bool> OnAllPlayersReadyChanged;
 
             public void Initialize(INetworkTransport transport, ICommandFactory commandFactory, ILogger logger) { }
             public void CreateRoom(string roomName, int maxPlayers) { }

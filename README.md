@@ -26,7 +26,7 @@ A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame
 | **Data Assets** | `IDataAsset` · `DataAssetRegistry` · `DataAssetRef` · JSON serialization (`xpTURN.Klotho.DataAsset.Json`) |
 | **Replay** | Record / playback / seek / variable speed · LZ4 compression (`K4os.Compression.LZ4`) |
 | **Verification Tools** | `SyncTestRunner` (GGPO-style determinism verification) · `DeterminismVerificationRunner` · benchmark suite |
-| **Unity Integration** | `UKlothoBehaviour` · `USimulationConfig` · View layer (`EntityViewFactory` / `EntityViewUpdater` / `EntityView`, `BindBehaviour` / `ViewFlags`, `VerifiedFrameInterpolator`) |
+| **Unity Integration** | `USimulationConfig` · `USessionConfig` · View layer (`EntityViewFactory` / `EntityViewUpdater` / `EntityView`, `BindBehaviour` / `ViewFlags`, `VerifiedFrameInterpolator`) |
 
 ---
 
@@ -119,7 +119,7 @@ Assets/Klotho/
 │   ├── ECS/             Frame · EntityManager · ComponentStorage<T> · SystemRunner
 │   │                    DataAsset/ (IDataAsset · Registry · Json)
 │   └── Deterministic/   FP64 · FPVector* · Physics · Navigation · Random
-├── Unity/               UKlothoBehaviour · USimulationConfig · View/
+├── Unity/               USimulationConfig · USessionConfig · View/
 ├── Editor/              NavMesh · Physics · ECS · FSM · DataAsset tooling
 ├── Gameplay/            built-in component / system reference implementations
 ├── LiteNetLib/          LiteNetLibTransport (INetworkTransport implementation)
@@ -191,21 +191,48 @@ public class MyViewCallbacks : IViewCallbacks
 }
 ```
 
-### 4) Create a Session
+### 4) Create a Session via `KlothoSessionFlow`
 
 ```csharp
-var session = KlothoSession.Create(new KlothoSessionSetup
+[SerializeField] private KlothoSessionDriver _sessionDriver;
+private KlothoSession _session;
+private KlothoSessionFlow _flow;
+
+void Awake()
 {
-    Logger              = logger,
-    SimulationCallbacks = new MySimulationCallbacks(),
-    ViewCallbacks       = new MyViewCallbacks(),
-    Transport           = transport,
-    SimulationConfig    = uSimulationConfig,
-    AssetRegistry       = dataAssetRegistry,
-});
-GetComponent<UKlothoBehaviour>().Bind(session);
-session.HostGame("MyRoom", maxPlayers: 2);
+    // Driver owns the Update / Stop lifecycle — no manual dt computation needed.
+    _sessionDriver.PreSessionUpdate += (s, dt) => _input.CaptureInput();
+    _sessionDriver.IdlePoll        += () => transport.PollEvents();
+}
+
+void Start()
+{
+    _flow = new KlothoSessionFlow(new KlothoFlowSetup
+    {
+        Logger            = logger,
+        Transport         = transport,
+        AssetRegistry     = dataAssetRegistry,
+        LifecycleObserver = this,
+        CallbacksFactory  = (simCfg, sessionCfg) =>
+            new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),
+    });
+    _flow.OnSessionCreated += s => _sessionDriver.Attach(s);
+
+    _session = _flow.StartHost(uSimulationConfig, uSessionConfig);
+    _session.HostGame("MyRoom", maxPlayers: 2);
+}
 ```
+
+`KlothoSessionFlow` exposes 6 entry points — pick one per game mode:
+
+- `StartHost(simCfg, sessionCfg)` — P2P host (synchronous).
+- `JoinP2PAsync(transport, host, port, sessionCfg, ct)` — P2P guest join.
+- `JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)` — ServerDriven client join (with roomId).
+- `ReconnectAsync(transport, creds, sessionConfigSeed, ct)` — cold-start reconnect; `creds` is a `PersistedReconnectCredentials` (carries `RoomId`, host address, and the magic token). Mode is recovered from the credentials.
+- `SpectateAsync(host, port, roomId, ct)` — spectator entry (transport is instantiated by `KlothoFlowSetup.SpectatorTransportFactory`).
+- `StartReplayFromFile(path)` — file-to-session replay (throws `ReplayLoadException` on load failure).
+
+If your game-side code needs to branch on the active mode, use `KlothoModeStrategy.Resolve(simCfg)` rather than inspecting `simCfg.Mode` directly. Per-mode session-created callbacks are also available (`OnHostSessionCreated` / `OnGuestSessionCreated` / `OnReplaySessionCreated` / `OnSpectatorSessionCreated`) alongside the generic `OnSessionCreated`. Stop teardown runs through the driver's `Stopping` hook; game code can read `KlothoSessionDriver.IsStopping` to short-circuit re-entrant teardown calls.
 
 Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameDevAPI.md](Docs/GameDevAPI.md)
 

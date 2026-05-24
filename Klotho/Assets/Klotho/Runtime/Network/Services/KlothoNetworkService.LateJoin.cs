@@ -50,6 +50,8 @@ namespace xpTURN.Klotho.Network
         private void SeedPlayersFromCatchupPayload(int randomSeed, int playerCount, List<int> playerIds, List<byte> playerConnectionStates)
         {
             RandomSeed = randomSeed;
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < playerCount && i < playerIds.Count; i++)
             {
@@ -58,6 +60,8 @@ namespace xpTURN.Klotho.Network
                     p.ConnectionState = (PlayerConnectionState)playerConnectionStates[i];
                 _players.Add(p);
             }
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
             Phase = SessionPhase.Playing;
             SaveReconnectCredentialsIfApplicable();
 
@@ -141,6 +145,49 @@ namespace xpTURN.Klotho.Network
             _logger?.ZLogInformation($"[KlothoNetworkService][HandleLateJoinAccept] playerId={msg.PlayerId}, playerCount={msg.PlayerCount}, waiting for FullState");
         }
 
+        /// <summary>
+        /// Guest receiver for the host's LateJoinNotificationMessage broadcast. Adds the new player
+        /// to _players + fires PlayerCount / AllPlayersReady / OnPlayerJoined surfaces so UI on
+        /// existing peers reflects the same roster state as the host.
+        /// </summary>
+        private void HandleLateJoinNotification(LateJoinNotificationMessage msg)
+        {
+            // Host's _players is owned by CompleteLateJoinSync. Reject so a forged PlayerId from a
+            // misbehaving guest cannot slip past the duplicate-PlayerId guard below.
+            if (IsHost)
+                return;
+
+            // Duplicate notification (e.g. reliable retry path race) must not double-add.
+            for (int i = 0; i < _players.Count; i++)
+            {
+                if (_players[i].PlayerId == msg.PlayerId)
+                {
+                    _logger?.ZLogDebug($"[KlothoNetworkService][HandleLateJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
+
+            // PlayerName mirrors the host's CompleteLateJoinSync construction (empty string in P2P)
+            // so the same PlayerId reads identically across peers. Ping is unmeasurable on guests
+            // and stays at default 0.
+            var newPlayer = new PlayerInfo
+            {
+                PlayerId = msg.PlayerId,
+                PlayerName = "",
+                IsReady = true,
+                ConnectionState = PlayerConnectionState.Connected,
+            };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+
+            OnPlayerJoined?.Invoke(newPlayer);
+
+            _logger?.ZLogInformation($"[KlothoNetworkService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
+        }
+
         // ── Late Join (Host) ──────────────────────
 
         private void CompleteLateJoinSync(int peerId, PeerSyncState state)
@@ -161,7 +208,11 @@ namespace xpTURN.Klotho.Network
                 Ping = avgRtt,
                 IsReady = true
             };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
             _peerToPlayer[peerId] = newPlayerId;
 
             // 2. Target tick for PlayerJoinCommand
@@ -223,6 +274,29 @@ namespace xpTURN.Klotho.Network
 
             // 6. Insert PlayerJoinCommand + broadcast
             OnLateJoinPlayerAdded?.Invoke(newPlayerId, joinTick);
+
+            // Notify existing peers of the new player so their _players list stays consistent.
+            // Exclude the new joiner — they already received the full roster via LateJoinAcceptMessage.
+            var notification = new LateJoinNotificationMessage
+            {
+                PlayerId = newPlayerId,
+                JoinTick = joinTick,
+            };
+            RelayMessage(notification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
+
+            // Spectators are tracked in _spectators (disjoint from _peerToPlayer), so RelayMessage
+            // does not reach them. Send the same notification separately so spectator UI stays
+            // consistent with players.
+            if (_spectators.Count > 0)
+            {
+                using (var serialized = _messageSerializer.SerializePooled(notification))
+                {
+                    for (int i = 0; i < _spectators.Count; i++)
+                    {
+                        _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                    }
+                }
+            }
 
             // 7. Notify existing peers
             _logger?.ZLogInformation($"[KlothoNetworkService][CompleteLateJoinSync] Late join sync complete: peerId={peerId}, playerId={newPlayerId}, joinTick={joinTick}");

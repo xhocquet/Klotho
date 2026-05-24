@@ -47,10 +47,14 @@ namespace xpTURN.Klotho.Core
 
             private set
             {
+                if (_state == value) return;
                 _state = value;
                 _logger?.ZLogInformation($"[KlothoEngine] State: {_state}");
+                OnStateChanged?.Invoke(value);
             }
         }
+
+        public event Action<KlothoState> OnStateChanged;
 
         public int CurrentTick { get; private set; }
         public int LocalPlayerId => _networkService?.LocalPlayerId ?? 0;

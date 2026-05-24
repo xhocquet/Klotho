@@ -9,6 +9,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 7928493984336075052}
+  - component: {fileID: 5274836192847365127}
+  - component: {fileID: 6663622970439613816}
   - component: {fileID: 3384708139685548805}
   m_Layer: 0
   m_Name: BrawlerGameController
@@ -32,6 +34,30 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5274836192847365127
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1258021022135225480}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a7c2f8e94d6b41d3b9c7a2e5f1d8b063, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &6663622970439613816
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1258021022135225480}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 70155a5723c04b01b330a2136b168d56, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: xpTURN.Klotho.Runtime.Unity::xpTURN.Klotho.Diagnostics.FaultInjectionHotkeyDriver
 --- !u!114 &3384708139685548805
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -57,6 +83,8 @@ MonoBehaviour:
   _gameMenu: {fileID: 0}
   _viewSync: {fileID: 0}
   _entityViewUpdater: {fileID: 0}
+  _sessionDriver: {fileID: 5274836192847365127}
+  _faultInjectionHotkey: {fileID: 6663622970439613816}
   _staticCollidersAsset: {fileID: 4900000, guid: 72ea74227aa3941cf919e2133f2a464f, type: 3}
   _navMeshAsset: {fileID: 4900000, guid: 59ad7066f79384cc7b2e78e14c57ff50, type: 3}
   _dataAsset: {fileID: 4900000, guid: 11a37c05526bf4fed87326fb25f7100f, type: 3}

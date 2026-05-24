@@ -22,6 +22,12 @@ namespace xpTURN.Klotho.Core
         public int LocalPlayerId => Engine?.LocalPlayerId ?? -1;
         public KlothoState State => Engine?.State ?? KlothoState.Idle;
 
+        // Unified getter — NetworkService surface for host/guest/SD-client/reconnect, falls back
+        // to SpectatorService for spectator path. Pairs with PlayerCountChanged event so callers
+        // can use a single mode-agnostic surface.
+        public int PlayerCount =>
+            NetworkService?.PlayerCount ?? _spectatorService?.PlayerCount ?? 0;
+
         /// <summary>True after Stop() has been called. Exposed for external loop guards.</summary>
         public bool IsStopped => _stopped;
 
@@ -44,6 +50,64 @@ namespace xpTURN.Klotho.Core
         private ISessionConfig _pendingSessionConfig;
         private Action<KlothoSession> _spectatorReadyCallback;
         private Action<Exception> _spectatorFailedCallback;
+
+        // Fires immediately after a KlothoSession is fully constructed and lifecycle observer subscribed.
+        // Spectator path fires after FinishSpectatorBootstrap completes (Engine / Simulation non-null).
+        // This is a notification surface only — no UnityEngine dependency is introduced and subscribers
+        // may live in any assembly. Default subscribers are editor diagnostics; do not chain game logic here.
+        public static event Action<KlothoSession> OnSessionCreated;
+
+        // Session-direct event surface for game-side state observation. Forwarded from Engine /
+        // NetworkService so subscribers don't reach into internal lifecycle. Stop() unsubscribes
+        // forwarding before Engine / NetworkService teardown.
+        public event Action<KlothoState> StateChanged;
+        public event Action<SessionPhase> PhaseChanged;
+        public event Action<int> PlayerCountChanged;
+        public event Action<bool> AllPlayersReadyChanged;
+
+        private void RaiseStateChanged(KlothoState s) => StateChanged?.Invoke(s);
+        private void RaisePhaseChanged(SessionPhase p) => PhaseChanged?.Invoke(p);
+        private void RaisePlayerCountChanged(int n) => PlayerCountChanged?.Invoke(n);
+        private void RaiseAllPlayersReadyChanged(bool v) => AllPlayersReadyChanged?.Invoke(v);
+
+        private void SubscribeStateForwarders()
+        {
+            if (Engine != null)
+                Engine.OnStateChanged += RaiseStateChanged;
+            if (NetworkService != null)
+            {
+                NetworkService.OnPhaseChanged += RaisePhaseChanged;
+                NetworkService.OnPlayerCountChanged += RaisePlayerCountChanged;
+                NetworkService.OnAllPlayersReadyChanged += RaiseAllPlayersReadyChanged;
+            }
+            // Spectator path: NetworkService is null, so PlayerCountChanged would otherwise never
+            // fire. SpectatorService maintains its own _playerIds list (seeded from
+            // SpectatorAcceptMessage, mutated by LateJoinNotificationMessage).
+            if (_spectatorService != null)
+                _spectatorService.OnPlayerCountChanged += RaisePlayerCountChanged;
+        }
+
+        private void UnsubscribeStateForwarders()
+        {
+            if (Engine != null)
+                Engine.OnStateChanged -= RaiseStateChanged;
+            if (NetworkService != null)
+            {
+                NetworkService.OnPhaseChanged -= RaisePhaseChanged;
+                NetworkService.OnPlayerCountChanged -= RaisePlayerCountChanged;
+                NetworkService.OnAllPlayersReadyChanged -= RaiseAllPlayersReadyChanged;
+            }
+            if (_spectatorService != null)
+                _spectatorService.OnPlayerCountChanged -= RaisePlayerCountChanged;
+        }
+
+        // Populated in Create (host/guest/replay) and FinishSpectatorBootstrap (spectator) so
+        // OnSessionCreated subscribers can resolve callback-side optional interfaces.
+        private ISimulationCallbacks _simCallbacks;
+
+        // Escape hatch — not part of the recommended public API. Editor diagnostics use this to
+        // discover optional callback-side interfaces after OnSessionCreated.
+        public ISimulationCallbacks SimulationCallbacks => _simCallbacks;
 
         private KlothoSession() { }
 
@@ -104,6 +168,10 @@ namespace xpTURN.Klotho.Core
             // MUST unsubscribe lifecycle observer before Engine.Stop() — Engine deinit may fire
             // cleanup events (OnMatchReset etc.) that observers should not receive after teardown.
             UnsubscribeLifecycleObserver();
+
+            // Detach state forwarders before Engine.Stop / NetworkService.LeaveRoom — teardown
+            // emits Phase transitions whose forwarded fire would arrive after game-side unsubscribe.
+            UnsubscribeStateForwarders();
 
             if (_isSpectatorMode)
             {
@@ -431,10 +499,15 @@ namespace xpTURN.Klotho.Core
                 NetworkService = networkService,
                 CommandFactory = commandFactory,
                 _logger = setup.Logger,
+                _simCallbacks = setup.SimulationCallbacks,
             };
 
             session.SubscribeLifecycleObserver(setup.LifecycleObserver);
+            session.SubscribeStateForwarders();
             session.Engine.OnMatchEnded += session.HandleMatchEndedForShutdown;
+
+            try { OnSessionCreated?.Invoke(session); }
+            catch (Exception e) { setup.Logger?.ZLogError(e, $"[KlothoSession] OnSessionCreated subscriber threw"); }
 
             return session;
         }
@@ -567,6 +640,7 @@ namespace xpTURN.Klotho.Core
         {
             // Build Sim/View callbacks against server-authoritative config.
             var callbacks = _pendingSetup.CallbacksFactory(simCfg, sessionCfg);
+            _simCallbacks = callbacks.Simulation;
 
             var simulation = new EcsSimulation(
                 simCfg.MaxEntities, simCfg.MaxRollbackTicks, simCfg.TickIntervalMs,
@@ -596,6 +670,10 @@ namespace xpTURN.Klotho.Core
             // so spectator path naturally subscribes only Engine-side events.
             SubscribeLifecycleObserver(_pendingSetup.LifecycleObserver);
 
+            // State forwarders — NetworkService is null in spectator, so SubscribeStateForwarders only
+            // wires Engine.OnStateChanged. UnsubscribeStateForwarders in Stop() mirrors this.
+            SubscribeStateForwarders();
+
             // Reuse client-shutdown scheduler — fires on Engine.OnMatchEnded across all modes.
             engine.OnMatchEnded += HandleMatchEndedForShutdown;
 
@@ -605,6 +683,9 @@ namespace xpTURN.Klotho.Core
             _pendingSessionConfig = null;
             _spectatorReadyCallback = null;
             _spectatorFailedCallback = null;
+
+            try { OnSessionCreated?.Invoke(this); }
+            catch (Exception e) { _logger?.ZLogError(e, $"[KlothoSession] OnSessionCreated subscriber threw"); }
 
             readyCallback?.Invoke(this);
         }

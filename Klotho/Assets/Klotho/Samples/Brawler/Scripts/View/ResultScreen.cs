@@ -33,6 +33,11 @@ namespace Brawler
 
             if (_engine != null)
                 _engine.OnSyncedEvent += OnSyncedEvent;
+
+            // Hide the result panel on every session start — a previous match's GameOverEvent
+            // may have left it active, and the next session's GameOverEvent re-activates it.
+            if (_panel != null)
+                _panel.SetActive(false);
         }
 
         private void OnDestroy()

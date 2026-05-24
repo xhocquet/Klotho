@@ -15,7 +15,8 @@ using xpTURN.Klotho.Deterministic.Physics;
 
 namespace Brawler
 {
-    public class BrawlerSimulationCallbacks : ISimulationCallbacks
+    public class BrawlerSimulationCallbacks
+        : ISimulationCallbacks, INavMeshProvider, INavAgentProvider, IFPPhysicsProviderSource
     {
         private readonly BrawlerInputCapture _input;
         private readonly ILogger _logger;
@@ -43,6 +44,9 @@ namespace Brawler
         public FPNavMesh NavMesh { get { return _navMesh; } }
         public FPNavMeshQuery NavQuery { get; private set; }
         public BotFSMSystem BotFSMSystem { get; private set; }
+
+        public INavAgentSnapshotProvider NavAgentSnapshotProvider => BotFSMSystem;
+        public IFPPhysicsWorldProvider PhysicsProvider => BrawlerSimSetup.PhysicsSystem;
 
         public BrawlerSimulationCallbacks(BrawlerInputCapture input,
                                           ILogger logger,
@@ -99,7 +103,6 @@ namespace Brawler
         {
             if (_engine == null) return;
 
-#if KLOTHO_FAULT_INJECTION
             // Duplicate path: bypass HasOwnCharacter so spawn cmd is re-sent on cooldown even
             // after spawn success → server's HandleSpawn hits TryFindCharacter guard → Duplicate reject
             // → CommandRejectedMessage unicast back to client.
@@ -116,7 +119,6 @@ namespace Brawler
                     return;
                 }
             }
-#endif
 
             // ECS frame is the single source of truth — listener-pattern flags are vulnerable to rollback noise.
             var frame = ((EcsSimulation)_engine.Simulation).Frame;
@@ -293,7 +295,6 @@ namespace Brawler
         public void SendSpawnCommand(IKlothoEngine engine)
         {
             int playerId = engine.LocalPlayerId;
-#if KLOTHO_FAULT_INJECTION
             // Intentional spawn-cmd drop. Mark the cooldown as if we sent so the retry
             // schedule still advances — this exercises the rejection self-heal path.
             if (xpTURN.Klotho.Diagnostics.FaultInjection.DropSpawnCommandPlayerIds.Contains(playerId))
@@ -302,7 +303,6 @@ namespace Brawler
                 _logger?.ZLogWarning($"[FaultInjection][Brawler] Spawn cmd dropped: playerId={playerId}, tick={engine.CurrentTick}");
                 return;
             }
-#endif
             var rules    = ((EcsSimulation)engine.Simulation).Frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
             int spawnIdx = playerId % rules.SpawnPositions.Length;
             FPVector3 pos  = rules.SpawnPositions[spawnIdx];

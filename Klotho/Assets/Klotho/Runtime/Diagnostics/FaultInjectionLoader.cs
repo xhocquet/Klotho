@@ -1,9 +1,10 @@
+using Microsoft.Extensions.Logging;
 #if KLOTHO_FAULT_INJECTION
 using System.Collections.Generic;
 using System.IO;
-using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using ZLogger;
+#endif
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 namespace xpTURN.Klotho.Diagnostics
@@ -18,41 +19,14 @@ namespace xpTURN.Klotho.Diagnostics
     {
         public const string DefaultFileName = "faultinjectionconfig.json";
 
-        [JsonObject(MemberSerialization.OptIn)]
-        private class Schema
-        {
-            [JsonProperty] public int? EmulatedRttMs { get; set; }
-            [JsonProperty] public List<RttScheduleEntry> EmulatedRttSchedule { get; set; }
-            [JsonProperty] public List<DisconnectScheduleEntry> EmulatedDisconnectSchedule { get; set; }
-            [JsonProperty] public int? ServerGcPauseMs { get; set; }
-            [JsonProperty] public int? ServerGcPauseAtTick { get; set; }
-            [JsonProperty] public List<int> DropSpawnCommandPlayerIds { get; set; }
-            [JsonProperty] public List<int> SuppressBootstrapAckPlayerIds { get; set; }
-            [JsonProperty] public List<int> ForceSpawnRetryPlayerIds { get; set; }
-            [JsonProperty] public int? ForceTickOffsetDelta { get; set; }
-        }
-
-        [JsonObject(MemberSerialization.OptIn)]
-        private class RttScheduleEntry
-        {
-            [JsonProperty("atSec")] public float AtSec { get; set; }
-            [JsonProperty("rttMs")] public int RttMs { get; set; }
-        }
-
-        [JsonObject(MemberSerialization.OptIn)]
-        private class DisconnectScheduleEntry
-        {
-            [JsonProperty("atSec")] public float AtSec { get; set; }
-            [JsonProperty("durationSec")] public float DurationSec { get; set; }
-            [JsonProperty("playerId")] public int? PlayerId { get; set; }
-        }
-
         /// <summary>
         /// Loads and applies the JSON file at the given path. Returns true if any toggle was applied.
         /// Missing/null path or missing file → returns false without throwing (logs at Debug).
+        /// When KLOTHO_FAULT_INJECTION is undefined, returns false immediately with no IO / logging.
         /// </summary>
         public static bool TryLoadAndApply(string path, ILogger logger)
         {
+#if KLOTHO_FAULT_INJECTION
             if (string.IsNullOrEmpty(path) || !File.Exists(path))
             {
                 logger?.ZLogDebug($"[FaultInjectionLoader] No config file at '{path}' — using defaults");
@@ -90,6 +64,39 @@ namespace xpTURN.Klotho.Diagnostics
                 $"forceSpawnRetry=[{string.Join(",", FaultInjection.ForceSpawnRetryPlayerIds)}], " +
                 $"forceTickOffsetDelta={FaultInjection.ForceTickOffsetDelta}");
             return true;
+#else
+            return false;
+#endif
+        }
+
+#if KLOTHO_FAULT_INJECTION
+        [JsonObject(MemberSerialization.OptIn)]
+        private class Schema
+        {
+            [JsonProperty] public int? EmulatedRttMs { get; set; }
+            [JsonProperty] public List<RttScheduleEntry> EmulatedRttSchedule { get; set; }
+            [JsonProperty] public List<DisconnectScheduleEntry> EmulatedDisconnectSchedule { get; set; }
+            [JsonProperty] public int? ServerGcPauseMs { get; set; }
+            [JsonProperty] public int? ServerGcPauseAtTick { get; set; }
+            [JsonProperty] public List<int> DropSpawnCommandPlayerIds { get; set; }
+            [JsonProperty] public List<int> SuppressBootstrapAckPlayerIds { get; set; }
+            [JsonProperty] public List<int> ForceSpawnRetryPlayerIds { get; set; }
+            [JsonProperty] public int? ForceTickOffsetDelta { get; set; }
+        }
+
+        [JsonObject(MemberSerialization.OptIn)]
+        private class RttScheduleEntry
+        {
+            [JsonProperty("atSec")] public float AtSec { get; set; }
+            [JsonProperty("rttMs")] public int RttMs { get; set; }
+        }
+
+        [JsonObject(MemberSerialization.OptIn)]
+        private class DisconnectScheduleEntry
+        {
+            [JsonProperty("atSec")] public float AtSec { get; set; }
+            [JsonProperty("durationSec")] public float DurationSec { get; set; }
+            [JsonProperty("playerId")] public int? PlayerId { get; set; }
         }
 
         private static string FormatRttSchedule()
@@ -165,6 +172,6 @@ namespace xpTURN.Klotho.Diagnostics
                     FaultInjection.ForceSpawnRetryPlayerIds.Add(id);
             }
         }
+#endif
     }
 }
-#endif

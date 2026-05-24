@@ -37,6 +37,7 @@ namespace Brawler
 
         public ActionType CurrentAction { get; private set; }
         public string IpAddress { get { return _ipAddress.text; } set { _ipAddress.text = value; } }
+        public TMP_InputField IpAddressInput => _ipAddress;
         public bool IsHost { get; set; }
         public KlothoState State { get; set; }
         public SessionPhase Phase { get; set; }

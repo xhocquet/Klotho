@@ -72,7 +72,11 @@ namespace xpTURN.Klotho.Network
                 Ping = avgRtt,
                 IsReady = true
             };
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
             _peerToPlayer[peerId] = newPlayerId;
 
             // 2. Calculate joinTick
@@ -188,6 +192,27 @@ namespace xpTURN.Klotho.Network
                 _transport.Send(peerId, _lastVerifiedBytes, _lastVerifiedBytesLength, DeliveryMethod.ReliableOrdered);
                 _logger?.ZLogInformation(
                     $"[ServerNetworkService] Initial VerifiedState sent to late-join peer {peerId}: tick={_lastVerifiedTick}");
+            }
+
+            // Notify existing peers of the new player so their _players list stays consistent.
+            // Exclude the new joiner — they already received the full roster via LateJoinAcceptMessage.
+            var notification = new LateJoinNotificationMessage
+            {
+                PlayerId = newPlayerId,
+                JoinTick = joinTick,
+            };
+            using (var notificationSerialized = _messageSerializer.SerializePooled(notification))
+            {
+                foreach (var kvp in _peerToPlayer)
+                {
+                    if (kvp.Key == peerId) continue;
+                    _transport.Send(kvp.Key, notificationSerialized.Data, notificationSerialized.Length, DeliveryMethod.ReliableOrdered);
+                }
+                // Spectators are tracked separately (disjoint from _peerToPlayer).
+                for (int i = 0; i < _spectators.Count; i++)
+                {
+                    _transport.Send(_spectators[i].PeerId, notificationSerialized.Data, notificationSerialized.Length, DeliveryMethod.ReliableOrdered);
+                }
             }
 
             _logger?.ZLogInformation(

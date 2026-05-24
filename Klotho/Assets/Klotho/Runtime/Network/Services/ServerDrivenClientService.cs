@@ -73,8 +73,12 @@ namespace xpTURN.Klotho.Network
             get => _phase;
             private set
             {
+                var prev = _phase;
                 _phase = value;
                 _logger?.ZLogInformation($"[SDClientService] Session phase: {_phase}, SharedClock: {SharedClock.SharedNow}ms");
+
+                if (prev != value)
+                    OnPhaseChanged?.Invoke(value);
             }
         }
 
@@ -117,6 +121,25 @@ namespace xpTURN.Klotho.Network
         public event Action<int, byte[], long> OnServerFullStateReceived;
         public event Action<int, long> OnBootstrapBegin;
         public event Action<int, int, RejectionReason> OnCommandRejected;
+
+        // State-change events (fired on transition only).
+        public event Action<SessionPhase> OnPhaseChanged;
+        public event Action<int> OnPlayerCountChanged;
+        public event Action<bool> OnAllPlayersReadyChanged;
+
+        private void RaisePlayerCountIfChanged(int prevCount)
+        {
+            int newCount = _players.Count;
+            if (prevCount != newCount)
+                OnPlayerCountChanged?.Invoke(newCount);
+        }
+
+        private void RaiseAllPlayersReadyIfChanged(bool prevValue)
+        {
+            bool newValue = AllPlayersReady;
+            if (prevValue != newValue)
+                OnAllPlayersReadyChanged?.Invoke(newValue);
+        }
 
         // ── Initialization ─────────────────────────────────────────
 
@@ -277,6 +300,8 @@ namespace xpTURN.Klotho.Network
         {
             _sessionMagic = sessionMagic;
             _randomSeed = randomSeed;
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < playerCount && i < playerIds.Count; i++)
             {
@@ -285,6 +310,8 @@ namespace xpTURN.Klotho.Network
                     p.ConnectionState = (PlayerConnectionState)playerConnectionStates[i];
                 _players.Add(p);
             }
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
             Phase = SessionPhase.Playing;   // Session is already Playing at Late Join / cold-start Reconnect time
             SaveReconnectCredentialsIfApplicable();
         }
@@ -324,7 +351,11 @@ namespace xpTURN.Klotho.Network
             // Discard cold-start Reconnect credentials on graceful session end.
             _reconnectCredentialsStore?.Clear();
 
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
             _unackedInputs.Clear();
             _sessionMagic = 0;
             _gameStartTime = 0;
@@ -514,6 +545,10 @@ namespace xpTURN.Klotho.Network
                     HandleLateJoinAccept(lateJoinMsg);
                     break;
 
+                case LateJoinNotificationMessage lateJoinNotification:
+                    HandleLateJoinNotification(peerId, lateJoinNotification);
+                    break;
+
                 case FullStateResponseMessage fullStateMsg:
                     HandleFullStateResponse(fullStateMsg);
                     break;
@@ -636,6 +671,8 @@ namespace xpTURN.Klotho.Network
                 cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
             }
 
+            int prevPlayerCount0 = _players.Count;
+            bool prevAllReady0 = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
@@ -645,6 +682,8 @@ namespace xpTURN.Klotho.Network
                     IsReady = true
                 });
             }
+            RaisePlayerCountIfChanged(prevPlayerCount0);
+            RaiseAllPlayersReadyIfChanged(prevAllReady0);
 
             _randomSeed = msg.RandomSeed;
 
@@ -670,7 +709,11 @@ namespace xpTURN.Klotho.Network
         {
             var player = _players.Find(p => p.PlayerId == msg.PlayerId);
             if (player != null)
+            {
+                bool prevReady = AllPlayersReady;
                 player.IsReady = msg.IsReady;
+                RaiseAllPlayersReadyIfChanged(prevReady);
+            }
         }
 
         private void HandleVerifiedStateMessage(VerifiedStateMessage msg)
@@ -698,6 +741,8 @@ namespace xpTURN.Klotho.Network
             _randomSeed = msg.RandomSeed;
 
             // Rebuild player list
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < msg.PlayerCount && i < msg.PlayerIds.Count; i++)
             {
@@ -710,12 +755,59 @@ namespace xpTURN.Klotho.Network
                     player.ConnectionState = (PlayerConnectionState)msg.PlayerConnectionStates[i];
                 _players.Add(player);
             }
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
 
             OnLocalPlayerIdAssigned?.Invoke(_localPlayerId);
             _engine?.ExpectFullState();
             ApplyOrPendExtraDelay(msg.RecommendedExtraDelay, ExtraDelaySource.LateJoin);
             _logger?.ZLogInformation(
                 $"[SDClientService] Late join accepted: playerId={msg.PlayerId}, playerCount={msg.PlayerCount}");
+        }
+
+        /// <summary>
+        /// Server-broadcast notification that a new player completed late-join handshake. Adds the
+        /// player to _players + fires PlayerCount / AllPlayersReady / OnPlayerJoined surfaces so UI
+        /// stays consistent with the server's roster.
+        /// </summary>
+        private void HandleLateJoinNotification(int peerId, LateJoinNotificationMessage msg)
+        {
+            // SD client only talks to the server (peerId 0). Drop messages forged from any other source.
+            if (peerId != 0)
+            {
+                _logger?.ZLogWarning($"[SDClientService][HandleLateJoinNotification] Ignored from non-server peerId={peerId}");
+                return;
+            }
+
+            // Duplicate notification (e.g. reliable retry path race) must not double-add.
+            for (int i = 0; i < _players.Count; i++)
+            {
+                if (_players[i].PlayerId == msg.PlayerId)
+                {
+                    _logger?.ZLogDebug($"[SDClientService][HandleLateJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
+
+            // PlayerName mirrors the SD host's CompleteLateJoinSync construction ($"Player{id}") so
+            // the same PlayerId reads identically across peers. Ping is unmeasurable on clients and
+            // stays at default 0.
+            var newPlayer = new PlayerInfo
+            {
+                PlayerId = msg.PlayerId,
+                PlayerName = $"Player{msg.PlayerId}",
+                IsReady = true,
+                ConnectionState = PlayerConnectionState.Connected,
+            };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+
+            OnPlayerJoined?.Invoke(newPlayer);
+
+            _logger?.ZLogInformation($"[SDClientService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
         }
 
         private void HandleFullStateResponse(FullStateResponseMessage msg)
@@ -782,6 +874,8 @@ namespace xpTURN.Klotho.Network
             _sharedClock = new SharedTimeClock(msg.SharedEpoch, msg.ClockOffset);
 
             // Rebuild player list
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < msg.PlayerCount && i < msg.PlayerIds.Count; i++)
             {
@@ -790,6 +884,8 @@ namespace xpTURN.Klotho.Network
                     player.ConnectionState = (PlayerConnectionState)msg.PlayerConnectionStates[i];
                 _players.Add(player);
             }
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
 
             _reconnectState = ReconnectState.WaitingForFullState;
             ApplyOrPendExtraDelay(msg.RecommendedExtraDelay, ExtraDelaySource.Reconnect);

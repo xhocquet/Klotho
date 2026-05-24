@@ -261,5 +261,21 @@ namespace xpTURN.Klotho.Network
         /// New player added via Late Join (playerId, joinTick)
         /// </summary>
         event Action<int, int> OnLateJoinPlayerAdded;
+
+        /// <summary>
+        /// Fired when <see cref="Phase"/> changes. Argument is the new phase. Subscribers must not
+        /// throw — exceptions surface up the setter call site (NetworkService internals).
+        /// </summary>
+        event Action<SessionPhase> OnPhaseChanged;
+
+        /// <summary>
+        /// Fired when <see cref="PlayerCount"/> changes. Argument is the new count.
+        /// </summary>
+        event Action<int> OnPlayerCountChanged;
+
+        /// <summary>
+        /// Fired when <see cref="AllPlayersReady"/> changes. Argument is the new value.
+        /// </summary>
+        event Action<bool> OnAllPlayersReadyChanged;
     }
 }

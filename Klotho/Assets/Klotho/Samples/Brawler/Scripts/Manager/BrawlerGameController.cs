@@ -3,16 +3,12 @@ using System.Collections.Generic;
 using System.Threading;
 
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 using Cysharp.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ILogger = Microsoft.Extensions.Logging.ILogger;
 
 using ZLogger;
-using ZLogger.Unity;
-using ZLogger.Providers;
-using Utf8StringInterpolation;
 
 using xpTURN.Klotho;
 using xpTURN.Klotho.Core;
@@ -24,9 +20,7 @@ using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.Unity;
 
-#if KLOTHO_FAULT_INJECTION
 using xpTURN.Klotho.Diagnostics;
-#endif
 
 namespace Brawler
 {
@@ -71,7 +65,14 @@ namespace Brawler
 
         // EVU reference. If the prefab has an EntityView, EVU automatically spawns it.
         // If null in the Inspector, the EVU hook is skipped.
-        [SerializeField] private xpTURN.Klotho.EntityViewUpdater _entityViewUpdater;
+        [SerializeField] private EntityViewUpdater _entityViewUpdater;
+
+        // Drives KlothoSession.Update / Stop teardown through Unity Update lifecycle.
+        [SerializeField] private KlothoSessionDriver _sessionDriver;
+
+        // Diagnostic F12 chain-stall hotkey. Surface kept compile-on regardless of KLOTHO_FAULT_INJECTION
+        // to keep prefab serialization stable; Attach is the only call gated by the define.
+        [SerializeField] private xpTURN.Klotho.Diagnostics.FaultInjectionHotkeyDriver _faultInjectionHotkey;
 
         [Header("Static Colliders")]
         [SerializeField] private TextAsset _staticCollidersAsset;
@@ -89,69 +90,33 @@ namespace Brawler
         private IDataAssetRegistry _assetRegistry;
 
         private KlothoSession _session;
+        private KlothoSessionFlow _flow;
         private LiteNetLibTransport _transport;
         private Camera _mainCamera;
         private CancellationTokenSource _connectCts;  // For canceling JoinGameAsync / StartSpectatorAsync
         private IReconnectCredentialsStore _credentialsStore;
-        private bool _isStopping;
+        private IKlothoModeStrategy _modeStrategy;
 
         private BrawlerInputCapture _input;
         private BrawlerSimulationCallbacks _simCallbacks;
         private BrawlerViewCallbacks _viewCallbacks;
 
-        private long _lastTicks;
         private string _replayPath = Application.dataPath + "/../Replays/brawler.rply";
-
-#if KLOTHO_FAULT_INJECTION
-        // RTT spike schedule anchor: set on the first frame Phase enters Playing.
-        // Drift across clients = each client's GameStartMessage receive jitter.
-        private float _rttScheduleAnchorTime = -1f;
-        private int _rttScheduleNextIdx;
-
-        // Disconnect schedule state.
-        private int _disconnectScheduleNextIdx;
-        // Per-entry reconnect timer: (targetReconnectTime, playerId). -1f = inactive.
-        private float _disconnectReconnectAt = -1f;
-        private int? _disconnectReconnectPlayerId;
-#endif
 
         public bool IsHost => _brawlerSettings._isHost;
         public KlothoState State => _session?.State ?? KlothoState.Idle;
         public int CurrentTick => _session?.Engine?.CurrentTick ?? 0;
-        public int Players => _session?.NetworkService?.PlayerCount ?? 0;
+        public int Players => _session?.PlayerCount ?? 0;
         public int Entities => _session?.Simulation?.Frame.Entities.Count ?? 0;
         public bool AllPlayersReady => _session?.NetworkService?.AllPlayersReady ?? false;
         public SessionPhase Phase => _session?.NetworkService?.Phase ?? SessionPhase.None;
 
-        private void Construct(ILogger logger)
-        {
-            _logger = logger;
-        }
-
         private void CreateLogger()
         {
-            // Logger factory setup
-            var loggerFactory = LoggerFactory.Create(builder =>
-            {
-                builder.SetMinimumLevel(_logLevel);
-                builder.AddZLoggerUnityDebug(); // Output logs to UnityDebug
-
-                // Output to yyyy-MM-dd_*.log; roll over when exceeding 1MB or when the date changes
-                builder.AddZLoggerRollingFile(options =>
-                {
-                    options.FilePathSelector = (dt, index) => $"Logs/Client_{dt:yyyy-MM-dd-HH-mm-ss-fff}_{index:000}.log";
-                    options.RollingInterval = RollingInterval.Day;
-                    options.RollingSizeKB = 1024 * 1024;
-                    options.UsePlainTextFormatter(formatter =>
-                    {
-                        formatter.SetPrefixFormatter($"{0}|{1:short}|", (in MessageTemplate template, in LogInfo info) => template.Format(info.Timestamp, info.LogLevel));
-                        formatter.SetExceptionFormatter((writer, ex) => Utf8String.Format(writer, $"{ex.Message}\n{ex.StackTrace}"));
-                    });
-                });
-            });
-
-            // Register the logger instance
-            _logger = loggerFactory.CreateLogger("Client");
+            _logger = KlothoLogger.CreateDefault(
+                level: _logLevel,
+                filePrefix: "Client",
+                categoryName: "Client");
             _logger?.ZLogInformation($"ZLogger logging started!");
         }
 
@@ -159,6 +124,43 @@ namespace Brawler
         {
             DontDestroyOnLoad(gameObject);
             CreateLogger();
+
+            // Driver hooks wired here so they are live even when Start() returns early via cold-start reconnect.
+            _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
+            _sessionDriver.Stopping         += OnSessionDriverStopping;
+            _sessionDriver.IdlePoll         += OnSessionDriverIdlePoll;
+        }
+
+        private void OnPreSessionUpdate(KlothoSession session, float dt)
+        {
+            if (session.State == KlothoState.Running)
+            {
+                _input.CaptureInput();
+                _input.AimDirection = GetFacingAimDirection();
+            }
+        }
+
+        private void OnSessionDriverIdlePoll() => _transport?.PollEvents();
+
+        private void OnSessionDriverStopping(KlothoSession session)
+        {
+            session.StateChanged           -= OnSessionStateChanged;
+            session.PhaseChanged           -= OnSessionPhaseChanged;
+            session.PlayerCountChanged     -= OnSessionPlayerCountChanged;
+            session.AllPlayersReadyChanged -= OnSessionAllPlayersReadyChanged;
+
+            // Diagnostic hotkey detach first — null-out only, no exception surface.
+            // Kept synchronous inside this handler so it always runs whether or not later
+            // cleanup throws.
+            _faultInjectionHotkey?.Detach();
+
+            // Cleanup that requires Engine to be alive — fires before session.Stop.
+            _viewSync.OnLocalCharacterSpawned   -= OnLocalCharacterSpawned;
+            _viewSync.OnLocalCharacterDespawned -= OnLocalCharacterDespawned;
+            _viewSync.Cleanup();
+            _entityViewUpdater?.Cleanup();
+            // engine.SaveReplayToFile is called from StopGame body after DetachAndStop returns,
+            // preserving the original Engine.Stop -> SaveReplayToFile order across both paths.
         }
 
         private void Start()
@@ -183,147 +185,85 @@ namespace Brawler
             _input = new BrawlerInputCapture();
             _input.Enable();
 
-            if (_simulationConfig.Mode != NetworkMode.ServerDriven)
+            _modeStrategy = KlothoModeStrategy.Resolve(_simulationConfig);
+            _brawlerSettings._roomId = _modeStrategy.NormalizeRoomId(_brawlerSettings._roomId);
+
+            _flow = new KlothoSessionFlow(new KlothoFlowSetup
             {
-                _brawlerSettings._roomId = -1;
-            }
+                Logger            = _logger,
+                Transport         = _transport,
+                AssetRegistry     = _assetRegistry,
+                CredentialsStore  = _credentialsStore,
+                AppVersion        = Application.version,
+                DeviceIdProvider  = new UnityDeviceIdProvider(),
+                LifecycleObserver = this,
+                CallbacksFactory  = BuildCallbacks,
+                InitialPlayerConfigFactory = () => new BrawlerPlayerConfig
+                {
+                    SelectedCharacterClass = _brawlerSettings._characterClass,
+                },
+                SpectatorTransportFactory = () => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY),
+            });
+            _flow.OnSessionCreated          += OnAnyFlowSessionCreated;
+            _flow.OnHostSessionCreated      += OnHostOrGuestSessionCreated;
+            _flow.OnGuestSessionCreated     += OnHostOrGuestSessionCreated;
+            _flow.OnReplaySessionCreated    += OnReplayOrSpectatorSessionCreated;
+            _flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated;
+
+            // Populate static fault-injection schedule before any path can short-return.
+            // OnHostOrGuestSessionCreated.AttachToSession reads this state, so it must be loaded
+            // regardless of which entry path (cold-start reconnect / host / guest) runs.
+            ApplyFaultInjection();
 
             _gameMenu.IsHost = IsHost;
-            // P2P host is not a cold-start target — host death ends the session.
-            // SD client / P2P guest are eligible for auto-reconnect.
-            bool isP2PHost = _simulationConfig.Mode == NetworkMode.P2P && _brawlerSettings._isHost;
-            if (!isP2PHost && TryAutoReconnect())
-                return;
-            _gameMenu.SetActionType(_brawlerSettings._isHost ? GameMenu.ActionType.CreateRoom : GameMenu.ActionType.JoinRoom);
-
-#if KLOTHO_FAULT_INJECTION
-            ApplyFaultInjection();
-#endif
-
-            bool TryAutoReconnect()
+            // AutoReconnect eligibility — strategy-decided.
+            // P2P host is excluded (host death ends the session); SD client / P2P guest are eligible.
+            if (_modeStrategy.IsReconnectEligible(_brawlerSettings._isHost))
             {
-                var creds = _credentialsStore.Load();
-                if (creds == null) return false;
-                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (!_credentialsStore.IsValid(creds, now, Application.version))
-                {
-                    _credentialsStore.Clear();
-                    return false;
-                }
-
-                _gameMenu.SetActionType(GameMenu.ActionType.Reconnect);
                 _connectCts = new CancellationTokenSource();
-                ReconnectAsync(_connectCts.Token).Forget();
-                return true;
+                bool started;
+                try
+                {
+                    started = KlothoAutoReconnect.TryStart(
+                        _credentialsStore,
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        Application.version,
+                        ct => ReconnectAsync(ct).Forget(),
+                        _connectCts.Token);
+                }
+                catch
+                {
+                    _connectCts.Dispose();
+                    _connectCts = null;
+                    throw;
+                }
+                if (started)
+                {
+                    _gameMenu.SetActionType(GameMenu.ActionType.Reconnect);
+                    return;
+                }
+                _connectCts.Dispose();
+                _connectCts = null;
             }
+            _gameMenu.SetActionType(_brawlerSettings._isHost ? GameMenu.ActionType.CreateRoom : GameMenu.ActionType.JoinRoom);
         }
 
-#if KLOTHO_FAULT_INJECTION
         private void ApplyFaultInjection()
         {
             var path = System.IO.Path.Combine(Application.streamingAssetsPath, "faultinjectionconfig.json");
             FaultInjectionLoader.TryLoadAndApply(path, _logger);
         }
 
-        private void UpdateRttSchedule()
-        {
-            if (Phase != SessionPhase.Playing)
-            {
-                if (_rttScheduleAnchorTime >= 0f)
-                {
-                    RttSpikeMetricsCollector.EmitSummary(_logger);
-                    _rttScheduleAnchorTime = -1f;
-                    _rttScheduleNextIdx = 0;
-                }
-                return;
-            }
-
-            if (_rttScheduleAnchorTime < 0f)
-            {
-                _rttScheduleAnchorTime = Time.unscaledTime;
-                _rttScheduleNextIdx = 0;
-                int localId = _session?.Engine?.LocalPlayerId ?? -1;
-                RttSpikeMetricsCollector.OnMatchStart(IsHost ? "host" : "guest", localId);
-            }
-
-            // Metrics collection stays active even when the schedule is empty so per-peer
-            // asymmetry scenarios (only some clients carry a schedule) still get baseline
-            // chainBreak / rollback counts from the spike-free peers.
-            if (FaultInjection.EmulatedRttSchedule.Count == 0)
-                return;
-
-            float elapsedSec = Time.unscaledTime - _rttScheduleAnchorTime;
-            var schedule = FaultInjection.EmulatedRttSchedule;
-            while (_rttScheduleNextIdx < schedule.Count && elapsedSec >= schedule[_rttScheduleNextIdx].atSec)
-            {
-                var entry = schedule[_rttScheduleNextIdx];
-                int prevRtt = FaultInjection.EmulatedRttMs;
-                FaultInjection.EmulatedRttMs = entry.rttMs;
-                _logger?.ZLogInformation($"[FaultInjection] RTT spike: {prevRtt}ms -> {entry.rttMs}ms at anchorSec={entry.atSec:F1} (tick={CurrentTick})");
-                RttSpikeMetricsCollector.OnSpike(entry.atSec, entry.rttMs);
-                _rttScheduleNextIdx++;
-            }
-        }
-
-        private void UpdateDisconnectSchedule()
-        {
-            if (Phase != SessionPhase.Playing)
-            {
-                _disconnectScheduleNextIdx = 0;
-                _disconnectReconnectAt = -1f;
-                _disconnectReconnectPlayerId = null;
-                return;
-            }
-
-            if (FaultInjection.EmulatedDisconnectSchedule.Count == 0 && _disconnectReconnectAt < 0f)
-                return;
-
-            float now = Time.unscaledTime;
-            float anchorElapsed = _rttScheduleAnchorTime >= 0f ? now - _rttScheduleAnchorTime : -1f;
-            if (anchorElapsed < 0f) return;
-
-            var schedule = FaultInjection.EmulatedDisconnectSchedule;
-            while (_disconnectScheduleNextIdx < schedule.Count && anchorElapsed >= schedule[_disconnectScheduleNextIdx].atSec)
-            {
-                var entry = schedule[_disconnectScheduleNextIdx];
-                _disconnectScheduleNextIdx++;
-
-                if (entry.playerId.HasValue)
-                {
-                    _logger?.ZLogWarning($"[FaultInjection] Disconnect peer={entry.playerId.Value} at anchorSec={entry.atSec:F1} duration={entry.durationSec:F1}s (tick={CurrentTick})");
-                    _transport.DisconnectPeer(entry.playerId.Value);
-                }
-                else
-                {
-                    foreach (int peerId in _transport.GetConnectedPeerIds())
-                    {
-                        _logger?.ZLogWarning($"[FaultInjection] Disconnect peer={peerId} at anchorSec={entry.atSec:F1} duration={entry.durationSec:F1}s (tick={CurrentTick})");
-                        _transport.DisconnectPeer(peerId);
-                    }
-                }
-
-                _disconnectReconnectAt = now + entry.durationSec;
-                _disconnectReconnectPlayerId = entry.playerId;
-            }
-
-            if (_disconnectReconnectAt >= 0f && now >= _disconnectReconnectAt)
-            {
-                _disconnectReconnectAt = -1f;
-                _logger?.ZLogWarning($"[FaultInjection] Reconnect trigger after disconnect (tick={CurrentTick})");
-                _ = ReconnectAsync(CancellationToken.None);
-            }
-        }
-#endif
-
         private void OnEnable()
         {
             _gameMenu.IpAddress = _brawlerSettings._hostAddress;
-            
+
             _gameMenu._btnHost.onClick.AddListener(OnBtnHost);
             _gameMenu._btnGuest.onClick.AddListener(OnBtnGuest);
             _gameMenu._btnAction.onClick.AddListener(OnBtnAction);
             _gameMenu._btnReplay.onClick.AddListener(StartReplay);
             _gameMenu._btnSpectator.onClick.AddListener(StartSpectator);
+            _gameMenu.IpAddressInput.onValueChanged.AddListener(OnIpAddressInputChanged);
         }
 
         private void OnDisable()
@@ -333,61 +273,46 @@ namespace Brawler
             _gameMenu._btnAction.onClick.RemoveListener(OnBtnAction);
             _gameMenu._btnReplay.onClick.RemoveListener(StartReplay);
             _gameMenu._btnSpectator.onClick.RemoveListener(StartSpectator);
+            _gameMenu.IpAddressInput.onValueChanged.RemoveListener(OnIpAddressInputChanged);
         }
 
-        private void Update()
+        // Single-shot guard — both OnDestroy and OnApplicationQuit fire on normal app exit;
+        // the second invocation must be a no-op so _transport.Disconnect / _input.Dispose are
+        // not invoked twice on the same instance.
+        private bool _teardownInvoked;
+
+        private void OnDestroy() => TeardownAll();
+        private void OnApplicationQuit() => TeardownAll();
+
+        private void TeardownAll()
         {
-            UpdateStatus();
+            if (_teardownInvoked) return;
+            _teardownInvoked = true;
 
-#if KLOTHO_FAULT_INJECTION
-            UpdateRttSchedule();
-            UpdateDisconnectSchedule();
-#endif
+            // Order matters:
+            //  1. DetachAndStop fires the Stopping hook while subscriptions are still live
+            //     (Driver.OnDestroy may run first — DetachAndStop is idempotent via Session==null).
+            //  2. Unsubscribe Driver / Flow events afterward to block post-teardown firing.
+            //  3. Cancel async work, disconnect transport, dispose input — terminal cleanup.
+            _sessionDriver?.DetachAndStop();
 
-            if (_session == null)
+            if (_sessionDriver != null)
             {
-                _transport?.PollEvents();
-                return;
+                _sessionDriver.PreSessionUpdate -= OnPreSessionUpdate;
+                _sessionDriver.Stopping        -= OnSessionDriverStopping;
+                _sessionDriver.IdlePoll        -= OnSessionDriverIdlePoll;
             }
 
-            // Real-time clock based deltaTime
-            var nowTick = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            float deltaTime = (_lastTicks > 0) ? (nowTick - _lastTicks) * 0.001f : 0f;
-            _lastTicks = nowTick;
-
-            if (State == KlothoState.Running)
+            if (_flow != null)
             {
-                _input.CaptureInput();
-                _input.AimDirection = GetFacingAimDirection();
+                _flow.OnSessionCreated          -= OnAnyFlowSessionCreated;
+                _flow.OnHostSessionCreated      -= OnHostOrGuestSessionCreated;
+                _flow.OnGuestSessionCreated     -= OnHostOrGuestSessionCreated;
+                _flow.OnReplaySessionCreated    -= OnReplayOrSpectatorSessionCreated;
+                _flow.OnSpectatorSessionCreated -= OnReplayOrSpectatorSessionCreated;
+                _flow = null;
             }
 
-            // KlothoSession.Update handles spectator transport polling + Engine.Update internally.
-            _session.Update(deltaTime);
-
-#if KLOTHO_FAULT_INJECTION
-            var engine = _session.Engine;
-            if (Keyboard.current != null && Keyboard.current.f12Key.wasPressedThisFrame && engine != null)
-            {
-                var field = typeof(KlothoEngine).GetField("_lastVerifiedTick",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                // Force lag well past threshold (default ~1300 / 2500 ticks)
-                field.SetValue(engine, engine.CurrentTick - 5000);
-                _logger?.ZLogWarning($"[Brawler][Debug] Forced chain stall: lvt={engine.LastVerifiedTick}, currentTick={engine.CurrentTick}");
-            }
-#endif
-        }
-
-        private void OnDestroy()
-        {
-            _connectCts?.Cancel();
-            _connectCts?.Dispose();
-            _connectCts = null;
-            _transport?.Disconnect();
-            _input?.Dispose();
-        }
-
-        private void OnApplicationQuit()
-        {
             _connectCts?.Cancel();
             _connectCts?.Dispose();
             _connectCts = null;
@@ -401,7 +326,11 @@ namespace Brawler
 
         private void OnBtnHost()
         {
+            // Host button is meaningful only when the mode supports a local host affordance.
+            if (!_modeStrategy.SupportsLocalHost) return;
+
             _brawlerSettings._isHost = true;
+            _gameMenu.IsHost = true;
             if (_gameMenu.CurrentAction == GameMenu.ActionType.Reconnect)
             {
                 // Cancel in-flight + clear credentials. SetActionType is left to FallbackToInitial (race-safe).
@@ -415,7 +344,12 @@ namespace Brawler
 
         private void OnBtnGuest()
         {
+            // The Host/Guest toggle is meaningful only when the mode exposes a local host
+            // affordance to flip away from. SD mode has no local host, so the toggle is a no-op.
+            if (!_modeStrategy.SupportsLocalHost) return;
+
             _brawlerSettings._isHost = false;
+            _gameMenu.IsHost = false;
             if (_gameMenu.CurrentAction == GameMenu.ActionType.Reconnect)
             {
                 _connectCts?.Cancel();
@@ -468,50 +402,36 @@ namespace Brawler
                 return;
             }
 
-            _isStopping = false;
             _logger?.ZLogInformation($"[Brawler] Hosting game");
 
-            ISimulationConfig simulationConfig = null;
+            // StartHost requires a mode that supports a local host. Reject incompatible Inspector
+            // setting up front rather than silently mutating the USimulationConfig ScriptableObject
+            // (Editor play mode persists such mutations back to the .asset file, corrupting the
+            // user's saved setting).
+            ISimulationConfig simulationConfig;
             if (_simulationConfig != null)
             {
+                if (!_modeStrategy.SupportsLocalHost)
+                {
+                    _logger?.ZLogError($"[Brawler] StartHost requires SimulationConfig.Mode = P2P (got {_modeStrategy.Mode}) — set Mode = P2P in the Inspector or use a separate P2P-host SimulationConfig asset");
+                    _gameMenu.SetActionType(GameMenu.ActionType.CreateRoom);
+                    return;
+                }
                 simulationConfig = _simulationConfig;
-                _simulationConfig.Mode = NetworkMode.P2P;
             }
             else
             {
-                simulationConfig = new SimulationConfig();
-                ((SimulationConfig)simulationConfig).Mode = NetworkMode.P2P;
+                var sc = new SimulationConfig();
+                sc.Mode = NetworkMode.P2P;
+                simulationConfig = sc;
             }
 
-            _simCallbacks = new BrawlerSimulationCallbacks(
-                _input,
-                _logger,
-                _staticColliders,
-                _navMesh,
-                _sessionConfig.MaxPlayers,
-                _brawlerSettings._botCount
-            );
-            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
-            _session = KlothoSession.Create(new KlothoSessionSetup
-            {
-                Transport = _transport,
-                Logger = _logger,
-                SimulationCallbacks = _simCallbacks,
-                ViewCallbacks = _viewCallbacks,
-                AssetRegistry = _assetRegistry,
-                SimulationConfig = simulationConfig,
-                SessionConfig = _sessionConfig,
-                LifecycleObserver = this,
-            });
-            _simCallbacks.SetNetworkService(_session.NetworkService);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            ConnectPhysicsProvider();
-#endif
+            _session = _flow.StartHost(simulationConfig, _sessionConfig);
             _session.HostGame("Game", _sessionConfig.MaxPlayers);
+
             if (!_transport.Listen(_brawlerSettings._hostAddress, _brawlerSettings._port, _sessionConfig.MaxPlayers))
             {
                 _logger?.ZLogError($"[Brawler] Failed to host on port {_brawlerSettings._port} — aborting StartHost.");
-
                 StopGame();
                 return;
             }
@@ -521,8 +441,6 @@ namespace Brawler
             {
                 SelectedCharacterClass = _brawlerSettings._characterClass,
             });
-
-            InitializeViewSync(_session.Engine, _session.Simulation);
 
             _gameMenu.SetActionType(GameMenu.ActionType.Ready);
         }
@@ -538,65 +456,20 @@ namespace Brawler
 
         private async UniTaskVoid JoinGameAsync(CancellationToken ct)
         {
-            _isStopping = false;
             _logger?.ZLogInformation($"[Brawler] Joining game");
             _gameMenu.ReconnectStatus = "Connecting...";
 
             try
             {
-                // For SD (single/multi room), send RoomHandshake before PlayerJoinMessage.
-                // RoomId=0 for single room, N for multi-room slot.
-                NetworkMessageBase preJoin = null;
-                int roomId = -1;
-                if (_simulationConfig.Mode == NetworkMode.ServerDriven)
+                _session = _modeStrategy.Mode switch
                 {
-                    roomId = _brawlerSettings._roomId;
-                    preJoin = new RoomHandshakeMessage { RoomId = roomId };
-                }
-
-                // Perform connection, handshake, and SimulationConfig reception.
-                var result = await KlothoConnectionAsync.ConnectAsync(
-                    _transport,
-                    _brawlerSettings._hostAddress, _brawlerSettings._port,
-                    ct, _logger, preJoin,
-                    deviceIdProvider: new UnityDeviceIdProvider());
-
-                // Create the session using the received Config.
-                _simCallbacks = new BrawlerSimulationCallbacks(
-                    _input,
-                    _logger,
-                    _staticColliders,
-                    _navMesh,
-                    InitialMaxPlayersGuess(),
-                    _brawlerSettings._botCount
-                );
-                _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
-                _session = KlothoSession.Create(new KlothoSessionSetup
-                {
-                    Connection = result,
-                    Logger = _logger,
-                    SimulationCallbacks = _simCallbacks,
-                    ViewCallbacks = _viewCallbacks,
-                    AssetRegistry = _assetRegistry,
-                    RoomId = roomId,  // SD: 0 for single room, N for multi-room slot. -1 for P2P.
-                    // Transport / SimulationConfig are acquired automatically from Connection
-                    CredentialsStore = _credentialsStore,
-                    AppVersion = Application.version,
-                    DeviceIdProvider = new UnityDeviceIdProvider(),
-                    LifecycleObserver = this,
-                });
-                _simCallbacks.SetNetworkService(_session.NetworkService);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                ConnectPhysicsProvider();
-#endif
-
-                // Broadcast the local player's character selection via PlayerConfig
-                _session.SendPlayerConfig(new BrawlerPlayerConfig
-                {
-                    SelectedCharacterClass = _brawlerSettings._characterClass,
-                });
-
-                InitializeViewSync(_session.Engine, _session.Simulation);
+                    NetworkMode.ServerDriven => await _flow.JoinServerDrivenAsync(
+                        _transport, _brawlerSettings._hostAddress, _brawlerSettings._port,
+                        _brawlerSettings._roomId, _sessionConfig, ct),
+                    _ => await _flow.JoinP2PAsync(
+                        _transport, _brawlerSettings._hostAddress, _brawlerSettings._port,
+                        _sessionConfig, ct),
+                };
 
                 _gameMenu.ReconnectStatus = null;
                 _gameMenu.SetActionType(GameMenu.ActionType.Ready);
@@ -619,51 +492,13 @@ namespace Brawler
 
         private async UniTaskVoid ReconnectAsync(CancellationToken ct)
         {
-            _isStopping = false;
             _logger?.ZLogInformation($"[Brawler] Cold-start reconnect");
             _gameMenu.ReconnectStatus = "Reconnecting...";
 
             try
             {
                 var creds = _credentialsStore.Load();
-                var result = await KlothoConnectionAsync.ReconnectAsync(
-                    _transport, creds, ct, _logger);
-
-                _simCallbacks = new BrawlerSimulationCallbacks(
-                    _input,
-                    _logger,
-                    _staticColliders,
-                    _navMesh,
-                    InitialMaxPlayersGuess(),
-                    _brawlerSettings._botCount
-                );
-                _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
-                _session = KlothoSession.Create(new KlothoSessionSetup
-                {
-                    Connection = result,            // Kind == Reconnect → Create branches automatically
-                    Logger = _logger,
-                    SimulationCallbacks = _simCallbacks,
-                    ViewCallbacks = _viewCallbacks,
-                    AssetRegistry = _assetRegistry,
-                    RoomId = creds.RoomId,          // SD multi-room restore; -1 for P2P / SD single room
-                    CredentialsStore = _credentialsStore,
-                    AppVersion = Application.version,
-                    DeviceIdProvider = new UnityDeviceIdProvider(),
-                    LifecycleObserver = this,
-                });
-                _simCallbacks.SetNetworkService(_session.NetworkService);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                ConnectPhysicsProvider();
-#endif
-
-                // Re-send PlayerConfig on reconnect to force-sync the last selection (intent).
-                // Even if the host/server preserves the previous PlayerConfig, the client is authoritative — idempotency assumed.
-                _session.SendPlayerConfig(new BrawlerPlayerConfig
-                {
-                    SelectedCharacterClass = _brawlerSettings._characterClass,
-                });
-
-                InitializeViewSync(_session.Engine, _session.Simulation);
+                _session = await _flow.ReconnectAsync(_transport, creds, _sessionConfig, ct);
 
                 _gameMenu.ReconnectStatus = null;
                 // ActionType transition is delegated to OnLateJoinActive (catchup completion callback).
@@ -704,59 +539,23 @@ namespace Brawler
 
             _logger?.ZLogInformation($"[Brawler] Replay started");
 
-            // (1) Load the file using a temporary ReplaySystem (without Engine, just pre-read metadata)
-            var loader = new xpTURN.Klotho.Replay.ReplaySystem(new CommandFactory(), _logger);
-            loader.LoadFromFile(_replayPath);
-            var replayData = loader.CurrentReplayData;
-            if (replayData == null)
+            try
             {
-                _logger?.ZLogError($"[Brawler] Replay load failed: {_replayPath}");
-                return;
+                _session = _flow.StartReplayFromFile(_replayPath);
+                _gameMenu.SetActionType(GameMenu.ActionType.Playing);
             }
-
-            // Restore SimulationConfig.
-            var simConfig = replayData.Metadata.ToSimulationConfig();
-            // Replay file is self-contained — fail fast on corrupt/incompatible metadata.
-            simConfig.Validate();
-
-            // For the replay path, maxPlayers/botCount are meaningless to inject into BrawlerSimulationCallbacks
-            // because bot entities are already included via InitialStateSnapshot restoration.
-            // Use the Inspector values for consistency (same source as the live path).
-            // (2) Create a Session with the restored SimulationConfig
-            _simCallbacks = new BrawlerSimulationCallbacks(
-                _input,
-                _logger,
-                _staticColliders,
-                _navMesh,
-                InitialMaxPlayersGuess(),
-                _brawlerSettings._botCount
-            );
-            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
-            _session = KlothoSession.Create(new KlothoSessionSetup
+            catch (xpTURN.Klotho.Replay.ReplayLoadException e)
             {
-                Transport = _transport,
-                Logger = _logger,
-                SimulationCallbacks = _simCallbacks,
-                ViewCallbacks = _viewCallbacks,
-                AssetRegistry = _assetRegistry,
-                SimulationConfig = simConfig,
-            });
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            ConnectPhysicsProvider();
-#endif
-            // (3) Inject the loaded replayData into the Engine — internally _randomSeed = metadata.RandomSeed is set automatically
-            _session.Engine.StartReplay(replayData);
-
-            InitializeViewSync(_session.Engine, _session.Simulation);
-            _gameMenu.SetActionType(GameMenu.ActionType.Playing);
+                _logger?.ZLogError(e, $"[Brawler] Replay load failed: {_replayPath}");
+            }
         }
 
         // ── Spectator entry ──
         //
-        // StartSpectator delegates to KlothoSpectatorAsync.CreateAsync — framework handles the
+        // StartSpectator delegates to _flow.SpectateAsync — framework handles the
         // SpectatorService / two-Config await / Engine/Simulation construction internally.
-        // The game side only supplies a CallbacksFactory that fires after SpectatorAcceptMessage
-        // delivers server-authoritative SimulationConfig + SessionConfig.
+        // The game side supplies a CallbacksFactory (BuildCallbacks) that fires after
+        // SpectatorAcceptMessage delivers server-authoritative SimulationConfig + SessionConfig.
         private void StartSpectator()
         {
             if (Phase != SessionPhase.None && Phase != SessionPhase.Disconnected)
@@ -772,41 +571,12 @@ namespace Brawler
 
         private async UniTaskVoid StartSpectatorAsync(CancellationToken ct)
         {
-            _isStopping = false;
-
             try
             {
-                var spectatorTransport = new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY);
-                _session = await KlothoSpectatorAsync.CreateAsync(new SpectatorSessionSetup
-                {
-                    Logger = _logger,
-                    AssetRegistry = _assetRegistry,
-                    Transport = spectatorTransport,
-                    HostAddress = _brawlerSettings._hostAddress,
-                    Port = _brawlerSettings._port,
-                    RoomId = _brawlerSettings._roomId,
-                    LifecycleObserver = this,
-                    // Build Sim/View callbacks AFTER SpectatorAcceptMessage delivers the server's
-                    // SessionConfig — guarantees BrawlerSimulationCallbacks(maxPlayers=...) sees the
-                    // server-authoritative value rather than the local InitialMaxPlayersGuess.
-                    CallbacksFactory = (simCfg, sessionCfg) =>
-                    {
-                        _simCallbacks = new BrawlerSimulationCallbacks(
-                            _input,
-                            _logger,
-                            _staticColliders,
-                            _navMesh,
-                            sessionCfg.MaxPlayers,
-                            _brawlerSettings._botCount);
-                        _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
-                        return new SpectatorCallbacks(_simCallbacks, _viewCallbacks);
-                    },
-                }, ct);
+                _session = await _flow.SpectateAsync(
+                    _brawlerSettings._hostAddress, _brawlerSettings._port,
+                    _brawlerSettings._roomId, ct);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                ConnectPhysicsProvider();
-#endif
-                InitializeViewSync(_session.Engine, _session.Simulation);
                 _gameMenu.SetActionType(GameMenu.ActionType.Playing);
             }
             catch (OperationCanceledException)
@@ -821,6 +591,59 @@ namespace Brawler
             }
         }
 
+        private SessionCallbacks BuildCallbacks(ISimulationConfig simCfg, ISessionConfig sessionCfg)
+        {
+            int maxPlayers = sessionCfg?.MaxPlayers ?? InitialMaxPlayersGuess();
+            _simCallbacks = new BrawlerSimulationCallbacks(
+                _input, _logger, _staticColliders, _navMesh,
+                maxPlayers, _brawlerSettings._botCount);
+            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
+            return new SessionCallbacks(_simCallbacks, _viewCallbacks);
+        }
+
+        // Common prefix — runs before any mode-specific callback.
+        private void OnAnyFlowSessionCreated(KlothoSession session)
+        {
+            _sessionDriver.Attach(session);
+
+            session.StateChanged           += OnSessionStateChanged;
+            session.PhaseChanged           += OnSessionPhaseChanged;
+            session.PlayerCountChanged     += OnSessionPlayerCountChanged;
+            session.AllPlayersReadyChanged += OnSessionAllPlayersReadyChanged;
+
+            // Initial push — events fire only on transition, so seed GameMenu from current state.
+            _gameMenu.State      = session.State;
+            _gameMenu.Phase      = session.NetworkService?.Phase ?? SessionPhase.None;
+            _gameMenu.Players    = session.PlayerCount;
+            _gameMenu.IsAllReady = session.NetworkService?.AllPlayersReady ?? false;
+        }
+
+        // Host/Guest path — preserves the pre-lift order: SetNetworkService → FI attach → InitializeViewSync.
+        private void OnHostOrGuestSessionCreated(KlothoSession session)
+        {
+            _simCallbacks.SetNetworkService(session.NetworkService);
+
+            // roleLabel is strategy-decided, not _isHost-decided. SD mode has no local host
+            // affordance (SupportsLocalHost == false) — stale Inspector _isHost = true must not
+            // leak into the diagnostic label.
+            string roleLabel = _modeStrategy.SupportsLocalHost && IsHost ? "host" : "guest";
+            xpTURN.Klotho.Diagnostics.FaultInjectionRuntime.AttachToSession(
+                session, _transport, _logger,
+                roleLabel,
+                ct => { _ = ReconnectAsync(ct); },
+                _sessionDriver);
+            _faultInjectionHotkey?.Attach(session, _logger);
+
+            InitializeViewSync(session.Engine, session.Simulation);
+        }
+
+        // Replay/Spectator path — skip SetNetworkService (no input source) and FaultInjection
+        // (main _transport is idle for these modes), but still call InitializeViewSync.
+        private void OnReplayOrSpectatorSessionCreated(KlothoSession session)
+        {
+            InitializeViewSync(session.Engine, session.Simulation);
+        }
+
         private void InitializeViewSync(KlothoEngine engine, EcsSimulation simulation)
         {
             // EVU.Initialize creates a fresh PlayerViewRegistry — must run before ViewSync.Initialize
@@ -831,25 +654,7 @@ namespace Brawler
             _viewSync.Initialize(engine, simulation, _entityViewUpdater, _logger);
             _viewSync.OnLocalCharacterSpawned += OnLocalCharacterSpawned;
             _viewSync.OnLocalCharacterDespawned += OnLocalCharacterDespawned;
-
-#if UNITY_EDITOR
-            if (xpTURN.Klotho.Unity.EcsDebugBridge.Instance != null)
-            {
-                xpTURN.Klotho.Unity.EcsDebugBridge.Instance.Register(simulation);
-                xpTURN.Klotho.Unity.EcsDebugBridge.Instance.RegisterNavMesh(_simCallbacks.NavMesh, _simCallbacks.NavQuery);
-                xpTURN.Klotho.Unity.EcsDebugBridge.Instance.RegisterNavAgentProvider(_simCallbacks.BotFSMSystem);
-            }
-#endif
         }
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private void ConnectPhysicsProvider()
-        {
-            var visualizer = UnityEngine.Object.FindAnyObjectByType<xpTURN.Klotho.Unity.Physics.FPPhysicsWorldVisualizer>();
-            if (visualizer != null)
-                visualizer.Provider = BrawlerSimSetup.PhysicsSystem;
-        }
-#endif
 
         private void OnLocalCharacterSpawned()
         {
@@ -863,8 +668,10 @@ namespace Brawler
 
         private void StopGame()
         {
-            if (_isStopping) return;
-            _isStopping = true;
+            // Re-entry guard: driver.IsStopping indicates DetachAndStop is in flight.
+            // Path 2 (external session.Stop without DetachAndStop) has driver.IsStopping == false,
+            // so StopGame executes normally and drives DetachAndStop itself.
+            if (_sessionDriver != null && _sessionDriver.IsStopping) return;
 
             _logger?.ZLogInformation($"[Brawler] Game stopped");
 
@@ -873,27 +680,22 @@ namespace Brawler
             _connectCts?.Dispose();
             _connectCts = null;
 
+            // Capture engine reference before DetachAndStop (which sets Driver.Session = null after session.Stop).
             var engine = _session?.Engine;
-
-            _viewSync.OnLocalCharacterSpawned -= OnLocalCharacterSpawned;
-            _viewSync.OnLocalCharacterDespawned -= OnLocalCharacterDespawned;
-            _viewSync.Cleanup();
-
-            // Unsubscribe EVU's engine subscription and clean up active views.
-            _entityViewUpdater?.Cleanup();
-
 
             _gameMenu.ReconnectStatus = null;
             _gameMenu.SetActionType(_brawlerSettings._isHost ? GameMenu.ActionType.CreateRoom : GameMenu.ActionType.JoinRoom);
 
-            _session?.Stop();
-            _session = null;
+            // Driver fires Stopping hook (ViewSync/EVU cleanup) → session.Stop (Engine.Stop) → OnSessionStopped chain.
+            _sessionDriver.DetachAndStop();
 
+            // SaveReplayToFile runs after Engine.Stop — preserving the original order.
+            // Path 2 (external session.Stop → OnSessionStopped → StopGame) also passes through this same location.
             // Do not save during replay playback — playback does not record commands, so overwriting could corrupt the original file
             if (engine != null && !engine.IsReplayMode)
                 engine.SaveReplayToFile(_replayPath, true);
 
-            _lastTicks = 0;
+            _session = null;
 
             _transport?.Disconnect();
         }
@@ -921,18 +723,9 @@ namespace Brawler
                 _logger?.ZLogWarning($"[Brawler] Reconnect rejected: AlreadyConnected — another device holds this PlayerId");
             }
 
-            _gameMenu.ReconnectStatus = ToUserMessage(reason);
+            _gameMenu.ReconnectStatus = ReconnectRejectReason.ToDefaultMessage(reason);
             FallbackToInitial();
         }
-
-        private static string ToUserMessage(byte reason) => reason switch
-        {
-            ReconnectRejectReason.InvalidMagic     => "Previous session has ended",
-            ReconnectRejectReason.InvalidPlayer
-            or ReconnectRejectReason.TimedOut      => "Reconnect timed out",
-            ReconnectRejectReason.AlreadyConnected => "Already connected on another device",
-            _                                       => "Reconnect failed",
-        };
 
         public void OnPlayerDisconnected(IPlayerInfo player)
         {
@@ -1007,7 +800,9 @@ namespace Brawler
         void IKlothoSessionObserver.OnCatchupComplete() => OnLateJoinActive();
 
         // Fires at the end of KlothoSession.Stop() — trigger game-side teardown.
-        // Re-entry via StopGame -> _session.Stop() is guarded by KlothoSession._stopped and BrawlerGameController._isStopping.
+        // Path 1 (StopGame → DetachAndStop → session.Stop) re-enters this; the StopGame guard
+        // (driver.IsStopping == true at this point) blocks the inner StopGame call.
+        // Path 2 (external session.Stop) enters this first; StopGame body executes normally.
         public void OnSessionStopped() => StopGame();
 
         public void OnResyncCompleted(int tick)
@@ -1053,20 +848,11 @@ namespace Brawler
         // GUI state
         // ────────────────────────────────────────────
 
-        private void UpdateStatus()
-        {
-            if (_brawlerSettings._hostAddress != _gameMenu.IpAddress)
-            {
-                _brawlerSettings._hostAddress = _gameMenu.IpAddress;
-            }
+        private void OnSessionStateChanged(KlothoState s)    => _gameMenu.State = s;
+        private void OnSessionPhaseChanged(SessionPhase p)   => _gameMenu.Phase = p;
+        private void OnSessionPlayerCountChanged(int n)      => _gameMenu.Players = n;
+        private void OnSessionAllPlayersReadyChanged(bool v) => _gameMenu.IsAllReady = v;
 
-            _gameMenu.IsHost = _brawlerSettings._isHost;
-            _gameMenu.State = State;
-            _gameMenu.Tick = CurrentTick;
-            _gameMenu.Players = Players;
-            _gameMenu.Entities = Entities;
-            _gameMenu.IsAllReady = AllPlayersReady;
-            _gameMenu.Phase = Phase;
-        }
+        private void OnIpAddressInputChanged(string addr) => _brawlerSettings._hostAddress = addr;
     }
 }

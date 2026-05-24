@@ -432,7 +432,7 @@ Changing `publish.sh` to a different RID (e.g., `linux-x64`, `win-x64`) produces
 | View / UI | `EntityViewUpdater` + `CharacterView`, etc. | None |
 | NavMesh / StaticCollider | Editor export loaded via Addressables / TextAsset | Editor export shipped alongside as `.bytes` |
 | DataAsset loading | `USimulationConfig` · `DataAssetRegistry.Build` (Unity bootstrap) | `DataAssetReader.LoadMixedCollectionFromBytes` → `DataAssetRegistry` |
-| Network | `KlothoSession.Create` + `JoinGame` | `RoomManager + RoomRouter` directly — single-room is `MaxRooms = 1`, multi-room is `MaxRooms = N`. Per-room `ServerNetworkService` is built by `RoomManager` via the injected factories |
+| Network | `KlothoSessionFlow` (5 entry points: `StartHost` / `JoinAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplay`; Flow internally calls `KlothoSession.Create` / `KlothoConnectionAsync`) | `RoomManager + RoomRouter` directly — single-room is `MaxRooms = 1`, multi-room is `MaxRooms = N`. Per-room `ServerNetworkService` is built by `RoomManager` via the injected factories. Server has no `KlothoSessionFlow` — Flow is a Unity client/host concern only |
 
 The core of determinism is **"do not configure the system set differently"**. Both client and server go through `BrawlerSimSetup`, so as long as that contract is preserved, DesyncDetector and SyncTest work correctly.
 

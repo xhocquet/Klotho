@@ -150,7 +150,7 @@ Assets/Klotho/
 │                       FPStaticCollider, FPStaticBVH, FPStaticColliderSerializer,
 │                       FPNavMesh, FPNavMeshSerializer, NavAgentComponent, FPNavAgentSystem,
 │                       DeterministicRandom, FPAnimationCurve, etc.
-├── Unity/          UKlothoBehaviour, USimulationConfig, EcsDebugBridge,
+├── Unity/          USimulationConfig, USessionConfig, EcsDebugBridge,
 │                   View/ (EntityView, EntityViewComponent, EntityViewFactory,
 │                          EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
 │                          BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
@@ -291,6 +291,7 @@ Configuration is split into two layers.
 | OnDisconnectedInputNeeded | `Action<int>` | Empty-input request for a disconnected player (playerId) |
 | OnCatchupComplete | `Action` | Late-join catchup completed |
 | OnVerifiedInputBatchReady | `Action<int, int, byte[], int>` | Verified input batch ready for spectators (startTick, tickCount, data, length) |
+| OnStateChanged | `Action<KlothoState>` | `KlothoEngine.State` transitioned (`Initial → Ready → Running → Ending → Finished` / `Aborted`). The session-level `KlothoSession.StateChanged` mirrors this so game code does not poll the engine each frame |
 
 **FrameState**:
 
@@ -372,15 +373,44 @@ KlothoSession.Create(KlothoSessionSetup) → KlothoSession
   LeaveRoom()
   SendPlayerConfig(PlayerConfigBase)
   SetReady(bool)
-  Update(float dt)   ← called from UKlothoBehaviour.Update
+  Update(float dt)   ← called from the game's MonoBehaviour.Update
   Stop()
+  IsStopped          ← teardown completed
+  PlayerCount        ← unified getter: NetworkService → SpectatorService → 0 fallback
+  StateChanged           : event Action<KlothoState>
+  PhaseChanged           : event Action<SessionPhase>
+  PlayerCountChanged     : event Action<int>
+  AllPlayersReadyChanged : event Action<bool>
 
-KlothoSessionSetup (Create input)
+KlothoSessionFlow (recommended construction layer)
+  StartHost(simCfg, sessionCfg)                                              → P2P host (sync)
+  JoinP2PAsync(transport, host, port, sessionCfg, ct)                        → P2P guest
+  JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)       → SD client
+  ReconnectAsync(transport, creds, sessionConfigSeed, ct)                    → cold-start reconnect (creds: PersistedReconnectCredentials)
+  SpectateAsync(host, port, roomId, ct)                                      → spectator (factory transport)
+  StartReplayFromFile(path)                                                  → file → KlothoSession (throws ReplayLoadException)
+  OnSessionCreated / OnHostSessionCreated / OnGuestSessionCreated /
+  OnReplaySessionCreated / OnSpectatorSessionCreated                         → mode-dispatched callbacks
+
+KlothoSessionDriver (MonoBehaviour adapter — Runtime.Unity)
+  PreSessionUpdate / PostSessionUpdate / Stopping / IdlePoll                 → lifecycle hooks
+  Attach(session) / DetachAndStop()                                          → ownership transfer
+  IsStopping                                                                 → in-flight teardown guard (replaces game-side _isStopping)
+
+KlothoSessionSetup (Create input — direct path)
   Logger · SimulationCallbacks · ViewCallbacks
   Transport (host) / Connection (guest)
   SimulationConfig · AssetRegistry
   RandomSeed · MaxPlayers · AllowLateJoin · Reconnect/LateJoin/Resync/Countdown parameters
+
+KlothoFlowSetup (Flow input — bundles long-lived dependencies)
+  Logger · Transport · AssetRegistry · CredentialsStore · AppVersion · DeviceIdProvider
+  LifecycleObserver (IKlothoSessionObserver) · CallbacksFactory(simCfg, sessionCfg)
+  InitialPlayerConfigFactory : Func<PlayerConfigBase>   ← auto SendPlayerConfig on guest / reconnect
+  SpectatorTransportFactory  : Func<INetworkTransport>  ← invoked from SpectateAsync(host,port,roomId,ct)
 ```
+
+**Teardown invariant**: `IKlothoSessionObserver.OnSessionStopped` is invoked from both teardown entry paths (Driver.DetachAndStop → Session.Stop and direct Session.Stop). In both cases `driver.IsStopping == true` at the firing site, so game code uses a single guard `if (_sessionDriver.IsStopping) return;` at every re-entry candidate site (game-side stop button, OnApplicationQuit, OnDestroy). The library-level guards (`KlothoSession._stopped`, `KlothoSessionDriver._stopping`) ensure idempotency even if the game forgets the guard.
 
 **NetworkMode**:
 
@@ -932,6 +962,7 @@ INetworkTransport:
 | ReconnectReject | 72 | Reconnect reject |
 | LateJoinAccept | 73 | Late-join accept |
 | RecommendedExtraDelayUpdate | 74 | Dynamic InputDelay push (server → client) when smoothed RTT change crosses the asymmetric UP/DOWN threshold. Seed value also carried inline on SyncComplete / LateJoinAccept / ReconnectAccept |
+| LateJoinNotification | 75 | Host (P2P) / server (SD) → existing peers and spectators when a late-joiner is admitted. Recipients update their player list (`OnPlayerJoined` / `PlayerCount`) so mid-match joins propagate without a poll. Forged-sender guards: P2P rejects when `IsHost` is true; SD rejects when `peerId != 0`. Idempotent — duplicate notifications for the same player are dropped against the local roster |
 | **Server-Driven Mode** | | |
 | ClientInput | 80 | Client → server input |
 | VerifiedState | 81 | Server → client verified state |
@@ -1072,6 +1103,9 @@ Both host and guest peers run the watchdog locally — either can self-abort whe
 | OnReconnectFailed | `Action<byte>` | Reconnect failed (Guest). The byte is a `ReconnectRejectReason` value (`InvalidMagic`, `InvalidPlayer`, `TimedOut`, `AlreadyConnected`, `DeviceMismatch`, `TransportStartFailed`, `MaxRetries`, `Unknown`). Use `ReconnectRejectReason.ToName(reason)` for a symbolic name, `ReconnectRejectReason.RequiresUserChoice(reason)` to detect `AlreadyConnected`. Cold-start paths surface the same reason via `ReconnectFailedException.Reason` |
 | OnReconnected | `Action` | Reconnect completed (Guest) |
 | OnLateJoinPlayerAdded | `Action<int, int>` | Late-join player added (playerId, joinTick) |
+| OnPhaseChanged | `Action<SessionPhase>` | Session phase transitioned (`Lobby → Countdown → Running → Ended`). The session-level `KlothoSession.PhaseChanged` mirrors this so game code does not poll the service each frame |
+| OnPlayerCountChanged | `Action<int>` | Active player count changed (joins, leaves, late-joins). Forwarded to `KlothoSession.PlayerCountChanged`. `ISpectatorService.OnPlayerCountChanged` is the parallel surface for spectator sessions; `KlothoSession.SubscribeStateForwarders` raises the same session-level event from either source |
+| OnAllPlayersReadyChanged | `Action<bool>` | All-players-ready gate flipped (true when every active player has ready-signaled; false on subsequent join). Forwarded to `KlothoSession.AllPlayersReadyChanged` |
 
 ### 9.6 Extended Network Subsystems
 

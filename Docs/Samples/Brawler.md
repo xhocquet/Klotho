@@ -419,31 +419,65 @@ public partial class BrawlerPlayerConfig : PlayerConfigBase
 
 `BrawlerGameController` calls `session.SendPlayerConfig(new BrawlerPlayerConfig { ... })` just before Ready; the host broadcasts it to all peers immediately on receipt. At spawn time, each peer looks up the `BrawlerPlayerConfig` for its `PlayerId` to decide `SpawnCharacterCommand.CharacterClass`.
 
-### 11-3. KlothoSession.Create
+### 11-3. KlothoSessionFlow
 
-Called from `BrawlerGameController` (a MonoBehaviour).
+`BrawlerGameController` uses the `KlothoSessionFlow` builder to expose 6 mode-dispatched entry points (`StartHost` / `JoinP2PAsync` / `JoinServerDrivenAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplayFromFile`) through a single facade. Flow internally absorbs `KlothoSession.Create` / `CreateSpectator` / `KlothoConnectionAsync` / `ReplaySystem.LoadFromFile` — the game supplies a single `CallbacksFactory` plus two optional factories on `KlothoFlowSetup`.
 
 ```csharp
-var session = KlothoSession.Create(new KlothoSessionSetup
+_flow = new KlothoSessionFlow(new KlothoFlowSetup
 {
-    Logger              = _logger,
-    SimulationCallbacks = _simCallbacks,       // BrawlerSimulationCallbacks
-    ViewCallbacks       = _viewCallbacks,      // BrawlerViewCallbacks
-    Transport           = _transport,          // LiteNetLibTransport (host) / null (guest)
-    Connection          = _connection,         // ConnectionResult (guest)
-    SimulationConfig    = _uSimulationConfig,  // USimulationConfig asset
-    AssetRegistry       = _assetRegistry,      // DataAssetRegistry
-    MaxPlayers          = _settings.MaxPlayers,
-    AllowLateJoin       = true,
+    Logger            = _logger,
+    Transport         = _transport,
+    AssetRegistry     = _assetRegistry,
+    CredentialsStore  = _credentialsStore,
+    AppVersion        = Application.version,
+    DeviceIdProvider  = new UnityDeviceIdProvider(),
+    LifecycleObserver = this,
+    CallbacksFactory  = BuildCallbacks,   // (simCfg, sessionCfg) → (BrawlerSim/View)Callbacks
+
+    // Auto SendPlayerConfig on guest / reconnect paths.
+    InitialPlayerConfigFactory = () => new BrawlerPlayerConfig { /* ... */ },
+
+    // Library instantiates the spectator transport.
+    SpectatorTransportFactory  = () => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY),
 });
 
-GetComponent<UKlothoBehaviour>().Bind(session);
-session.HostGame("Room01", maxPlayers: 2);  // or session.JoinGame(...)
+// Per-mode session-created callbacks alongside the generic OnSessionCreated.
+_flow.OnSessionCreated          += OnFlowSessionCreated;
+_flow.OnHostSessionCreated      += OnHostOrGuestSessionCreated;
+_flow.OnGuestSessionCreated     += OnHostOrGuestSessionCreated;
+_flow.OnReplaySessionCreated    += OnReplayOrSpectatorSessionCreated;
+_flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated;
+
+// One of the 6 entry points (mode branching via KlothoModeStrategy.Resolve)
+_session = _flow.StartHost(_uSimulationConfig, _uSessionConfig);
+// or: await _flow.JoinP2PAsync(_transport, host, port, sessionConfig, ct);
+// or: await _flow.JoinServerDrivenAsync(_transport, host, port, roomId, sessionConfig, ct);
+// or: await _flow.SpectateAsync(host, port, roomId, ct);   // no-transport overload — factory invoked internally
+// or: _session = _flow.StartReplayFromFile(_replayPath);   // throws ReplayLoadException
+
+_sessionDriver.Attach(_session);   // KlothoSessionDriver drives Update / Stop
 ```
+
+The Driver + Flow + Helpers combination shrinks the controller entry points and removes the per-controller mode-by-flag branching / Update-tick / teardown / PlayerConfig-send / Replay-load / spectator-transport-creation boilerplate. `KlothoSession.Create` direct calls and the transport-injection `SpectateAsync(transport, ...)` overload are reserved as escape hatches — for advanced users whose architecture does not fit the Flow pattern (see [Docs/GameDevAPI.md](../GameDevAPI.md) Escape Hatch section).
+
+State updates flow through events, not polling. `BrawlerGameController` subscribes once on `OnFlowSessionCreated`:
+
+```csharp
+private void OnFlowSessionCreated(KlothoSession session)
+{
+    session.StateChanged           += OnSessionStateChanged;
+    session.PhaseChanged           += OnSessionPhaseChanged;
+    session.PlayerCountChanged     += OnSessionPlayerCountChanged;
+    session.AllPlayersReadyChanged += OnSessionAllPlayersReadyChanged;
+}
+```
+
+Re-entrant teardown is guarded centrally by `KlothoSessionDriver.IsStopping` — the controller no longer carries `_isStopping` / `_teardownInvoked` flags. `FaultInjection*` calls are made without `#if KLOTHO_FAULT_INJECTION` guards (the library surface is macro-agnostic; undefined builds return null stubs at zero runtime cost).
 
 ---
 
-## 12. Phase 9 — Unity View Layer (IMP24)
+## 12. Phase 9 — Unity View Layer
 
 ### 12-1. Three-Tier Structure
 
@@ -567,7 +601,6 @@ BrawlerScene
 │   └── ItemSpawnZone × 3
 ├── [MovingPlatforms] — PlatformView assigned
 ├── BrawlerGameController
-│   ├── UKlothoBehaviour
 │   ├── BrawlerGameController
 │   ├── BrawlerViewSync
 │   └── EntityViewUpdater

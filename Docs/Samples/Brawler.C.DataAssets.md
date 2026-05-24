@@ -214,10 +214,11 @@ IDataAssetRegistryBuilder builder = new DataAssetRegistry();
 builder.RegisterRange(_dataAssets);
 _assetRegistry = builder.Build();
 
-_session = KlothoSession.Create(new KlothoSessionSetup {
-    AssetRegistry = _assetRegistry,   // ← injected as Frame.AssetRegistry
+_flow = new KlothoSessionFlow(new KlothoFlowSetup {
+    AssetRegistry = _assetRegistry,   // ← injected as Frame.AssetRegistry via KlothoSession
     // ...
 });
+// Flow forwards AssetRegistry to KlothoSession on each entry-point call (StartHost / JoinAsync / ...).
 ```
 
 Or register individually:

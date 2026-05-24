@@ -231,6 +231,9 @@ namespace xpTURN.Klotho.Network
                     _matchId = _playingStartMs;
                 }
                 _logger?.ZLogInformation($"[ServerNetworkService] Session phase: {_phase}, SharedClock: {SharedClock.SharedNow}ms");
+
+                if (prevPhase != value)
+                    OnPhaseChanged?.Invoke(value);
             }
         }
 
@@ -273,6 +276,25 @@ namespace xpTURN.Klotho.Network
         public event Action<int, byte[], long> OnServerFullStateReceived;
         public event Action<int, long> OnBootstrapBegin;
         public event Action<int, int, RejectionReason> OnCommandRejected;
+
+        // State-change events (fired on transition only).
+        public event Action<SessionPhase> OnPhaseChanged;
+        public event Action<int> OnPlayerCountChanged;
+        public event Action<bool> OnAllPlayersReadyChanged;
+
+        private void RaisePlayerCountIfChanged(int prevCount)
+        {
+            int newCount = _players.Count;
+            if (prevCount != newCount)
+                OnPlayerCountChanged?.Invoke(newCount);
+        }
+
+        private void RaiseAllPlayersReadyIfChanged(bool prevValue)
+        {
+            bool newValue = AllPlayersReady;
+            if (prevValue != newValue)
+                OnAllPlayersReadyChanged?.Invoke(newValue);
+        }
 
         // ── Input collector access (used by engine) ────────────────────
 
@@ -413,7 +435,11 @@ namespace xpTURN.Klotho.Network
             _transport.OnPeerConnected -= HandlePeerConnected;
             _transport.OnPeerDisconnected -= HandlePeerDisconnected;
 
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Clear();
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
             _peerToPlayer.Clear();
             _peerDeviceIds.Clear();
             _peerStates.Clear();
@@ -1117,7 +1143,9 @@ namespace xpTURN.Klotho.Network
             var player = _players.Find(p => p.PlayerId == msg.PlayerId);
             if (player != null)
             {
+                bool prevReady = AllPlayersReady;
                 player.IsReady = msg.IsReady;
+                RaiseAllPlayersReadyIfChanged(prevReady);
             }
 
             // Relay to other peers
@@ -1327,16 +1355,24 @@ namespace xpTURN.Klotho.Network
                         }
                         else
                         {
+                            int prevCount = _players.Count;
+                            bool prevReady = AllPlayersReady;
                             _players.Remove(player);
                             _inputCollector.RemovePlayer(playerId);
                             _engine?.NotifyPlayerLeft(playerId);
                             OnPlayerLeft?.Invoke(player);
+                            RaisePlayerCountIfChanged(prevCount);
+                            RaiseAllPlayersReadyIfChanged(prevReady);
                         }
                     }
                     else
                     {
+                        int prevCount = _players.Count;
+                        bool prevReady = AllPlayersReady;
                         _players.Remove(player);
                         OnPlayerLeft?.Invoke(player);
+                        RaisePlayerCountIfChanged(prevCount);
+                        RaiseAllPlayersReadyIfChanged(prevReady);
                     }
                 }
                 _peerToPlayer.Remove(peerId);
@@ -1460,7 +1496,11 @@ namespace xpTURN.Klotho.Network
                 IsReady = false,
                 Ping = avgRtt
             };
+            int prevCount = _players.Count;
+            bool prevReady = AllPlayersReady;
             _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevCount);
+            RaiseAllPlayersReadyIfChanged(prevReady);
 
             _peerStates[peerId] = new ServerPeerInfo
             {
@@ -1613,10 +1653,14 @@ namespace xpTURN.Klotho.Network
                     var player = _players.Find(p => p.PlayerId == playerId);
                     if (player != null)
                     {
+                        int prevCount = _players.Count;
+                        bool prevReady = AllPlayersReady;
                         _players.Remove(player);
                         _inputCollector.RemovePlayer(playerId);
                         _engine?.NotifyPlayerLeft(playerId);
                         OnPlayerLeft?.Invoke(player);
+                        RaisePlayerCountIfChanged(prevCount);
+                        RaiseAllPlayersReadyIfChanged(prevReady);
                     }
                 }
             }

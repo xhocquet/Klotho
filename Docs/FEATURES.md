@@ -36,6 +36,18 @@ Supports client-side prediction, rollback, and frame synchronization.
   - **Replay initial-state snapshot auto-inject** — `Engine.StartReplay` automatically replays `InitialStateSnapshot` from the metadata, removing the game-side `OnGameStart += InjectInitialStateSnapshot` wiring
   - **Pause-grace StopCommand auto-inject** — during the `EndGracePolicy.Pause` grace window, the engine emits the per-tick `StopCommand` automatically; games no longer hand-roll the grace-window command stream
   - **DynamicInputDelayPolicy** — built-in client-reactive PastTick + rollback-burst escalation policy (formerly hand-rolled in the sample); thresholds sourced from `SessionConfig`, attached automatically on non-host sessions
+  - **KlothoSession state-change events** — `StateChanged` / `PhaseChanged` / `PlayerCountChanged` / `AllPlayersReadyChanged`. Replaces per-frame status polling — game code subscribes once on session creation. Backed by `KlothoEngine.OnStateChanged` and `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` (forwarded from both network-service and spectator-service paths)
+  - **KlothoSession.PlayerCount** — unified read-only getter (`NetworkService → SpectatorService → 0` fallback) so host / guest / spectator all expose the same player-count surface
+- **KlothoSessionFlow / KlothoFlowSetup** — recommended session construction layer
+  - 6 mode-dispatched entry points: `StartHost` / `JoinP2PAsync` / `JoinServerDrivenAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplayFromFile`. The umbrella `JoinAsync(transport, host, port, preJoin, roomId, sessionCfg, ct)` is retained as an `[Obsolete]` shim — scheduled removal: 0.3.0
+  - **Per-mode session-created callbacks** — `OnHostSessionCreated` / `OnGuestSessionCreated` / `OnReplaySessionCreated` / `OnSpectatorSessionCreated` alongside the generic `OnSessionCreated`. Removes the `engine.IsReplayMode` / `engine.IsSpectatorMode` 2-flag mode-by-flag branching from game-side dispatch
+  - **`InitialPlayerConfigFactory`** — auto `SendPlayerConfig` on guest / reconnect paths (skipped on spectator / replay). Invoked per-session so it always observes the latest user selection
+  - **`SpectatorTransportFactory`** — invoked from `SpectateAsync(host, port, roomId, ct)` so the library owns the transport instance. The transport-injection overload remains as the escape hatch
+  - **`StartReplayFromFile(path)`** — 1-call file-to-session entry (throws `xpTURN.Klotho.Replay.ReplayLoadException` on load failure). Replaces game-side `ReplaySystem.LoadFromFile` + `simConfig.Validate()` + `StartReplay` boilerplate
+- **IKlothoModeStrategy** — per-mode dispatcher interface with P2P / ServerDriven implementations and a `KlothoModeStrategy.Resolve(simCfg)` static factory. Game code branches on the strategy rather than inspecting `simCfg.Mode` directly
+- **KlothoSessionDriver.IsStopping** — externalized in-flight teardown guard (the MonoBehaviour adapter already owned the flag internally). Game code replaces per-game `_isStopping` / `_teardownInvoked` flags with `if (_sessionDriver.IsStopping) return;` at every re-entry candidate site; `OnSessionStopped` invariant — `driver.IsStopping == true` regardless of which entry path (Driver.DetachAndStop / Session.Stop direct) initiated teardown
+- **LateJoinNotificationMessage** — host (P2P) / server (SD) broadcasts to existing peers and spectators on mid-match late-join so they update `OnPlayerJoined` / `PlayerCount` without polling. Forged-sender guards (P2P `!IsHost`, SD `peerId != 0`) + idempotency against the local roster. NetworkMessageType=75
+- **FaultInjection macro-agnostic surface** — `FaultInjectionRuntime.AttachToSession` / `FaultInjectionLoader.TryLoadAndApply` / `FaultInjection` static collections are callable without `#if KLOTHO_FAULT_INJECTION` guard. Undefined builds return null / false / empty stub. Library-internal reader bodies retain their macro guards — release cost stays at zero
 - **KlothoEngine / IKlothoEngine** — engine state machine (Idle, WaitingForPlayers, BootstrapPending, Running, Paused, Ending, Finished, Aborted)
   - **NetworkMode** — selectable P2P / ServerDriven topology
   - Partials: Rollback, TimeSync, ErrorCorrection, FullStateResync, LateJoin, Reconnect, Spectator, ServerDriven, ServerDrivenClient, Replay, FrameVerification, SyncTest, EventHelpers
@@ -229,15 +241,16 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 ## Unity Integration
 
-- **UKlothoBehaviour** — MonoBehaviour-based Klotho integration base class
 - **USimulationConfig** — ScriptableObject SimulationConfig (inspector-editable, implements `ISimulationConfig`)
 - **USessionConfig** — ScriptableObject SessionConfig (inspector-editable, implements `ISessionConfig`). All 16 session-level fields (MaxPlayers/MinPlayers/MaxSpectators, late-join/reconnect policy, chain-stall watchdog, countdown, match-end grace) author in one asset; `KlothoSessionSetup.SessionConfig` replaces the previous mirror-field set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/…)
 - **EcsDebugBridge** — editor debug bridge
-- **View layer** (IMP24)
+- **View layer**
   - **EntityView / EntityViewComponent** — entity-view base class and view-component interface
   - **EntityViewFactory / IEntityViewPool / DefaultEntityViewPool** — view creation / pooling. The base `EntityViewFactory` resolves `BindBehaviour` / `ViewFlags` from a 5-flag decision (rolls up `RequiresBindBehaviour`, `HasViewComponentInterpolation`, `RequiresErrorCorrection`, `RequiresSnapshotInterpolation`, `RequiresViewComponentBinding`) — games override only when a sample-specific override is required
   - **EntityViewUpdater** — simulation state → view sync; owns the built-in **PlayerViewRegistry\<TView\>** (lifted from sample). EVU drives `Register` / `Unregister` automatically from `OwnerComponent` add/remove; game code uses `Get(playerId)` for lookup and subscribes to `OnViewRegistered` / `OnLocalViewRegistered` / `OnLocalViewUnregistered` for player-view event hooks
-  - **KlothoConnectionAsync / KlothoSpectatorAsync** — UniTask-based async-connect / async-spectator-bootstrap helpers (live under `Assets/Klotho/Unity/`)
+  - **KlothoSessionFlow / KlothoSessionFlowAsync** — recommended 5-entry-point builder for session creation (`StartHost` / `JoinAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplay`). Sync primitives in Runtime.Core, UniTask wrappers in Runtime.Unity. `KlothoConnectionAsync` (Runtime.Unity) remains as an escape-hatch primitive — Flow consumes it internally.
+  - **KlothoSessionDriver** — MonoBehaviour adapter that drives `KlothoSession.Update` / `Stop` through Unity's Update loop; exposes `PreSessionUpdate` / `PostSessionUpdate` / `Stopping` / `IdlePoll` hooks for game-side input capture and cleanup
+  - **KlothoAutoReconnect / KlothoLogger** — cold-start credentials gate + ZLogger.Unity + Rolling File factory (Runtime.Unity helpers)
   - **VerifiedFrameInterpolator** — interpolation based on verified frames
   - **BindBehaviour** — component-binding MonoBehaviour
   - **UpdatePositionParameter / ViewFlags / ErrorVisualState** — auxiliary types

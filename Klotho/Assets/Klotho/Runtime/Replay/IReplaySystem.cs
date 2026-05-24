@@ -198,7 +198,14 @@ namespace xpTURN.Klotho.Replay
         /// <summary>Save the replay to a file. If dumpJson=true, also writes a .json debug dump to the same path.</summary>
         void SaveToFile(string filePath, bool dumpJson = false);
 
-        /// <summary>Load a replay from a file</summary>
+        /// <summary>
+        /// Loads a replay file from disk. Throws <see cref="ReplayLoadException"/> on failure
+        /// (file-not-found, file-read I/O, malformed payload). On success the loaded data is
+        /// accessible via <see cref="CurrentReplayData"/>; on failure <see cref="CurrentReplayData"/>
+        /// is left unchanged (previous value retained — see implementation note on atomic commit).
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="filePath"/> is null or empty.</exception>
+        /// <exception cref="ReplayLoadException">Any replay-load failure.</exception>
         void LoadFromFile(string filePath);
 
         /// <summary>Returns the current replay data (when recording or when loaded)</summary>

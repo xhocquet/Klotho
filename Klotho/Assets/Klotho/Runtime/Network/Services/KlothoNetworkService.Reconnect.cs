@@ -348,9 +348,13 @@ namespace xpTURN.Klotho.Network
                 var player = _players.Find(p => p.PlayerId == playerId);
                 if (player != null)
                 {
+                    int prevPlayerCount = _players.Count;
+                    bool prevAllReady = AllPlayersReady;
                     _players.Remove(player);
                     _engine?.NotifyPlayerLeft(playerId);
                     OnPlayerLeft?.Invoke(player);
+                    RaisePlayerCountIfChanged(prevPlayerCount);
+                    RaiseAllPlayersReadyIfChanged(prevAllReady);
                 }
             }
         }
@@ -504,6 +508,8 @@ namespace xpTURN.Klotho.Network
 
         private void RebuildPlayerList(int playerCount, List<int> playerIds, List<byte> connectionStates)
         {
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
             _players.Clear();
             for (int i = 0; i < playerCount; i++)
             {
@@ -514,6 +520,8 @@ namespace xpTURN.Klotho.Network
                 };
                 _players.Add(player);
             }
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
         }
 
         private void HandleReconnectReject(ReconnectRejectMessage msg)
