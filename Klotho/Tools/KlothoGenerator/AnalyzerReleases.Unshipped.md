@@ -12,6 +12,7 @@ KLSG_DA002 | KlothoGenerator.DataAsset | Error | Missing IDataAsset
 KLSG_DA003 | KlothoGenerator.DataAsset | Error | Missing int constructor
 KLSG_DA004 | KlothoGenerator.DataAsset | Warning | Ambiguous constructor
 KLSG_DA005 | KlothoGenerator.DataAsset | Error | Duplicate DataAsset TypeId
+KLSG_DA006 | KlothoGenerator.DataAsset | Error | Mixed user/generated DataAsset members (ctor(int) and AssetId property must be authored together)
 KLOTHO_STRUCT_LAYOUT_MISSING | KlothoGenerator.ECS | Error | Missing [StructLayout(Sequential, Pack=4)] on KlothoComponent (IMP-25 §15 D1)
 KLOTHO_INTPTR_FORBIDDEN | KlothoGenerator.ECS | Error | IntPtr/UIntPtr field forbidden in KlothoComponent (platform-variable size)
 KLOTHO_EMPTY_STRUCT_SIZE | KlothoGenerator.ECS | Error | Empty KlothoComponent tag struct requires Size=1 (Mono DivideByZero guard)

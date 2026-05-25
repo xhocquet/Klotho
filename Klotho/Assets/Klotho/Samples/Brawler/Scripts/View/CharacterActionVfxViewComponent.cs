@@ -10,21 +10,17 @@ namespace Brawler
     /// View component that toggles Attack/Skill VFX using event flow only.
     /// Decides Play/Stop via predicted/confirmed/canceled events instead of state-based SetActive polling.
     ///
-    /// Unified actor handling (no actor branching):
-    ///   - All actors play at OnEventPredicted AND OnEventConfirmed.
-    ///     DiffRollbackEvents / DispatchVerifiedEventsPartial dedupe hash-matching pairs,
-    ///     so double-play does not occur in normal cases.
-    ///   - On rollback mismatch: Canceled fires Stop first, then Confirmed re-plays the corrected action.
-    ///   - HandlePlay guards against stale Play (action already ended) via ActionLockTicks check —
-    ///     prevents VFX leak when DiffRollback fires Confirmed Play after Synced Stop already passed
-    ///     in late-rollback (rollback delay > ActionLock duration) cases.
+    /// Attack/Skill triggers use <see cref="EngineEventOneShot"/> — Predicted+Confirmed fire onPlay
+    /// (hash-deduped by the engine), Canceled fires Stop, and the lateGuard skips stale Play when
+    /// ActionLockTicks has already dropped to 0 (late-rollback case → prevents VFX leak).
     ///
     /// Stop timing:
     ///   - OnUpdateView polls ActionLockTicks 1→0 edge for actor-agnostic immediate Stop.
     ///     This aligns Predicted Play with Predicted Stop for all actors, preventing the
     ///     1.1~1.5x extension that would occur if Stop relied solely on Synced ActionCompletedEvent
     ///     (verified delay D ticks late vs Predicted Play time).
-    ///   - OnSyncedEvent (ActionCompletedEvent) acts as a verified-time fallback Stop.
+    ///   - OnSyncedEvent (ActionCompletedEvent) acts as a verified-time fallback Stop — preserved as
+    ///     a separate event channel outside the OneShot helper scope.
     /// </summary>
     public class CharacterActionVfxViewComponent : EntityViewComponent
     {
@@ -35,14 +31,28 @@ namespace Brawler
         // Polling Stop state — detects ActionLockTicks edge (>0 → 0).
         private int _prevActionLockTicks;
 
+        private EngineEventSubscription _attackSub;
+        private EngineEventSubscription _skillSub;
+
         public override void OnActivate(FrameRef frame)
         {
             // Pool reuse handling — subscribe/unsubscribe paired in OnActivate/OnDeactivate. With only one OnInitialize call,
             // subscription is missed on re-Rent (already unsubscribed in OnDeactivate).
-            Engine.OnEventPredicted += OnEventPredicted;
-            Engine.OnEventConfirmed += OnEventConfirmed;
-            Engine.OnEventCanceled  += OnEventCanceled;
-            Engine.OnSyncedEvent    += OnSyncedEvent;
+            _attackSub = EngineEventOneShot.Subscribe<AttackActionEvent>(
+                Engine,
+                filter:    e => e.Attacker.Index == EntityRef.Index,
+                onPlay:    e => PlayAttack(e.AttackerPosition, e.AimDirection),
+                onCancel:  _ => StopAll(),
+                lateGuard: HasActiveAction);
+
+            _skillSub = EngineEventOneShot.Subscribe<SkillActionEvent>(
+                Engine,
+                filter:    e => e.Caster.Index == EntityRef.Index,
+                onPlay:    e => PlaySkill(e.ClassIndex, e.SkillSlot, e.CasterPosition, e.AimDirection, e.TargetPosition),
+                onCancel:  _ => StopAll(),
+                lateGuard: HasActiveAction);
+
+            Engine.OnSyncedEvent += OnSyncedEvent;
 
             _prevActionLockTicks = 0;
             StopAll();
@@ -50,35 +60,15 @@ namespace Brawler
 
         public override void OnDeactivate()
         {
+            _attackSub?.Dispose();
+            _skillSub?.Dispose();
+            _attackSub = null;
+            _skillSub  = null;
+
             if (Engine != null)
-            {
-                Engine.OnEventPredicted -= OnEventPredicted;
-                Engine.OnEventConfirmed -= OnEventConfirmed;
-                Engine.OnEventCanceled  -= OnEventCanceled;
-                Engine.OnSyncedEvent    -= OnSyncedEvent;
-            }
+                Engine.OnSyncedEvent -= OnSyncedEvent;
 
             StopAll();
-        }
-
-        // ── Unified dispatch handlers (actor-agnostic) ──
-
-        private void OnEventPredicted(int tick, SimulationEvent evt)
-        {
-            HandlePlay(evt);
-        }
-
-        private void OnEventConfirmed(int tick, SimulationEvent evt)
-        {
-            HandlePlay(evt);
-        }
-
-        private void OnEventCanceled(int tick, SimulationEvent evt)
-        {
-            if (evt is AttackActionEvent atk && atk.Attacker.Index == EntityRef.Index)
-                StopAll();
-            else if (evt is SkillActionEvent skl && skl.Caster.Index == EntityRef.Index)
-                StopAll();
         }
 
         private void OnSyncedEvent(int tick, SimulationEvent evt)
@@ -104,20 +94,14 @@ namespace Brawler
             _prevActionLockTicks = c.ActionLockTicks;
         }
 
-        private void HandlePlay(SimulationEvent evt)
+        // Late-dispatch guard — skip stale Play when action has already ended in the latest frame.
+        // Late rollback (rollback delay > ActionLock duration) can cause DiffRollback to fire Confirmed
+        // Play after Synced Stop has already passed; without this guard the VFX would leak permanently.
+        private bool HasActiveAction()
         {
-            // Late-dispatch guard — skip stale Play when action has already ended in the latest frame.
-            // Late rollback (rollback delay > ActionLock duration) can cause DiffRollback to fire Confirmed
-            // Play after Synced Stop has already passed; without this guard the VFX would leak permanently.
             var frame = Engine.PredictedFrame.Frame;
-            if (frame == null || !frame.Has<CharacterComponent>(EntityRef)) return;
-            ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(EntityRef);
-            if (c.ActionLockTicks <= 0) return;
-
-            if (evt is AttackActionEvent atk && atk.Attacker.Index == EntityRef.Index)
-                PlayAttack(atk.AttackerPosition, atk.AimDirection);
-            else if (evt is SkillActionEvent skl && skl.Caster.Index == EntityRef.Index)
-                PlaySkill(skl.ClassIndex, skl.SkillSlot, skl.CasterPosition, skl.AimDirection, skl.TargetPosition);
+            if (frame == null || !frame.Has<CharacterComponent>(EntityRef)) return false;
+            return frame.GetReadOnly<CharacterComponent>(EntityRef).ActionLockTicks > 0;
         }
 
         // ── Play / Stop internal logic ──

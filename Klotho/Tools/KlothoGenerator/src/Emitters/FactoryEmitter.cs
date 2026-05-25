@@ -15,7 +15,8 @@ namespace xpTURN.Klotho.Generator.Emitters
                 ? types.Where(t => t.Category == TypeCategory.Entity && t.TypeId.HasValue).ToList()
                 : new List<SerializableTypeInfo>();
             var commands = types.Where(t => t.Category == TypeCategory.Command && t.TypeId.HasValue).ToList();
-            var messages = types.Where(t => t.Category == TypeCategory.Message && t.MessageTypeEnum != null).ToList();
+            var messages = types.Where(t => t.Category == TypeCategory.Message
+                                         && (t.MessageTypeEnum != null || t.MessageTypeRawValue.HasValue)).ToList();
 
             if (entities.Count == 0 && commands.Count == 0 && messages.Count == 0)
                 return null;
@@ -95,7 +96,7 @@ namespace xpTURN.Klotho.Generator.Emitters
                     sb.AppendLine("        {");
                     foreach (var m in messages)
                     {
-                        sb.AppendLine($"            serializer.RegisterMessageType<{m.FullTypeName}>(NetworkMessageType.{m.MessageTypeEnum});");
+                        sb.AppendLine($"            serializer.RegisterMessageType<{m.FullTypeName}>({MessageTypeIdLiteral(m)});");
                     }
                     sb.AppendLine("        }");
                     sb.AppendLine("    }");
@@ -119,7 +120,7 @@ namespace xpTURN.Klotho.Generator.Emitters
                     sb.AppendLine("        {");
                     foreach (var m in messages)
                     {
-                        sb.AppendLine($"            MessageRegistry.Register<{m.FullTypeName}>(NetworkMessageType.{m.MessageTypeEnum});");
+                        sb.AppendLine($"            MessageRegistry.Register<{m.FullTypeName}>({MessageTypeIdLiteral(m)});");
                     }
                     sb.AppendLine("        }");
                     sb.AppendLine("    }");
@@ -129,5 +130,10 @@ namespace xpTURN.Klotho.Generator.Emitters
 
             return sb.ToString();
         }
+
+        private static string MessageTypeIdLiteral(SerializableTypeInfo m)
+            => m.MessageTypeEnum != null
+                ? $"NetworkMessageType.{m.MessageTypeEnum}"
+                : $"(NetworkMessageType){m.MessageTypeRawValue.Value}";
     }
 }

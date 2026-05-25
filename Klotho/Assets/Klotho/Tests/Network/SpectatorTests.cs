@@ -165,6 +165,7 @@ namespace xpTURN.Klotho.Network.Tests
             public void Start() { }
             public void Update(float deltaTime) { }
             public void InputCommand(ICommand command, int extraDelay = 0) { }
+            public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void ApplyExtraDelay(int delay, ExtraDelaySource source) { }
             public void EscalateExtraDelay(int step, int max) { }
             public void Stop() { }
@@ -284,7 +285,7 @@ namespace xpTURN.Klotho.Network.Tests
             public void Initialize(INetworkTransport transport, ICommandFactory commandFactory, ILogger logger) { }
             public void CreateRoom(string roomName, int maxPlayers) { }
             public void JoinRoom(string roomName) { }
-            public void LeaveRoom() { }
+            public void LeaveRoom(bool keepReconnectCredentials = false) { }
             public void SetReady(bool ready) { }
             public void SendCommand(ICommand command) { }
             public void RequestCommandsForTick(int tick) { }

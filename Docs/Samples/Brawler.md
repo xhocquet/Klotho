@@ -4,7 +4,7 @@
 > Purpose: a practical authoring guide for a **2–4 player top-down brawler sample** that exercises every core Klotho feature (ECS · deterministic physics/navigation · Bot HFSM · DataAsset · View layer · Replay · ServerDriven).
 > Audience: game developers building a Brawler-style multiplayer match sample from scratch.
 
-> Last updated: 2026-04-24
+> Last updated: 2026-05-25 (`BrawlerSimulationCallbacks.cs` 330 → 250 LOC / `CharacterView.cs` 144 → 102 LOC / `BrawlerSimSetup.PhysicsSystem` static slot removed / 9 DataAsset ctor boilerplate removed + 22 callsite magic-id → `Get<T>()`)
 
 ---
 

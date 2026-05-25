@@ -31,9 +31,9 @@ namespace Brawler
 
         private CharacterView[] _characterViews;
 
-        private KlothoEngine _engine;
+        private IKlothoEngine _engine;
 
-        public void Initialize(KlothoEngine engine)
+        public void Initialize(IKlothoEngine engine)
         {
             if (_engine != null)
             {

@@ -29,6 +29,9 @@ namespace xpTURN.Klotho.Generator.Emitters
             sb.AppendLine($"{indent}    public const int TYPE_ID = {info.TypeId};");
             sb.AppendLine();
 
+            EmitAssetIdMembers(sb, info, indent);
+            EmitSynthesizedCtors(sb, info, indent);
+
             EmitGetSerializedSize(sb, info, indent);
             sb.AppendLine();
             EmitSerialize(sb, info, indent);
@@ -44,6 +47,33 @@ namespace xpTURN.Klotho.Generator.Emitters
             EmitRegistrar(sb, info);
 
             return sb.ToString();
+        }
+
+        private static void EmitAssetIdMembers(StringBuilder sb, DataAssetTypeInfo info, string indent)
+        {
+            if (info.HasUserAssetIdProperty) return;
+
+            sb.AppendLine($"{indent}    private readonly int _assetId;");
+            sb.AppendLine($"{indent}    public int AssetId => _assetId;");
+            sb.AppendLine();
+        }
+
+        private static void EmitSynthesizedCtors(StringBuilder sb, DataAssetTypeInfo info, string indent)
+        {
+            if (!info.HasUserCtor)
+            {
+                sb.AppendLine($"{indent}    public {info.TypeName}(int assetId)");
+                sb.AppendLine($"{indent}    {{");
+                sb.AppendLine($"{indent}        _assetId = assetId;");
+                sb.AppendLine($"{indent}    }}");
+                sb.AppendLine();
+            }
+
+            if (info.AssetIdFromAttribute.HasValue && !info.HasUserParameterlessCtor)
+            {
+                sb.AppendLine($"{indent}    public {info.TypeName}() : this({info.AssetIdFromAttribute.Value}) {{ }}");
+                sb.AppendLine();
+            }
         }
 
         private static void EmitGetSerializedSize(StringBuilder sb, DataAssetTypeInfo info, string indent)

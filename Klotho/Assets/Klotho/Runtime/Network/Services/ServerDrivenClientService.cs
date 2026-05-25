@@ -342,14 +342,16 @@ namespace xpTURN.Klotho.Network
             }
         }
 
-        public void LeaveRoom()
+        public void LeaveRoom(bool keepReconnectCredentials = false)
         {
             _transport.OnDataReceived -= HandleDataReceived;
             _transport.OnConnected -= HandleConnected;
             _transport.OnDisconnected -= HandleDisconnected;
 
             // Discard cold-start Reconnect credentials on graceful session end.
-            _reconnectCredentialsStore?.Clear();
+            // Process-shutdown paths pass keepReconnectCredentials=true so a relaunch can Reconnect.
+            if (!keepReconnectCredentials)
+                _reconnectCredentialsStore?.Clear();
 
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;

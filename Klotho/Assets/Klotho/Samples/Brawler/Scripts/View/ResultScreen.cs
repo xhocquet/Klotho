@@ -16,7 +16,7 @@ namespace Brawler
         [SerializeField] private TMP_Text   _resultLabel;
         [SerializeField] private TMP_Text   _reasonLabel;
 
-        private KlothoEngine _engine;
+        private IKlothoEngine _engine;
 
         private void Start()
         {
@@ -24,7 +24,7 @@ namespace Brawler
                 _panel.SetActive(false);
         }
 
-        public void Initialize(KlothoEngine engine)
+        public void Initialize(IKlothoEngine engine)
         {
             if (_engine != null)
                 _engine.OnSyncedEvent -= OnSyncedEvent;

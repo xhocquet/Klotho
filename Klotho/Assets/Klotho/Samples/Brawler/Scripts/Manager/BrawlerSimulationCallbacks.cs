@@ -1,11 +1,10 @@
-using Microsoft.Extensions.Logging;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
-using ZLogger;
+using System;
 
 using UnityEngine;
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
+using xpTURN.Klotho.ECS.Systems;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Navigation;
 using xpTURN.Klotho.Network;
@@ -19,7 +18,6 @@ namespace Brawler
         : ISimulationCallbacks, INavMeshProvider, INavAgentProvider, IFPPhysicsProviderSource
     {
         private readonly BrawlerInputCapture _input;
-        private readonly ILogger _logger;
         private readonly List<FPStaticCollider> _staticColliders;
         private readonly FPNavMesh _navMesh;
         private readonly List<IDataAsset> _dataAssets;
@@ -27,29 +25,26 @@ namespace Brawler
         private readonly int _botCount;
 
         private IKlothoEngine _engine;
-        private int _lastSpawnAttemptTick = -1;
-        private const int SpawnRetryInterval = 20; // ~500ms at 40Hz
+        private EcsSimulation _simulation;
 
-        // Spawn cmd extra lead. Escalates by SPAWN_DELAY_STEP on each PastTick reject.
-        // Monotonic latch until match boundary (BrawlerGameController re-news _simCallbacks).
-        private int _extraSpawnDelay = 0;
-        private const int SPAWN_DELAY_STEP = 4;     // ~100ms at 40Hz, one escalation step.
-        private const int SPAWN_DELAY_MAX  = 40;    // ~1s, cap. Hit triggers warning + latch.
+        // Outstanding reliable handle for the local player's SpawnCharacterCommand. Resolved either by
+        // wire-level Duplicate ack (framework) or by state-driven Confirm() (OnPollInput when the
+        // character entity becomes visible in the simulation frame).
+        private IReliableCommandHandle _spawnHandle;
 
-        // Cap-hit Error log fires once only to avoid burst on repeated post-cap rejects.
-        private bool _capHitLogged = false;
-        // Post-cap reject counter — diagnostic visibility for retry frequency after cap.
-        private int _capHitRejectCount = 0;
+        // Bound delegate cached once in ctor — retry path reuses the same delegate instance, avoiding
+        // per-retry closure allocation. Factory acquires a fresh CommandPool instance each invocation
+        // so InputBuffer never holds two slots referencing the same cmd.
+        private Func<ICommand> _spawnBuilder;
 
         public FPNavMesh NavMesh { get { return _navMesh; } }
         public FPNavMeshQuery NavQuery { get; private set; }
         public BotFSMSystem BotFSMSystem { get; private set; }
 
         public INavAgentSnapshotProvider NavAgentSnapshotProvider => BotFSMSystem;
-        public IFPPhysicsWorldProvider PhysicsProvider => BrawlerSimSetup.PhysicsSystem;
+        public IFPPhysicsWorldProvider PhysicsProvider => _simulation?.GetSystem<PhysicsSystem>();
 
         public BrawlerSimulationCallbacks(BrawlerInputCapture input,
-                                          ILogger logger,
                                           List<FPStaticCollider> colliders,
                                           FPNavMesh navMesh,
                                           int maxPlayers,
@@ -57,20 +52,21 @@ namespace Brawler
                                           List<IDataAsset> dataAssets = null)
         {
             _input = input;
-            _logger = logger;
             _staticColliders = colliders;
             _navMesh = navMesh;
             _dataAssets = dataAssets;
 
             _maxPlayers = maxPlayers;
             _botCount = botCount;
-        }
 
-        // Called from BrawlerGameController — bot spawn is determined by botCount, so unused
-        public void SetNetworkService(IKlothoNetworkService _) { }
+            // Cache bound delegate once — retry path reuses this instance, no per-call closure alloc.
+            _spawnBuilder = BuildSpawnCommand;
+        }
 
         public void RegisterSystems(EcsSimulation simulation)
         {
+            _simulation = simulation;
+
             BotFSMSystem botFSMSystem = null;
 
             var query       = new FPNavMeshQuery(_navMesh, null);
@@ -87,7 +83,7 @@ namespace Brawler
 
             BrawlerSimSetup.RegisterSystems(
                 simulation,
-                _logger,
+                simulation.Frame.Logger,
                 _dataAssets,
                 _staticColliders,
                 botFSMSystem
@@ -103,45 +99,28 @@ namespace Brawler
         {
             if (_engine == null) return;
 
-            // Duplicate path: bypass HasOwnCharacter so spawn cmd is re-sent on cooldown even
-            // after spawn success → server's HandleSpawn hits TryFindCharacter guard → Duplicate reject
-            // → CommandRejectedMessage unicast back to client.
-            // IMPORTANT: spawn cmd and move cmd both target (CurrentTick + InputDelayTicks). If we let
-            // the regular Move/Attack send proceed in the same poll, it overwrites the spawn cmd in the
-            // InputBuffer (single cmd per (tick, playerId)) — defeating the force retry. Return early
-            // on the spawn-send poll so the spawn cmd survives the round-trip.
-            if (xpTURN.Klotho.Diagnostics.FaultInjection.ForceSpawnRetryPlayerIds.Contains(playerId))
-            {
-                if (_lastSpawnAttemptTick < 0 || tick >= _lastSpawnAttemptTick + SpawnRetryInterval)
-                {
-                    _logger?.ZLogWarning($"[FaultInjection][Brawler] Forced spawn retry: playerId={playerId}, tick={tick}");
-                    SendSpawnCommand(_engine);
-                    return;
-                }
-            }
-
             // ECS frame is the single source of truth — listener-pattern flags are vulnerable to rollback noise.
             var frame = ((EcsSimulation)_engine.Simulation).Frame;
             if (!HasOwnCharacter(frame, playerId))
             {
-                if (_lastSpawnAttemptTick < 0 || tick >= _lastSpawnAttemptTick + SpawnRetryInterval)
-                    SendSpawnCommand(_engine);
-
-                // Exclude (a) the spawn send tick itself, and (b) the tick whose emptyMove target tick
-                // equals the spawn cmd's target tick. (b) happens at T1 = T0 + _extraSpawnDelay during
-                // escalation: emptyMove target (T1 + InputDelay) collides with spawn target
-                // (T0 + InputDelay + _extraSpawnDelay) and would overwrite the spawn cmd in the server's
-                // InputBuffer (one command per (tick, playerId) slot, last write wins). Without this
-                // guard the spawn cmd never reaches HandleSpawn → no PastTick reject → no escalation.
-                if (_lastSpawnAttemptTick >= 0
-                    && tick > _lastSpawnAttemptTick
-                    && tick != _lastSpawnAttemptTick + _extraSpawnDelay)
+                // Framework's reliability tracker handles retry / escalation / fault injection for the
+                // outstanding spawn cmd. Emit an empty-move filler only when it does not collide with
+                // the outstanding spawn cmd's target slot (single cmd per (tick, playerId)).
+                if (_spawnHandle != null && !_spawnHandle.WouldCollideAt(tick))
                 {
                     var emptyMove = CommandPool.Get<MoveInputCommand>();
                     emptyMove.PlayerId = playerId;
                     sender.Send(emptyMove);
                 }
                 return;
+            }
+
+            // Character exists — resolve the outstanding spawn handle (state-driven ack, faster than
+            // waiting for the server's Duplicate reject round-trip).
+            if (_spawnHandle != null && !_spawnHandle.IsResolved)
+            {
+                _spawnHandle.Confirm();
+                _spawnHandle = null;
             }
 
             // Move command (InputCommand sets Tick to CurrentTick+InputDelay)
@@ -179,58 +158,6 @@ namespace Brawler
         public void SetEngine(IKlothoEngine engine)
         {
             _engine = engine;
-            engine.OnCommandRejected += HandleCommandRejected;
-        }
-
-        // Receives only LocalPlayer's command rejections. CommandRejectedMessage is unicast from
-        // server to the originating client and dispatched through KlothoEngine.HandleCommandRejected,
-        // so the playerId is implicitly _engine.LocalPlayerId.
-        private void HandleCommandRejected(int tick, int cmdTypeId, RejectionReason reason)
-        {
-            if (cmdTypeId != SpawnCharacterCommand.TYPE_ID) return;
-
-            // Spawn cmd duplicate-rejected: server already has the character. Clear the cooldown latch
-            // so the next OnPollInput re-evaluates the state-driven query without waiting out the cooldown.
-            // The state-driven query is the primary self-heal path; this hint just shortens the latency.
-            if (reason == RejectionReason.Duplicate)
-            {
-                _lastSpawnAttemptTick = -1;
-                _logger?.ZLogInformation($"[Brawler] Spawn duplicate-rejected: tick={tick} — cooldown cleared");
-                return;
-            }
-
-            // Spawn cmd past-tick rejected: the cmd's target tick fell behind server's _lastExecutedTick.
-            // Escalate spawn-only lead by SPAWN_DELAY_STEP so the next retry overshoots far enough.
-            // Cooldown is cleared so the next OnPollInput re-issues immediately with the new lead.
-            if (reason == RejectionReason.PastTick)
-            {
-                _lastSpawnAttemptTick = -1;
-
-                if (_extraSpawnDelay < SPAWN_DELAY_MAX)
-                {
-                    _extraSpawnDelay += SPAWN_DELAY_STEP;
-                    _logger?.ZLogWarning($"[Brawler] Spawn past-tick rejected: tick={tick}, extraSpawnDelay={_extraSpawnDelay}");
-                }
-                else
-                {
-                    // Cap reached. Emit Error once, then track post-cap rejects at Debug level for diagnostics.
-                    if (!_capHitLogged)
-                    {
-                        _capHitLogged = true;
-                        _logger?.ZLogError($"[Brawler] Spawn past-tick reject loop: extraSpawnDelay capped at {SPAWN_DELAY_MAX} — server may be unreachable or RTT abnormal");
-                    }
-                    _capHitRejectCount++;
-                    _logger?.ZLogDebug($"[Brawler] Spawn past-tick post-cap: count={_capHitRejectCount}, tick={tick}");
-                }
-            }
-        }
-
-        /// <summary>
-        /// Reset spawn-cooldown after a FullState resync — ECS reconstruction invalidates the previous attempt tick.
-        /// </summary>
-        public void OnResyncCompleted(int _)
-        {
-            _lastSpawnAttemptTick = -1;
         }
 
         private static bool HasOwnCharacter(Frame frame, int playerId)
@@ -294,37 +221,30 @@ namespace Brawler
 
         public void SendSpawnCommand(IKlothoEngine engine)
         {
-            int playerId = engine.LocalPlayerId;
-            // Intentional spawn-cmd drop. Mark the cooldown as if we sent so the retry
-            // schedule still advances — this exercises the rejection self-heal path.
-            if (xpTURN.Klotho.Diagnostics.FaultInjection.DropSpawnCommandPlayerIds.Contains(playerId))
-            {
-                _lastSpawnAttemptTick = engine.CurrentTick;
-                _logger?.ZLogWarning($"[FaultInjection][Brawler] Spawn cmd dropped: playerId={playerId}, tick={engine.CurrentTick}");
-                return;
-            }
-            var rules    = ((EcsSimulation)engine.Simulation).Frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
-            int spawnIdx = playerId % rules.SpawnPositions.Length;
-            FPVector3 pos  = rules.SpawnPositions[spawnIdx];
+            // Framework's reliability tracker owns retry / escalation / drop / log. SendSpawnCommand
+            // is the one-shot entry point — initial send + handle creation. Subsequent retries run
+            // inside the tracker via _spawnBuilder factory invocation.
+            _spawnHandle = engine.IssueOnce(_spawnBuilder);
+        }
 
-            // Query character selection from local player's BrawlerPlayerConfig (network-shared data)
-            // If PlayerConfig has not arrived yet, fallback to 0 (Warrior) — Spawn retry loop will be called again
-            var playerConfig = engine.GetPlayerConfig<BrawlerPlayerConfig>(playerId);
+        // Factory body invoked by the reliability tracker on initial send AND every retry. Each call
+        // acquires a fresh CommandPool instance — framework takes ownership. Payload is re-evaluated
+        // every invocation, so PlayerConfig arriving after the first attempt is picked up by retries.
+        private ICommand BuildSpawnCommand()
+        {
+            int playerId = _engine.LocalPlayerId;
+            var rules    = ((EcsSimulation)_engine.Simulation).Frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
+            int spawnIdx = playerId % rules.SpawnPositions.Length;
+            FPVector3 pos = rules.SpawnPositions[spawnIdx];
+
+            // Query character selection from local player's BrawlerPlayerConfig (network-shared data).
+            // If PlayerConfig has not arrived yet, fallback to 0 (Warrior) — next retry re-evaluates.
+            var playerConfig = _engine.GetPlayerConfig<BrawlerPlayerConfig>(playerId);
 
             var cmd = CommandPool.Get<SpawnCharacterCommand>();
             cmd.CharacterClass = playerConfig?.SelectedCharacterClass ?? 0;
             cmd.SpawnPosition  = new FPVector2(pos.x, pos.z);
-            // Track in CurrentTick axis so OnPollInput's `tick` arg (= CurrentTick) lines up with cooldown comparison.
-            // PlayerId / Tick are set by InputCommand (CurrentTick + InputDelayTicks).
-            int prevAttemptTick = _lastSpawnAttemptTick;
-            _lastSpawnAttemptTick = engine.CurrentTick;
-            engine.InputCommand(cmd, extraDelay: _extraSpawnDelay);
-
-            int targetTick = engine.CurrentTick + engine.InputDelay + _extraSpawnDelay;
-            if (prevAttemptTick < 0)
-                _logger?.ZLogInformation($"[Brawler] Spawn cmd (initial): playerId={playerId}, tick={targetTick}, extraSpawnDelay={_extraSpawnDelay}");
-            else
-                _logger?.ZLogWarning($"[Brawler] Spawn cmd (retry after cooldown): playerId={playerId}, tick={targetTick}, ticksSinceLast={engine.CurrentTick - prevAttemptTick}, extraSpawnDelay={_extraSpawnDelay}");
+            return cmd;
         }
     }
 }

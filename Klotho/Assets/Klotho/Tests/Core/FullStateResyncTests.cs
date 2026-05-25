@@ -120,7 +120,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void Initialize(INetworkTransport transport, ICommandFactory commandFactory, ILogger logger) { }
             public void CreateRoom(string roomName, int maxPlayers) { }
             public void JoinRoom(string roomName) { }
-            public void LeaveRoom() { }
+            public void LeaveRoom(bool keepReconnectCredentials = false) { }
             public void SetReady(bool ready) { }
             public void SendCommand(ICommand command) { }
             public void RequestCommandsForTick(int tick) { }

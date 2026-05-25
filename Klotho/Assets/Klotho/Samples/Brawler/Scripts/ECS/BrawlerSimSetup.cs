@@ -74,7 +74,7 @@ namespace Brawler
         //                                              collides with a LateJoiner that lands on maxPlayers.
         static void SpawnBots(ref Frame frame, int maxPlayers, int botCount, ulong worldSeed)
         {
-            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
+            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
             var stats  = new CharacterStatsAsset[4];
             for (int i = 0; i < 4; i++)
                 stats[i] = frame.AssetRegistry.Get<CharacterStatsAsset>(1100 + i);
@@ -120,8 +120,6 @@ namespace Brawler
             }
         }
 
-        public static PhysicsSystem PhysicsSystem { get; private set; }
-
         public static void RegisterSystems(EcsSimulation simulation, ILogger logger,
                                            List<IDataAsset> dataAssets = null,
                                            List<FPStaticCollider> staticColliders = null,
@@ -159,15 +157,15 @@ namespace Brawler
             simulation.AddSystem(new TopdownMovementSystem(events), SystemPhase.Update);
             simulation.AddSystem(new ActionLockSystem(), SystemPhase.Update);
             simulation.AddSystem(new KnockbackSystem(events), SystemPhase.Update);
-            PhysicsSystem = new PhysicsSystem(256, FPVector3.Zero);
-            PhysicsSystem.SetSkipStaticGroundResponse(true);
+            var physicsSystem = new PhysicsSystem(256, FPVector3.Zero);
+            physicsSystem.SetSkipStaticGroundResponse(true);
             if (staticColliders != null)
-                PhysicsSystem.LoadStaticColliders("BrawlerScene", staticColliders);
-            simulation.AddSystem(PhysicsSystem, SystemPhase.Update);
-            platformerCommandSystem.SetRayCaster(PhysicsSystem);
+                physicsSystem.LoadStaticColliders("BrawlerScene", staticColliders);
+            simulation.AddSystem(physicsSystem, SystemPhase.Update);
+            platformerCommandSystem.SetRayCaster(physicsSystem);
             if (botFSMSystem != null)
-                botFSMSystem.SetRayCaster(PhysicsSystem);
-            simulation.AddSystem(new TrapTriggerSystem(PhysicsSystem, events), SystemPhase.Update);
+                botFSMSystem.SetRayCaster(physicsSystem);
+            simulation.AddSystem(new TrapTriggerSystem(physicsSystem, events), SystemPhase.Update);
             simulation.AddSystem(new SkillCooldownSystem(events), SystemPhase.Update);
             simulation.AddSystem(new BoundaryCheckSystem(events), SystemPhase.Update);
             simulation.AddSystem(new ItemSpawnSystem(events), SystemPhase.Update);
@@ -176,7 +174,7 @@ namespace Brawler
             simulation.AddSystem(new TimerSystem(events), SystemPhase.Update);
 
             // PostUpdate — landing clamp, then game-over detection
-            simulation.AddSystem(new GroundClampSystem(PhysicsSystem), SystemPhase.PostUpdate);
+            simulation.AddSystem(new GroundClampSystem(physicsSystem), SystemPhase.PostUpdate);
             simulation.AddSystem(new GameOverSystem(events), SystemPhase.PostUpdate);
 
             // LateUpdate — event dispatch
@@ -191,12 +189,12 @@ namespace Brawler
             int[] skillIds = { 1200, 1201, 1210, 1211, 1220, 1221, 1230, 1231 };
             var assets = new List<IDataAsset>
             {
-                new BrawlerGameRulesAsset(1001),
-                new CombatPhysicsAsset(1300),
-                new BasicAttackConfigAsset(1301),
-                new ItemConfigAsset(1400),
-                new MovementPhysicsAsset(1500),
-                new BotBehaviorAsset(1600),
+                new BrawlerGameRulesAsset(),
+                new CombatPhysicsAsset(),
+                new BasicAttackConfigAsset(),
+                new ItemConfigAsset(),
+                new MovementPhysicsAsset(),
+                new BotBehaviorAsset(),
                 new BotDifficultyAsset(1700),
                 new BotDifficultyAsset(1701),
                 new BotDifficultyAsset(1702),

@@ -55,7 +55,7 @@ namespace Brawler
         // ────────────────────────────────────────────
         void TrySpawnItem(ref Frame frame)
         {
-            var config = frame.AssetRegistry.Get<ItemConfigAsset>(1400);
+            var config = frame.AssetRegistry.Get<ItemConfigAsset>();
 
             if (frame.Tick % config.SpawnIntervalTicks != 0) return;
 

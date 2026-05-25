@@ -16,7 +16,11 @@ namespace xpTURN.Klotho.Core
         /// <summary>
         /// Fired once per session, immediately after <see cref="KlothoSession"/> is fully constructed
         /// and the framework-side lifecycle observer is subscribed. The game wires per-session state
-        /// here: <c>SimulationCallbacks.SetNetworkService</c>, FaultInjection attach, view initialization, etc.
+        /// here: FaultInjection attach, view initialization, etc.
+        ///
+        /// Simulation callbacks that need the <see cref="Network.IKlothoNetworkService"/> handle should
+        /// implement <see cref="INetworkServiceReceiver"/> — the framework dispatches automatically on
+        /// host/guest entry just before the mode-specific callback fires.
         ///
         /// Exception policy (lifecycle transition, mirrors <c>KlothoSessionDriver.Stopping</c>):
         /// the framework logs the exception, calls <c>session.Stop()</c>, and rethrows — a half-wired
@@ -201,6 +205,16 @@ namespace xpTURN.Klotho.Core
             try
             {
                 OnSessionCreated?.Invoke(session);
+
+                // Auto-inject network service to opt-in callbacks on host/guest entry. Replay/spectator
+                // paths skip via the kind gate (replay's NetworkService is non-null but inputless; the
+                // null check is a defensive second gate).
+                if ((kind == SessionEntryKind.Host || kind == SessionEntryKind.Guest)
+                    && session.NetworkService != null
+                    && session.SimulationCallbacks is INetworkServiceReceiver recv)
+                {
+                    recv.SetNetworkService(session.NetworkService);
+                }
 
                 // Auto-send PlayerConfig on guest entry paths only (Normal / LateJoin / Reconnect
                 // through CreateForConnection). Host is excluded because IsHost / LocalPlayerId are

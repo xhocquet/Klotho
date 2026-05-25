@@ -15,6 +15,7 @@ namespace xpTURN.Klotho.Core
     public sealed class KlothoSession : IKlothoSession
     {
         public KlothoEngine Engine { get; private set; }
+        IKlothoEngine IKlothoSession.Engine => Engine;
         public EcsSimulation Simulation { get; private set; }
         public IKlothoNetworkService NetworkService { get; private set; }
         public CommandFactory CommandFactory { get; private set; }
@@ -149,7 +150,7 @@ namespace xpTURN.Klotho.Core
             Engine.InputCommand(command);
         }
 
-        public void Stop()
+        public void Stop(bool keepReconnectCredentials = false)
         {
             if (_stopped) return;
             _stopped = true;
@@ -205,7 +206,7 @@ namespace xpTURN.Klotho.Core
             else
             {
                 Engine.Stop();
-                NetworkService.LeaveRoom();
+                NetworkService.LeaveRoom(keepReconnectCredentials);
             }
 
             // Notify game so it can perform its own teardown (transport disconnect, session

@@ -12,13 +12,9 @@ namespace Brawler
     /// The UseSkill trigger is reset on the edge where ActionLockTicks changes from positive to 0,
     /// and VFX SetActive is handled exclusively by CharacterActionVfxViewComponent.
     ///
-    /// Unified actor handling (no actor branching):
-    ///   - All actors trigger at OnActionPredicted AND OnActionConfirmed.
-    ///     DiffRollbackEvents dedupes hash-matching pairs, so double-trigger does not occur in normal cases.
-    ///   - On rollback mismatch: Canceled resets the trigger first, then Confirmed re-triggers the corrected animation.
-    ///   - HandlePlay guards against stale triggers (action already ended) via ActionLockTicks check —
-    ///     prevents trigger fire when DiffRollback dispatches Confirmed Play after the action's lifecycle has ended
-    ///     (late-rollback case).
+    /// Attack/Skill triggers use <see cref="EngineEventOneShot"/> — Predicted+Confirmed fire onPlay (hash-deduped
+    /// by the engine), Canceled resets the trigger, and the lateGuard skips stale Play when ActionLockTicks has
+    /// already dropped to 0 (late-rollback case).
     /// </summary>
     public class CharacterAnimatorViewComponent : EntityViewComponent
     {
@@ -35,6 +31,9 @@ namespace Brawler
 
         private int _prevActionLockTicks;
 
+        private EngineEventSubscription _attackSub;
+        private EngineEventSubscription _skillSub;
+
         public override void OnInitialize()
         {
             if (_animator == null)
@@ -46,54 +45,37 @@ namespace Brawler
             _prevActionLockTicks = 0;
 
             // Pool reuse handling — subscribe/unsubscribe paired in OnActivate/OnDeactivate.
-            Engine.OnEventPredicted += OnActionPredicted;
-            Engine.OnEventConfirmed += OnActionConfirmed;
-            Engine.OnEventCanceled  += OnActionCanceled;
+            _attackSub = EngineEventOneShot.Subscribe<AttackActionEvent>(
+                Engine,
+                filter:    e => e.Attacker.Index == EntityRef.Index,
+                onPlay:    _ => PlayAttackAnimation(),
+                onCancel:  _ => CancelActionTrigger(),
+                lateGuard: HasActiveAction);
+
+            _skillSub = EngineEventOneShot.Subscribe<SkillActionEvent>(
+                Engine,
+                filter:    e => e.Caster.Index == EntityRef.Index,
+                onPlay:    e => PlaySkillAnimation(e.ClassIndex, e.SkillSlot),
+                onCancel:  _ => CancelActionTrigger(),
+                lateGuard: HasActiveAction);
         }
 
         public override void OnDeactivate()
         {
-            if (Engine != null)
-            {
-                Engine.OnEventPredicted -= OnActionPredicted;
-                Engine.OnEventConfirmed -= OnActionConfirmed;
-                Engine.OnEventCanceled  -= OnActionCanceled;
-            }
+            _attackSub?.Dispose();
+            _skillSub?.Dispose();
+            _attackSub = null;
+            _skillSub  = null;
         }
 
-        // ── Unified dispatch handlers (actor-agnostic) ──
-
-        private void OnActionPredicted(int tick, SimulationEvent evt)
+        // Late-dispatch guard — skip stale trigger when action has already ended in the latest frame.
+        // Late rollback (rollback delay > ActionLock duration) can cause DiffRollback to fire Confirmed
+        // Play after the action's natural end; without this guard a stale trigger would set on the animator.
+        private bool HasActiveAction()
         {
-            HandlePlay(evt);
-        }
-
-        private void OnActionConfirmed(int tick, SimulationEvent evt)
-        {
-            HandlePlay(evt);
-        }
-
-        private void OnActionCanceled(int tick, SimulationEvent evt)
-        {
-            if ((evt is AttackActionEvent atk && atk.Attacker.Index == EntityRef.Index) ||
-                (evt is SkillActionEvent skl && skl.Caster.Index == EntityRef.Index))
-                CancelActionTrigger();
-        }
-
-        private void HandlePlay(SimulationEvent evt)
-        {
-            // Late-dispatch guard — skip stale trigger when action has already ended in the latest frame.
-            // Late rollback (rollback delay > ActionLock duration) can cause DiffRollback to fire Confirmed
-            // Play after the action's natural end; without this guard a stale trigger would set on the animator.
             var frame = Engine.PredictedFrame.Frame;
-            if (frame == null || !frame.Has<CharacterComponent>(EntityRef)) return;
-            ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(EntityRef);
-            if (c.ActionLockTicks <= 0) return;
-
-            if (evt is AttackActionEvent atk && atk.Attacker.Index == EntityRef.Index)
-                PlayAttackAnimation();
-            else if (evt is SkillActionEvent skl && skl.Caster.Index == EntityRef.Index)
-                PlaySkillAnimation(skl.ClassIndex, skl.SkillSlot);
+            if (frame == null || !frame.Has<CharacterComponent>(EntityRef)) return false;
+            return frame.GetReadOnly<CharacterComponent>(EntityRef).ActionLockTicks > 0;
         }
 
         public override void OnUpdateView()

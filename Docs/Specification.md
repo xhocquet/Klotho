@@ -277,7 +277,7 @@ Configuration is split into two layers.
 | OnRollbackExecuted | `Action<int, int>` | Rollback completed (fromTick, toTick) |
 | OnRollbackFailed | `Action<int, string>` | Rollback failed (requestedTick, reason) |
 | OnPendingWipe | `Action<int, int, WipeKind>` | A pending input or Synced event was wiped during cleanup before the chain advanced past it (tick, playerId, kind). `playerId = -1` for `WipeKind.SyncedEvent` |
-| OnCommandRejected | `Action<int, int, RejectionReason>` | (SD client) Server rejected a client input (tick, cmdTypeId, reason) |
+| OnCommandRejected | `Action<int, int, RejectionReason>` | (SD client) Server rejected a client input (tick, cmdTypeId, reason). For commands issued via `engine.IssueOnce(Func<ICommand>, ReliabilityPolicy)`, the framework `ReliableCommandTracker` intercepts this internally and applies the policy: `TreatDuplicateAsAck=true` resolves the handle on `Duplicate`; `TreatPastTickAsEscalation=true` advances `CurrentExtraDelay` by `ExtraDelayStep` (capped at `ExtraDelayMax`) and clears the retry cooldown for an immediate re-issue. Game-side `OnCommandRejected` subscribers still receive the event for non-handle commands (game-specific telemetry / response). |
 | OnExtraDelayChanged | `Action<int>` | Recommended extra InputDelay (ticks) changed. Fired on `ApplyExtraDelay` (Sync / LateJoin / Reconnect / DynamicPush) and `EscalateExtraDelay` (reactive escalation) |
 | OnEventPredicted | `Action<int, SimulationEvent>` | Event raised on a Predicted tick |
 | OnEventConfirmed | `Action<int, SimulationEvent>` | First firing of a Regular event that was confirmed without prediction (verified-direct, replay, new on rollback) |
@@ -373,9 +373,9 @@ KlothoSession.Create(KlothoSessionSetup) → KlothoSession
   LeaveRoom()
   SendPlayerConfig(PlayerConfigBase)
   SetReady(bool)
-  Update(float dt)   ← called from the game's MonoBehaviour.Update
-  Stop()
-  IsStopped          ← teardown completed
+  Update(float dt)                              ← called from the game's MonoBehaviour.Update
+  Stop(keepReconnectCredentials = false)        ← keep=true on process-exit paths to preserve cold-start credentials
+  IsStopped                                     ← teardown completed
   PlayerCount        ← unified getter: NetworkService → SpectatorService → 0 fallback
   StateChanged           : event Action<KlothoState>
   PhaseChanged           : event Action<SessionPhase>
@@ -394,7 +394,7 @@ KlothoSessionFlow (recommended construction layer)
 
 KlothoSessionDriver (MonoBehaviour adapter — Runtime.Unity)
   PreSessionUpdate / PostSessionUpdate / Stopping / IdlePoll                 → lifecycle hooks
-  Attach(session) / DetachAndStop()                                          → ownership transfer
+  Attach(session) / DetachAndStop(keepReconnectCredentials = false)          → ownership transfer; OnDestroy passes keep=true
   IsStopping                                                                 → in-flight teardown guard (replaces game-side _isStopping)
 
 KlothoSessionSetup (Create input — direct path)
@@ -411,6 +411,8 @@ KlothoFlowSetup (Flow input — bundles long-lived dependencies)
 ```
 
 **Teardown invariant**: `IKlothoSessionObserver.OnSessionStopped` is invoked from both teardown entry paths (Driver.DetachAndStop → Session.Stop and direct Session.Stop). In both cases `driver.IsStopping == true` at the firing site, so game code uses a single guard `if (_sessionDriver.IsStopping) return;` at every re-entry candidate site (game-side stop button, OnApplicationQuit, OnDestroy). The library-level guards (`KlothoSession._stopped`, `KlothoSessionDriver._stopping`) ensure idempotency even if the game forgets the guard.
+
+**Reconnect-credentials teardown policy**: `KlothoSession.Stop` / `KlothoSessionDriver.DetachAndStop` / `IKlothoNetworkService.LeaveRoom` all accept `bool keepReconnectCredentials = false`. Default `false` matches a user-intent leave (graceful session end → persisted cold-start credentials are discarded). Process-exit paths (`KlothoSessionDriver.OnDestroy`, game-side `OnApplicationQuit` / `OnDestroy`) must pass `true` so the persisted credentials survive into the next launch — otherwise a normal app quit silently wipes them and the next cold start cannot Reconnect. Explicit cancel / reject paths still clear credentials directly via `IReconnectCredentialsStore.Clear()`.
 
 **NetworkMode**:
 

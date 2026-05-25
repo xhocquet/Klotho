@@ -36,7 +36,7 @@ namespace Brawler
                 character.RespawnTimer--;
                 if (character.RespawnTimer > 0) continue;
 
-                var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
+                var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
 
                 // Search for spawn position — match SpawnMarkerComponent.PlayerId
                 FPVector2 spawnPos = FindSpawnPosition(ref frame, character.PlayerId);

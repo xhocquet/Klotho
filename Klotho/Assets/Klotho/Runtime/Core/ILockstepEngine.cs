@@ -293,6 +293,25 @@ namespace xpTURN.Klotho.Core
         void InputCommand(ICommand command, int extraDelay = 0);
 
         /// <summary>
+        /// Issues a command with reliability — the framework retries on the configured cadence,
+        /// escalates per-cmd lead margin on PastTick reject (capped at <see cref="ReliabilityPolicy.ExtraDelayMax"/>),
+        /// and resolves on either the caller's <see cref="IReliableCommandHandle.Confirm"/> (state-driven ack)
+        /// or a wire-level ack interpretation (<see cref="ReliabilityPolicy.TreatDuplicateAsAck"/>).
+        /// Use for commit-exactly-once commands (e.g. character spawn) whose ack is observable in the
+        /// simulation frame.
+        /// <para>
+        /// <paramref name="commandFactory"/> is invoked once per send (initial + retries). The factory
+        /// should acquire a fresh instance from <c>CommandPool</c> and populate its payload from
+        /// current engine state — retries pick up newer state (e.g. PlayerConfig arrived after the first
+        /// attempt). Use a bound method group rather than a lambda capturing locals to avoid per-call GC.
+        /// The framework takes ownership of each returned instance; the caller must not return it to
+        /// the pool. The factory must return the same <see cref="ICommand.CommandTypeId"/> on every
+        /// invocation — used to filter wire reject events.
+        /// </para>
+        /// </summary>
+        IReliableCommandHandle IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null);
+
+        /// <summary>
         /// Applies the server-recommended extra InputDelay (absolute value) used to compensate the
         /// LateJoin/Reconnect catchup gap and mid-match RTT shifts. Called from accept-message handlers
         /// and from periodic server push updates. `source` selects the log tag and metric path.

@@ -205,6 +205,7 @@ namespace xpTURN.Klotho.Core
         private ICommandFactory _commandFactory;
 
         private DynamicInputDelayPolicy _dynamicInputDelayPolicy;
+        private ReliableCommandTracker _reliableTracker;
 
         private EventBuffer _eventBuffer;
         private EventCollector _eventCollector;
@@ -571,6 +572,9 @@ namespace xpTURN.Klotho.Core
             _dynamicInputDelayPolicy = new DynamicInputDelayPolicy(this, _logger);
             _dynamicInputDelayPolicy.Attach();
 
+            _reliableTracker = new ReliableCommandTracker(this, _logger);
+            _reliableTracker.Attach();
+
             State = KlothoState.WaitingForPlayers;
         }
 
@@ -597,6 +601,11 @@ namespace xpTURN.Klotho.Core
             _eventCollector = new EventCollector();
             if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
                 ecsSim.Frame.EventRaiser = _eventCollector;
+
+            // Spectator path — tracker exists for symmetry, but spectator never calls IssueOnce so
+            // outstanding handles stay 0 and the tick hook is effectively no-op.
+            _reliableTracker = new ReliableCommandTracker(this, _logger);
+            _reliableTracker.Attach();
         }
 
         public void Start()
@@ -943,6 +952,9 @@ namespace xpTURN.Klotho.Core
             }
         }
 
+        public IReliableCommandHandle IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null)
+            => _reliableTracker.Issue(commandFactory, policy ?? ReliabilityPolicy.Default);
+
         public void InputCommand(ICommand command, int extraDelay = 0)
         {
             // Target tick reflecting input delay. extraDelay adds per-command lead margin
@@ -1070,6 +1082,7 @@ namespace xpTURN.Klotho.Core
             }
 
             _dynamicInputDelayPolicy?.Detach();
+            _reliableTracker?.Detach();
 
             State = KlothoState.Finished;
 

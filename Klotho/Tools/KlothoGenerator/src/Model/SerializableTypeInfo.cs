@@ -25,6 +25,13 @@ namespace xpTURN.Klotho.Generator.Model
         public List<SerializableFieldInfo> Fields { get; set; } = new List<SerializableFieldInfo>();
         public int? TypeId { get; set; }
         public string MessageTypeEnum { get; set; }
+
+        // Raw integer value of [KlothoSerializable(MessageTypeId = (NetworkMessageType)N)] when N
+        // falls in the user-defined region (>= UserDefined_Start). Mutually exclusive with
+        // MessageTypeEnum — emitters prefer raw value so the generated literal stays aligned
+        // with the user's cast expression instead of resolving to a sentinel name.
+        public int? MessageTypeRawValue { get; set; }
+
         public bool HasManualSerialization { get; set; }
     }
 

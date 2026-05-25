@@ -294,7 +294,8 @@ namespace Brawler
             //     (Driver.OnDestroy may run first — DetachAndStop is idempotent via Session==null).
             //  2. Unsubscribe Driver / Flow events afterward to block post-teardown firing.
             //  3. Cancel async work, disconnect transport, dispose input — terminal cleanup.
-            _sessionDriver?.DetachAndStop();
+            // Process-exit teardown — preserve persisted Reconnect credentials so a relaunch can Reconnect.
+            _sessionDriver?.DetachAndStop(keepReconnectCredentials: true);
 
             if (_sessionDriver != null)
             {
@@ -595,9 +596,9 @@ namespace Brawler
         {
             int maxPlayers = sessionCfg?.MaxPlayers ?? InitialMaxPlayersGuess();
             _simCallbacks = new BrawlerSimulationCallbacks(
-                _input, _logger, _staticColliders, _navMesh,
+                _input, _staticColliders, _navMesh,
                 maxPlayers, _brawlerSettings._botCount);
-            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks, _logger);
+            _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks);
             return new SessionCallbacks(_simCallbacks, _viewCallbacks);
         }
 
@@ -618,11 +619,9 @@ namespace Brawler
             _gameMenu.IsAllReady = session.NetworkService?.AllPlayersReady ?? false;
         }
 
-        // Host/Guest path — preserves the pre-lift order: SetNetworkService → FI attach → InitializeViewSync.
+        // Host/Guest path — FI attach → InitializeViewSync.
         private void OnHostOrGuestSessionCreated(KlothoSession session)
         {
-            _simCallbacks.SetNetworkService(session.NetworkService);
-
             // roleLabel is strategy-decided, not _isHost-decided. SD mode has no local host
             // affordance (SupportsLocalHost == false) — stale Inspector _isHost = true must not
             // leak into the diagnostic label.
@@ -637,21 +636,21 @@ namespace Brawler
             InitializeViewSync(session.Engine, session.Simulation);
         }
 
-        // Replay/Spectator path — skip SetNetworkService (no input source) and FaultInjection
-        // (main _transport is idle for these modes), but still call InitializeViewSync.
+        // Replay/Spectator path — skip FaultInjection (main _transport is idle for these modes),
+        // still call InitializeViewSync.
         private void OnReplayOrSpectatorSessionCreated(KlothoSession session)
         {
             InitializeViewSync(session.Engine, session.Simulation);
         }
 
-        private void InitializeViewSync(KlothoEngine engine, EcsSimulation simulation)
+        private void InitializeViewSync(IKlothoEngine engine, EcsSimulation simulation)
         {
             // EVU.Initialize creates a fresh PlayerViewRegistry — must run before ViewSync.Initialize
             // so the registry is non-null when ViewSync subscribes to its events.
             // Must be called after engine.Start / StartSpectator / StartReplay has completed.
             _entityViewUpdater?.Initialize(engine);
 
-            _viewSync.Initialize(engine, simulation, _entityViewUpdater, _logger);
+            _viewSync.Initialize(engine, simulation, _entityViewUpdater);
             _viewSync.OnLocalCharacterSpawned += OnLocalCharacterSpawned;
             _viewSync.OnLocalCharacterDespawned += OnLocalCharacterDespawned;
         }
@@ -781,7 +780,6 @@ namespace Brawler
         {
             _logger?.ZLogWarning($"[Brawler] Match reset: {reason} — state recovered, match continues");
             _gameMenu.ReconnectStatus = "State recovered — match continues";
-            _simCallbacks?.OnResyncCompleted(_session?.Engine?.CurrentTick ?? 0);
         }
 
         public void OnReconnected()
@@ -808,9 +806,6 @@ namespace Brawler
         public void OnResyncCompleted(int tick)
         {
             _logger?.ZLogInformation($"[Brawler] Resync completed at tick={tick}");
-
-            // Realign game-layer state with the post-resync ECS truth.
-            _simCallbacks?.OnResyncCompleted(tick);
         }
 
         // Local MaxPlayers guess for non-host paths where the server-authoritative SessionConfig

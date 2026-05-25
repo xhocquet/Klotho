@@ -46,6 +46,38 @@ namespace xpTURN.Klotho.ECS
             _dirty = false;
         }
 
+        /// <summary>
+        /// Returns the first registered system instance assignable to <typeparamref name="T"/>,
+        /// or <c>null</c> if none. Type parameter must be a reference type (class or interface).
+        /// Traversal order matches registration order.
+        /// Lookup is O(N) over registered systems; cache the result if called on a hot path.
+        /// </summary>
+        public T Find<T>() where T : class
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (_entries[i].System is T match)
+                    return match;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Appends all registered system instances assignable to <typeparamref name="T"/>
+        /// into <paramref name="buffer"/>. Returns the count appended.
+        /// Caller owns the buffer (alloc-free for the lookup itself).
+        /// </summary>
+        public int FindAll<T>(List<T> buffer) where T : class
+        {
+            int initial = buffer.Count;
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (_entries[i].System is T match)
+                    buffer.Add(match);
+            }
+            return buffer.Count - initial;
+        }
+
         public void Init(ref Frame frame)
         {
             EnsureSorted();

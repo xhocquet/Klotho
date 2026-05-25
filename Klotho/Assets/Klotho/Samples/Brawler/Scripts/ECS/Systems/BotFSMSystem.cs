@@ -54,7 +54,7 @@ namespace Brawler
 
         public void OnInit(ref Frame frame)
         {
-            _behavior = frame.AssetRegistry.Get<BotBehaviorAsset>(1600);
+            _behavior = frame.AssetRegistry.Get<BotBehaviorAsset>();
 
             _diffAssets = new BotDifficultyAsset[3];
             for (int i = 0; i < 3; i++)
@@ -69,7 +69,7 @@ namespace Brawler
                 _skills[c][1] = frame.AssetRegistry.Get<SkillConfigAsset>(stats.Skill1Id);
             }
 
-            var attack = frame.AssetRegistry.Get<BasicAttackConfigAsset>(1301);
+            var attack = frame.AssetRegistry.Get<BasicAttackConfigAsset>();
             BotHFSMRoot.Build(_behavior, _diffAssets, attack, _skills);
 
             var filter = frame.Filter<BotComponent>();

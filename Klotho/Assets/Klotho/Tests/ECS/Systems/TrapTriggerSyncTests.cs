@@ -108,7 +108,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_TrapTrigger_MoveThroughTrap_Deterministic()
         {
             var sim = CreateBrawlerSimulation();
-            LoadTrapColliders(BrawlerSimSetup.PhysicsSystem);
+            LoadTrapColliders(sim.GetSystem<PhysicsSystem>());
 
             // Spawn character near the trap (X=4 → moving toward East trap at X=6)
             SpawnWarrior(sim, 0, new FPVector2(FP64.FromInt(4), FP64.Zero));
@@ -146,7 +146,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_TrapTrigger_TwoPlayers_BothTraps()
         {
             var sim = CreateBrawlerSimulation();
-            LoadTrapColliders(BrawlerSimSetup.PhysicsSystem);
+            LoadTrapColliders(sim.GetSystem<PhysicsSystem>());
 
             SpawnWarrior(sim, 0, new FPVector2(FP64.FromInt(4), FP64.Zero));
             SpawnWarrior(sim, 1, new FPVector2(FP64.FromInt(-4), FP64.Zero));
@@ -189,7 +189,7 @@ namespace xpTURN.Klotho.Tests
         public void SyncTest_TrapTrigger_QuickEnterExit()
         {
             var sim = CreateBrawlerSimulation();
-            LoadTrapColliders(BrawlerSimSetup.PhysicsSystem);
+            LoadTrapColliders(sim.GetSystem<PhysicsSystem>());
 
             SpawnWarrior(sim, 0, new FPVector2(FP64.FromInt(4), FP64.Zero));
 

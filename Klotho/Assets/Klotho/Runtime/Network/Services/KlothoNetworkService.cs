@@ -427,7 +427,7 @@ namespace xpTURN.Klotho.Network
             Phase = SessionPhase.Lobby;
         }
 
-        public void LeaveRoom()
+        public void LeaveRoom(bool keepReconnectCredentials = false)
         {
             if (_transport != null)
             {
@@ -439,7 +439,9 @@ namespace xpTURN.Klotho.Network
             }
 
             // Discard cold-start Reconnect credentials on graceful session end.
-            _reconnectCredentialsStore?.Clear();
+            // Process-shutdown paths pass keepReconnectCredentials=true so a relaunch can Reconnect.
+            if (!keepReconnectCredentials)
+                _reconnectCredentialsStore?.Clear();
 
             int prevCount = _players.Count;
             bool prevReady = AllPlayersReady;

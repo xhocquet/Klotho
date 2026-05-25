@@ -27,31 +27,66 @@
 
 ## C-2. Asset Definition Pattern
 
-Brawler DataAssets are **plain POCOs, not Unity `ScriptableObject`s** — they only implement `IDataAsset` and use `partial class` + `[KlothoDataAsset(typeId)]`. `AssetId` is injected via the constructor and distinguishes instances. The source generator emits `Serialize / Deserialize / GetHash` automatically.
+Brawler DataAssets are **plain POCOs, not Unity `ScriptableObject`s** — they only implement `IDataAsset` and use `partial class` + `[KlothoDataAsset(typeId, AssetId = ..., Key = ...)]`. The source generator emits `Serialize / Deserialize / GetHash` + the `AssetId` backing field/property + the required constructors. There are two flavours depending on how the asset is used.
+
+### C-2-1. Single-instance assets (named `AssetId` + optional `Key`)
+
+When an asset has exactly one runtime instance, name it on the attribute. The generator emits both `ctor(int)` and a parameterless `ctor() : this(AssetIdFromAttribute)`, so the game code reduces to attribute + fields.
 
 ```csharp
-[KlothoDataAsset(100)]
-public partial class CharacterStatsAsset : IDataAsset
+// positional 105 = TypeId (wire-stable, 100-108 in Brawler); AssetId / Key are separate planes.
+[KlothoDataAsset(105, AssetId = 1001, Key = "BrawlerRules")]
+public partial class BrawlerGameRulesAsset : IDataAsset
 {
-    public int AssetId { get; }
-
-    [KlothoOrder(0)] public int  PrototypeId;
-    [KlothoOrder(1)] public FP64 MoveSpeed;
-    [KlothoOrder(2)] public FP64 Mass               = FP64.One;
-    [KlothoOrder(3)] public FP64 Friction           = FP64.FromDouble(0.5);
-    // ... (defaults specified via C# field initializers)
-
-    public CharacterStatsAsset(int assetId)
-    {
-        AssetId = assetId;
-    }
+    [KlothoOrder(0)] public int MaxMatchTimeSec = 120;
+    [KlothoOrder(1)] public int StartingStocks  = 3;
+    // ...
 }
 ```
 
-**Key differences**:
+Consumer lookup — no magic-id literal:
+
+```csharp
+var rules  = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();           // by attribute AssetId
+var rules2 = frame.AssetRegistry.GetByKey<BrawlerGameRulesAsset>("BrawlerRules"); // by Key
+```
+
+### C-2-2. Multi-instance assets (no `AssetId` named-arg)
+
+When the same asset class has multiple registered instances (e.g. one per character class), omit `AssetId` / `Key` on the attribute. The generator emits **only** `ctor(int)` — there is no parameterless ctor to avoid silent registration of a sentinel `AssetId = 0`.
+
+```csharp
+[KlothoDataAsset(100)]   // TypeId only — instances allocated via ctor(int)
+public partial class CharacterStatsAsset : IDataAsset
+{
+    [KlothoOrder(0)] public int  PrototypeId;
+    [KlothoOrder(1)] public FP64 MoveSpeed;
+    [KlothoOrder(2)] public FP64 Mass     = FP64.One;
+    [KlothoOrder(3)] public FP64 Friction = FP64.FromDouble(0.5);
+    // ...
+}
+```
+
+Consumer lookup — id literal stays at the call site (domain fan-out is the intent):
+
+```csharp
+// Warrior=1100, Mage=1101, Rogue=1102, Knight=1103 (AssetId plane, see §C-1)
+var stats = frame.AssetRegistry.Get<CharacterStatsAsset>(1100 + classIndex);
+```
+
+The three multi-instance Brawler assets are `CharacterStatsAsset` (1100-1103), `SkillConfigAsset` (1200-1231), `BotDifficultyAsset` (1700-1702). The other six are single-instance.
+
+### C-2-3. ID plane separation
+
+The positional first argument of `[KlothoDataAsset(typeId)]` is the **wire-stable type discriminator** (TypeId, 100-108 in Brawler). The `AssetId` named-arg is the **runtime instance id** (1001 / 1100+ / 1200+ / 1300+ / 1400+ / 1500+ / 1600 / 1700+) — see [§C-1](#c-1-assetid-allocation-rules). Same TypeId + different AssetId = different instance, same wire dispatch.
+
+The TypeId plane (100-108) and AssetId plane (1xxx) do not collide with `[KlothoComponent(N)]` or `[KlothoSerializable(N)]` — each attribute lives in its own id namespace.
+
+### C-2-4. Key differences vs ScriptableObject
+
 - Does not inherit `ScriptableObject` → **cannot create `.asset` files in the Unity Project window**
 - No `[CreateAssetMenu]` → no `Assets > Create > ...` menu entry
-- No `_assetId` SerializeField → **the `assetId` field in the JSON is passed to the constructor on deserialization**
+- No `_assetId` SerializeField → **the `assetId` field in the JSON is passed to the generator-emitted `ctor(int)` on deserialization**
 - No Inspector editing → values are edited in the JSON text file
 
 ---

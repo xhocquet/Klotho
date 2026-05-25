@@ -53,8 +53,10 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 return result;
             }
 
-            // 3. Validate constructor — a constructor that takes a single int parameter is required
+            // 3. Inspect ctors — ctor(int) and parameterless ctor presence both surface to the emitter.
+            //    ctor(int) is no longer enforced — generator emits it when absent.
             string ctorParamName = null;
+            bool hasParameterlessCtor = false;
             int publicCtorCount = 0;
             foreach (var ctor in symbol.Constructors)
             {
@@ -68,14 +70,9 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 {
                     ctorParamName = ctor.Parameters[0].Name;
                 }
-            }
 
-            if (ctorParamName == null)
-            {
-                result.Diagnostics.Add(Diagnostic.Create(
-                    DiagnosticDescriptors.DataAssetMissingConstructor,
-                    location, symbol.Name));
-                return result;
+                if (ctor.Parameters.Length == 0 && !ctor.IsImplicitlyDeclared)
+                    hasParameterlessCtor = true;
             }
 
             // DA004: Warn about multiple public constructors
@@ -86,12 +83,46 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     location, symbol.Name));
             }
 
-            // 4. Extract TypeId from attribute
+            // 4. Extract attribute data — TypeId (positional) + AssetId / Key (named, optional)
             var attrData = ctx.Attributes.FirstOrDefault();
             if (attrData == null || attrData.ConstructorArguments.Length == 0)
                 return result;
 
             int typeId = (int)attrData.ConstructorArguments[0].Value;
+
+            int? assetIdFromAttribute = null;
+            string keyFromAttribute = null;
+            foreach (var named in attrData.NamedArguments)
+            {
+                if (named.Key == "AssetId")
+                {
+                    var v = named.Value.Value;
+                    if (v != null) assetIdFromAttribute = (int)v;
+                }
+                else if (named.Key == "Key")
+                {
+                    keyFromAttribute = named.Value.Value as string;
+                }
+            }
+
+            // AssetId property presence (any property named "AssetId" declared by the user)
+            bool hasUserAssetIdProperty = symbol
+                .GetMembers("AssetId")
+                .Any(m => m is IPropertySymbol);
+
+            bool hasUserCtor = ctorParamName != null;
+
+            // DA006: Mixed user/generator ownership is unsupported.
+            // Either both user-authored (Case A) or both generator-emitted (Case B); C/D break compile.
+            if (hasUserAssetIdProperty != hasUserCtor)
+            {
+                result.Diagnostics.Add(Diagnostic.Create(
+                    DiagnosticDescriptors.DataAssetMixedUserGenerated,
+                    location,
+                    symbol.Name,
+                    hasUserAssetIdProperty ? "AssetId property" : "ctor(int)",
+                    hasUserCtor ? "AssetId property" : "ctor(int)"));
+            }
 
             var info = new DataAssetTypeInfo
             {
@@ -101,7 +132,12 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 TypeName = symbol.Name,
                 FullTypeName = symbol.ToDisplayString(),
                 TypeId = typeId,
-                ConstructorParamName = ctorParamName,
+                ConstructorParamName = ctorParamName ?? "assetId",
+                AssetIdFromAttribute = assetIdFromAttribute,
+                KeyFromAttribute = keyFromAttribute,
+                HasUserCtor = hasUserCtor,
+                HasUserParameterlessCtor = hasParameterlessCtor,
+                HasUserAssetIdProperty = hasUserAssetIdProperty,
             };
 
             // 5. Collect [KlothoOrder] fields

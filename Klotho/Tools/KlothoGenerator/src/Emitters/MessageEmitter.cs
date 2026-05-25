@@ -29,6 +29,11 @@ namespace xpTURN.Klotho.Generator.Emitters
                 sb.AppendLine($"{indent}    public override NetworkMessageType MessageTypeId => NetworkMessageType.{info.MessageTypeEnum};");
                 sb.AppendLine();
             }
+            else if (info.MessageTypeRawValue.HasValue)
+            {
+                sb.AppendLine($"{indent}    public override NetworkMessageType MessageTypeId => (NetworkMessageType){info.MessageTypeRawValue.Value};");
+                sb.AppendLine();
+            }
 
             if (!info.HasManualSerialization)
             {

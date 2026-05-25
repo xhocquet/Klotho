@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Logging;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
-
 using ZLogger;
 
 using xpTURN.Klotho.Core;
@@ -10,17 +7,15 @@ namespace Brawler
     public class BrawlerViewCallbacks : IViewCallbacks
     {
         private readonly BrawlerSimulationCallbacks _sim;
-        private readonly ILogger _logger;
 
-        public BrawlerViewCallbacks(BrawlerSimulationCallbacks sim, ILogger logger)
+        public BrawlerViewCallbacks(BrawlerSimulationCallbacks sim)
         {
             _sim = sim;
-            _logger = logger;
         }
 
         public void OnGameStart(IKlothoEngine engine)
         {
-            _logger?.ZLogInformation($"[Brawler] Game started: playerId={engine.LocalPlayerId}, tick={engine.CurrentTick}");
+            engine.Logger?.ZLogInformation($"[Brawler] Game started: playerId={engine.LocalPlayerId}, tick={engine.CurrentTick}");
 
             _sim.SetEngine(engine);
             if (!engine.IsReplayMode)
@@ -31,7 +26,7 @@ namespace Brawler
 
         public void OnLateJoinActivated(IKlothoEngine engine)
         {
-            _logger?.ZLogInformation($"[Brawler] Late join activated: playerId={engine.LocalPlayerId}, tick={engine.CurrentTick}");
+            engine.Logger?.ZLogInformation($"[Brawler] Late join activated: playerId={engine.LocalPlayerId}, tick={engine.CurrentTick}");
 
             _sim.SetEngine(engine);
             _sim.SendSpawnCommand(engine);

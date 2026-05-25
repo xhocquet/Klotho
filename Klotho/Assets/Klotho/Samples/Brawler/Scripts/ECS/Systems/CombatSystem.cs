@@ -39,7 +39,7 @@ namespace Brawler
         // ────────────────────────────────────────────
         void HandleCharacterContact(ref Frame frame)
         {
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
 
             var filterA = frame.Filter<CharacterComponent, TransformComponent>();
             while (filterA.Next(out var entityA))
@@ -86,7 +86,7 @@ namespace Brawler
         {
             ref readonly var seedComp = ref frame.GetReadOnlySingleton<RandomSeedComponent>();
 
-            var itemAsset = frame.AssetRegistry.Get<ItemConfigAsset>(1400);
+            var itemAsset = frame.AssetRegistry.Get<ItemConfigAsset>();
             _destroyBuffer.Clear();
             var itemFilter = frame.Filter<ItemComponent, TransformComponent>();
             while (itemFilter.Next(out var item))
@@ -156,7 +156,7 @@ namespace Brawler
         void ApplyShieldEffect(ref Frame frame, EntityRef character)
         {
             if (!frame.Has<SkillCooldownComponent>(character)) return;
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
             ref var cd = ref frame.Get<SkillCooldownComponent>(character);
             cd.ShieldTicks = asset.ShieldDurationTicks;
         }
@@ -164,14 +164,14 @@ namespace Brawler
         void ApplyBoostEffect(ref Frame frame, EntityRef character)
         {
             if (!frame.Has<SkillCooldownComponent>(character)) return;
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
             ref var cd = ref frame.Get<SkillCooldownComponent>(character);
             cd.BoostTicks = asset.BoostDurationTicks;
         }
 
         void ApplyBombEffect(ref Frame frame, EntityRef picker, FPVector2 bombPos)
         {
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
 
             var filter = frame.Filter<CharacterComponent, TransformComponent, PhysicsBodyComponent>();
             while (filter.Next(out var entity))

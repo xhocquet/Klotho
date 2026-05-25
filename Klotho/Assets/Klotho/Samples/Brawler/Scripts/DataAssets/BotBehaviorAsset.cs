@@ -4,11 +4,9 @@ using xpTURN.Klotho.Serialization;
 
 namespace Brawler
 {
-    [KlothoDataAsset(103)]
+    [KlothoDataAsset(103, AssetId = 1600, Key = "BotBehavior")]
     public partial class BotBehaviorAsset : IDataAsset
     {
-        public int AssetId { get; }
-
         [KlothoOrder(0)] public FP64        StageBoundary              = FP64.FromInt(18);
         [KlothoOrder(1)] public FP64        ChaseStopDistance           = FP64.FromDouble(1.5);
         [KlothoOrder(2)] public FP64        NavSnapMaxDist              = FP64.FromInt(3);
@@ -27,10 +25,5 @@ namespace Brawler
             new FPVector3(-5f, 0f,  0f),
             new FPVector3( 5f, 0f,  0f),
         };
-
-        public BotBehaviorAsset(int assetId)
-        {
-            AssetId = assetId;
-        }
     }
 }

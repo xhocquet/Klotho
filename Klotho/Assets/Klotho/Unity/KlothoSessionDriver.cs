@@ -42,16 +42,16 @@ namespace xpTURN.Klotho.Unity
             _lastTicks = 0;
         }
 
-        public void DetachAndStop()
+        public void DetachAndStop(bool keepReconnectCredentials = false)
         {
             if (_stopping) return;
 
             var s = Session;
             if (s == null) return;
-            
+
             _stopping = true;
             try { Stopping?.Invoke(s); }
-            finally { s.Stop(); Session = null; _stopping = false; }
+            finally { s.Stop(keepReconnectCredentials); Session = null; _stopping = false; }
         }
 
         void Update()
@@ -72,6 +72,7 @@ namespace xpTURN.Klotho.Unity
             PostSessionUpdate?.Invoke(s, dt);
         }
 
-        void OnDestroy() => DetachAndStop();
+        // Unity teardown — preserve cold-start Reconnect credentials so a relaunch can attempt Reconnect.
+        void OnDestroy() => DetachAndStop(keepReconnectCredentials: true);
     }
 }

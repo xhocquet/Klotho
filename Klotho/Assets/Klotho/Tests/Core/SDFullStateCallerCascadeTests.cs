@@ -68,7 +68,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void Initialize(INetworkTransport t, ICommandFactory f, ILogger l) { }
             public void CreateRoom(string n, int m) { }
             public void JoinRoom(string n) { }
-            public void LeaveRoom() { }
+            public void LeaveRoom(bool keepReconnectCredentials = false) { }
             public void SetReady(bool r) { }
             public void SendCommand(ICommand c) { }
             public void RequestCommandsForTick(int tick) { }

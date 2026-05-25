@@ -429,7 +429,7 @@ namespace xpTURN.Klotho.Network
             throw new NotSupportedException("The server cannot call JoinRoom.");
         }
 
-        public void LeaveRoom()
+        public void LeaveRoom(bool keepReconnectCredentials = false)
         {
             _transport.OnDataReceived -= HandleDataReceived;
             _transport.OnPeerConnected -= HandlePeerConnected;

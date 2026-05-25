@@ -17,10 +17,6 @@ namespace Brawler
     [KlothoSerializable(MessageTypeId = (NetworkMessageType)201)]
     public partial class BrawlerReplayConfig : NetworkMessageBase
     {
-        // The generator only auto-generates MessageTypeId for values that map to a name defined in `NetworkMessageType`.
-        // Since 201 has no name (sample/game-specific reserved range — free to use beyond UserDefined_Start=200), it is implemented directly here.
-        public override NetworkMessageType MessageTypeId => (NetworkMessageType)201;
-
         // Slot for future Brawler-specific custom metadata (e.g., scenario ID, difficulty preset, etc.)
     }
 

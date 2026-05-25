@@ -239,6 +239,9 @@ Credentials are cleared on:
 
 - **Cancel** during reconnect
 - A hard rejection (`InvalidMagic`, `InvalidPlayer`, `TimedOut`, `AlreadyConnected` — see `HandleReconnectFailure`)
+- Graceful session end via `StopGame` (match end / explicit stop) — routes through `IKlothoNetworkService.LeaveRoom` with default `keepReconnectCredentials = false`
+
+Credentials are **preserved** on process exit (`OnApplicationQuit` / `OnDestroy`). `BrawlerGameController.TeardownAll` and `KlothoSessionDriver.OnDestroy` pass `keepReconnectCredentials: true` so a relaunch can resume the in-progress match. (Earlier behavior wiped credentials on every normal quit, breaking cold-start Reconnect.)
 
 ---
 

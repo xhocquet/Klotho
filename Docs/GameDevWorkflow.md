@@ -190,6 +190,64 @@ FaultInjectionRuntime.AttachToSession(_session, transport, logger, /* roleLabel 
 
 > **Escape hatch — `KlothoSession.Create(KlothoSessionSetup)`**: the direct factory is still available for games whose architecture does not fit the Flow pattern (custom retry orchestration, multi-session test harnesses, etc.). The Flow is a recommended thin wrapper, not a wall.
 
+#### NetworkService handle (opt-in)
+
+If your `ISimulationCallbacks` implementation needs the `IKlothoNetworkService` handle on host/guest entry (e.g. to issue room-level network operations alongside per-tick callbacks), implement the `INetworkServiceReceiver` marker interface — the Flow auto-dispatches `SetNetworkService` right after `OnSessionCreated` (kind-gated to Host/Guest). Most game callbacks don't need it; omit the interface and Flow skips dispatch entirely.
+
+```csharp
+public class MySimulationCallbacks : ISimulationCallbacks, INetworkServiceReceiver
+{
+    private IKlothoNetworkService _net;
+    public void SetNetworkService(IKlothoNetworkService svc) { _net = svc; }
+    // ... rest of callbacks ...
+}
+```
+
+#### Reliable-once command (spawn / room-state / one-shot)
+
+For commands that must reach the deterministic timeline exactly once despite duplicate / past-tick rejects, use `engine.IssueOnce`. The framework `ReliableCommandTracker` owns the retry-interval cooldown, past-tick escalation, empty-move collision avoidance, and resync reset.
+
+```csharp
+private Func<ICommand>          _spawnBuilder;     // bound delegate, single-alloc
+private IReliableCommandHandle  _spawnHandle;
+
+public MySimulationCallbacks(/* ... */)
+{
+    _spawnBuilder = () => new SpawnCharacterCommand(_selectedClass);   // payload re-evaluated per retry
+}
+
+private void SendSpawn(IKlothoEngine engine)
+{
+    _spawnHandle = engine.IssueOnce(_spawnBuilder);   // ReliabilityPolicy.Default
+}
+
+public void OnPollInput(IKlothoEngine engine, int playerId, int tick)
+{
+    if (_spawnHandle != null && _spawnHandle.WouldCollideAt(tick)) return;   // empty-move skip
+    if (HasCharacterFor(playerId)) _spawnHandle?.Confirm();                  // state-driven ack
+    // ... regular per-tick input ...
+}
+```
+
+`ReliabilityPolicy` exposes `RetryIntervalTicks` / `ExtraDelayStep` / `ExtraDelayMax` / `TreatDuplicateAsAck` / `TreatPastTickAsEscalation`. `ReliabilityPolicy.Default` (20 / 4 / 40 / true / true) matches the prior Brawler spawn invariant; supply a custom policy for other reliable-input scenarios.
+
+#### System lookup from a callback boundary
+
+`EcsSimulation.GetSystem<T>()` / `TryGetSystem<T>` / `GetSystems<T>(buffer)` expose a registered system's secondary interface (e.g. `PhysicsSystem` → `IFPPhysicsWorldProvider`) without a process-wide static slot. Stash `simulation` on `RegisterSystems(EcsSimulation simulation)` entry; resolve in the property getter.
+
+```csharp
+private EcsSimulation _simulation;
+
+public void RegisterSystems(EcsSimulation simulation)
+{
+    _simulation = simulation;                                       // stash for later lookup
+    // ... AddSystem(...) ...
+}
+
+public IFPPhysicsWorldProvider PhysicsProvider
+    => _simulation?.GetSystem<PhysicsSystem>();                     // first-match lookup, alloc-free
+```
+
 ### Step 5: Define Events
 
 Inherit from `SimulationEvent` and apply `[KlothoSerializable(N)]`. `EventTypeId`, `Serialize`, `Deserialize`, and `GetContentHash` are emitted by the source generator. Duplicate TypeIds are caught at compile time.
@@ -224,6 +282,31 @@ engine.OnSyncedEvent     += (tick, evt) => HandleSyncedEvent(evt);
 // OnSyncedEvent    : EventMode.Synced events — fired only on Verified ticks
 //                    (game over, level up, round timer, etc. — confirmed-only state changes).
 ```
+
+#### Helper — `EngineEventOneShot.Subscribe` (one-shot Predicted/Confirmed/Canceled triple)
+
+For a per-entity one-shot event (animation trigger, attack VFX) that needs the same handler on Predicted and Confirmed (with optional late-dispatch guard) plus a cancel-side cleanup, use `EngineEventOneShot.Subscribe`. The helper wraps all three channels into a single subscription with the de-dupe / late-guard wiring done for you.
+
+```csharp
+private EngineEventSubscription _attackSub;
+
+public override void OnActivate(FrameRef frame)
+{
+    _attackSub = EngineEventOneShot.Subscribe<AttackActionEvent>(
+        Engine,
+        filter:    e => e.Attacker.Index == EntityRef.Index,
+        onPlay:    _ => PlayAttackAnimation(),
+        onCancel:  _ => CancelActionTrigger(),
+        lateGuard: HasActiveAction);   // skip stale Predicted/Confirmed when action already ended
+}
+
+public override void OnDeactivate()
+{
+    _attackSub?.Dispose();             // IDisposable cleanup is required
+}
+```
+
+Scope is limited to the Predicted+Confirmed+Canceled triple. Verified-time fallback events (e.g. `ActionCompletedEvent`) keep using the `OnSyncedEvent` channel — `EngineEventOneShot` doesn't replace them.
 
 ### Step 7: View Sync — EntityViewFactory / EntityViewUpdater (Unity)
 
@@ -306,6 +389,8 @@ evu.Initialize(session.Engine);
 evu.Cleanup();
 ```
 
+**Transform pipeline (base-delegated)** — Do **not** override `ApplyTransform` / `LateUpdate` / hand-roll a lerp in subclasses. The base `EntityView` performs lerp + `ApplyTransform` + `UpdatePositionParameter` populate inside `InternalLateUpdateView` (fused with `_errorVisual.Tick`) so that tick-rate < frame-rate environments reflect every per-frame `PredictedAlpha` change without stale-lerp stutter. `UpdatePositionParameter` zeros `ErrorVisualVector` / `ErrorVisualQuaternion` when `EnableSnapshotInterpolation` is set so the verified-frame interpolation path doesn't double-correct the rollback delta. Game subclasses override `OnUpdateView` / `OnLateUpdateView` for game-data cache + visual-feedback toggles only.
+
 **How it works**
 - **Reconcile timing** — runs each tick on the `IKlothoEngine.OnTickExecuted` hook
   1. Scans `VerifiedFrame` / `PredictedFrame` and collects entities whose `TryGetBindBehaviour` matches the corresponding path
@@ -320,4 +405,4 @@ evu.Cleanup();
 
 ---
 
-Last updated: 2026-04-24
+Last updated: 2026-05-25

@@ -25,7 +25,7 @@ namespace Brawler
 
         public void Update(ref Frame frame)
         {
-            var asset = frame.AssetRegistry.Get<MovementPhysicsAsset>(1500);
+            var asset = frame.AssetRegistry.Get<MovementPhysicsAsset>();
             var dt = FP64.FromInt(frame.DeltaTimeMs) * MsToSeconds;
 
             var filter = frame.Filter<TransformComponent, PhysicsBodyComponent, CharacterComponent>();

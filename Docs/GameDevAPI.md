@@ -255,15 +255,15 @@ void OnSessionDriverStopping(KlothoSession s)
 _sessionDriver.Attach(_session);
 ```
 
-The driver guarantees: dt is computed from `DateTimeOffset.UtcNow` (time-scale invariant), `IdlePoll` fires only while `Session == null`, and `Stopping` runs exactly once before `session.Stop()` (re-entry guarded). Hook exception policy: steady-state hooks (`PreSessionUpdate` / `PostSessionUpdate` / `IdlePoll`) propagate naked; `Stopping` is `try { ... } finally { session.Stop(); }` so teardown is guaranteed even if a subscriber throws.
+The driver guarantees: dt is computed from `DateTimeOffset.UtcNow` (time-scale invariant), `IdlePoll` fires only while `Session == null`, and `Stopping` runs exactly once before `session.Stop()` (re-entry guarded). Hook exception policy: steady-state hooks (`PreSessionUpdate` / `PostSessionUpdate` / `IdlePoll`) propagate naked; `Stopping` is `try { ... } finally { session.Stop(keepReconnectCredentials); }` so teardown is guaranteed even if a subscriber throws.
 
 `KlothoSessionDriver` also exposes `IsStopping` as a read-only flag. Game code can short-circuit re-entrant teardown calls with `if (_sessionDriver != null && _sessionDriver.IsStopping) return;` — replaces the per-game `_isStopping` / `_teardownInvoked` duplicate flags that used to guard `StopGame` against the `Driver.DetachAndStop → Session.Stop → OnSessionStopped → game StopGame` re-entry path. Invariant: when `OnSessionStopped` fires, `driver.IsStopping == true` regardless of which entry path (Driver.DetachAndStop vs Session.Stop direct) initiated teardown.
 
-`IKlothoSession` API: `Engine`, `Simulation`, `LocalPlayerId`, `State`, `Update(float dt)`, `InputCommand(ICommand)`, `Stop()`, `IsStopped`, `PlayerCount`
+**Reconnect-credentials policy on teardown**: `KlothoSessionDriver.DetachAndStop(bool keepReconnectCredentials = false)` and `KlothoSession.Stop(bool keepReconnectCredentials = false)` accept an optional flag forwarded to `IKlothoNetworkService.LeaveRoom`. Default `false` discards persisted cold-start credentials (user-intent leave / match-end shutdown / failed bootstrap). Pass `true` from process-exit entry points so persisted credentials survive into the next launch: `KlothoSessionDriver.OnDestroy` already does this internally, and game code should mirror it in its own `OnApplicationQuit` / `OnDestroy` body (e.g. `_sessionDriver?.DetachAndStop(keepReconnectCredentials: true);`). Explicit cancel / reject paths clear credentials directly via `IReconnectCredentialsStore.Clear()` — do not rely on the teardown flag for those.
 
-`KlothoSession` state-change events (subscribe on `OnSessionCreated`; unsubscribed automatically on `Stop`): `StateChanged(KlothoState)`, `PhaseChanged(SessionPhase)`, `PlayerCountChanged(int)`, `AllPlayersReadyChanged(bool)`. These replace per-frame state polling — wire each event to the corresponding UI/audio reaction directly. Backed on the service side by `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` and `IKlothoEngine.OnStateChanged`; the session forwards both the network-service and the spectator-service `OnPlayerCountChanged` so the same subscriber works across host / guest / spectator. `PlayerCount` reads through the `NetworkService → SpectatorService → 0` fallback chain — call it from a one-shot poll if you missed the initial event.
+`IKlothoSession` API: `Engine` (returns `IKlothoEngine`), `Simulation`, `LocalPlayerId`, `State`, `Update(float dt)`, `InputCommand(ICommand)`, `Stop(bool keepReconnectCredentials = false)`, `IsStopped`, `PlayerCount`, convenience methods `HostGame(name, maxPlayers)` / `JoinGame(name)` / `LeaveRoom()` / `SendPlayerConfig(PlayerConfigBase)` / `SetReady(bool)`, and state-change events `StateChanged(KlothoState)` / `PhaseChanged(SessionPhase)` / `PlayerCountChanged(int)` / `AllPlayersReadyChanged(bool)` (subscribe on `OnSessionCreated`; unsubscribed automatically on `Stop`). These events replace per-frame state polling — wire each event to the corresponding UI/audio reaction directly. Backed on the service side by `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` and `IKlothoEngine.OnStateChanged`; the session forwards both the network-service and the spectator-service `OnPlayerCountChanged` so the same subscriber works across host / guest / spectator. `PlayerCount` reads through the `NetworkService → SpectatorService → 0` fallback chain — call it from a one-shot poll if you missed the initial event.
 
-`KlothoSession` convenience methods: `HostGame(name, maxPlayers)`, `JoinGame(name)`, `LeaveRoom()`, `SendPlayerConfig(PlayerConfigBase)`, `SetReady(bool)`.
+Logger channel: prefer `engine.Logger` / `frame.Logger` for runtime logging. `KlothoLogger.CreateDefault` is an escape hatch — use it only when a separate category or rolling-file destination is needed.
 
 ### 3.2 KlothoSessionFlow — mode-dispatched entry points
 
@@ -294,6 +294,65 @@ _flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated; // spectat
 - `SpectatorTransportFactory : Func<INetworkTransport>` — invoked from `SpectateAsync(host, port, roomId, ct)` so the library owns the transport instance. The escape-hatch overload `SpectateAsync(transport, host, port, roomId, ct)` is retained for custom transports.
 
 `KlothoSessionFlowAsync.JoinAsync(transport, host, port, preJoin, roomId, sessionCfg, ct)` is retained as an `[Obsolete]` forwarding shim — migrate new call sites to `JoinP2PAsync` / `JoinServerDrivenAsync`. Scheduled removal: 0.3.0.
+
+### 3.3 INetworkServiceReceiver — opt-in NetworkService handle
+
+`ISimulationCallbacks` implementations that need the `IKlothoNetworkService` handle on host/guest entry declare it via the `INetworkServiceReceiver` marker. `KlothoSessionFlow` dispatches `SetNetworkService` automatically right after `OnSessionCreated` — gated to Host/Guest kinds, non-null callbacks, and the `is INetworkServiceReceiver recv` pattern. Implementations that don't need the handle simply omit the interface and avoid empty-body methods.
+
+```csharp
+public class MySimulationCallbacks : ISimulationCallbacks, INetworkServiceReceiver
+{
+    private IKlothoNetworkService _net;
+    public void SetNetworkService(IKlothoNetworkService svc) { _net = svc; }
+    // ... regular ISimulationCallbacks members ...
+}
+```
+
+Spectator / replay kinds skip the dispatch at the Flow boundary, so games no longer need `if (!isSpectator && !isReplay)` guards around the call.
+
+### 3.4 IKlothoEngine.IssueOnce — reliable-once command transactions
+
+For commands that must reach the deterministic timeline exactly once despite Duplicate / PastTick rejects, use `engine.IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null)`. The framework `ReliableCommandTracker` owns retry-interval cooldown, past-tick escalation (`ExtraDelayStep` bump, capped at `ExtraDelayMax`), empty-move collision avoidance, and `OnResyncCompleted` reset.
+
+```csharp
+private Func<ICommand>          _spawnBuilder;
+private IReliableCommandHandle  _spawnHandle;
+
+// In ctor — bind once (single-alloc, payload re-evaluated per retry)
+_spawnBuilder = () => new SpawnCharacterCommand(_selectedClass);
+
+// Issue
+_spawnHandle = engine.IssueOnce(_spawnBuilder);   // ReliabilityPolicy.Default
+
+// OnPollInput integration — handle-aware empty-move skip + state-driven ack
+if (_spawnHandle != null && _spawnHandle.WouldCollideAt(tick)) return;
+if (HasCharacterFor(playerId)) _spawnHandle?.Confirm();
+```
+
+`IReliableCommandHandle` surface: `WouldCollideAt(tick)` (caller-side empty-move skip), `Confirm()` (state-driven ack — caller decides), `Cancel()` (caller-side abort), `OutstandingTargetTick`, `OnRejected` / `OnResolved` events. `ReliabilityPolicy.Default` (RetryIntervalTicks=20 / ExtraDelayStep=4 / ExtraDelayMax=40 / TreatDuplicateAsAck=true / TreatPastTickAsEscalation=true) matches the prior Brawler spawn invariant. Construct a custom policy for other reliable-input scenarios (e.g. `TreatDuplicateAsAck=false` when the same logical command can legitimately fire multiple times).
+
+### 3.5 EcsSimulation.GetSystem<T> — registered-system lookup
+
+`EcsSimulation.GetSystem<T>()` / `TryGetSystem<T>(out T)` / `GetSystems<T>(List<T> buffer)` return the first registered system instance matching `T` (`T : class`). Lets a callback boundary expose a registered system's secondary interface without a process-wide static slot. Stash the `EcsSimulation` reference on `RegisterSystems` entry and resolve in the property getter:
+
+```csharp
+public class MyCallbacks : ISimulationCallbacks
+{
+    private EcsSimulation _simulation;
+
+    public void RegisterSystems(EcsSimulation simulation)
+    {
+        _simulation = simulation;                                  // stash for lookup
+        // ... AddSystem(...) ...
+    }
+
+    // IFPPhysicsProviderSource consumer (e.g. FPPhysicsWorldVisualizer)
+    public IFPPhysicsWorldProvider PhysicsProvider
+        => _simulation?.GetSystem<PhysicsSystem>();                // first-match, alloc-free
+}
+```
+
+`GetSystem<T>()` traversal order matches `AddSystem` registration order. For multi-instance lookups, `GetSystems<T>(buffer)` appends every match into a caller-owned `List<T>` (alloc-free for the lookup itself; the buffer manages its own capacity).
 
 ---
 
@@ -542,6 +601,56 @@ private void OnTickExecuted(int tick)
 | `frame.FilterWithout<T1, T2, T3, T4, TExclude>()` | ✅ |
 | `frame.FilterWithout<T1, T2, T3, T4, T5, TExclude>()` | ✅ |
 
+### View transform pipeline
+
+`EntityView` base class handles lerp + `_errorVisual` composition + `VerifiedFrameInterpolator` branching as the
+standard path. Every view receives one `ApplyTransform` call per frame (during Unity LateUpdate). Subclasses only
+override `ApplyTransform` when special split is required (e.g. root vs interpolation target); regular views just
+inherit the base path.
+
+Per-tick game-data updates (animator parameters / Renderer toggle / VFX SetActive) belong in `OnUpdateView` — it
+fires once per tick, before the per-frame transform application.
+
+When `ViewFlags.EnableSnapshotInterpolation` is set (typically SD-Client / Spectator remote views), the base path
+skips `_errorVisual` composition — the verified-frame interpolation already renders the authoritative state, so
+applying rollback-delta-based offset would double-correct and jitter.
+
+### Engine event subscription
+
+`Engine.OnEventPredicted` / `OnEventConfirmed` / `OnEventCanceled` follow an idempotent dispatch pattern. The
+`EngineEventOneShot.Subscribe<TEvent>(engine, filter, onPlay, onCancel?, lateGuard?)` helper absorbs the three-way
+subscription:
+
+- Predicted and Confirmed are hash-deduped by the engine → `onPlay` fires once per logical event in normal cases.
+- On rollback mismatch: Canceled fires `onCancel` first, then Confirmed re-fires `onPlay` with the corrected event.
+- `lateGuard` (optional) returns `false` to skip stale `onPlay` after the action's natural end (late-rollback case).
+
+The returned `EngineEventSubscription` is `IDisposable` — call `Dispose()` in `OnDeactivate` to unsubscribe and
+release captured lambdas (required to avoid component leak through the engine event delegate).
+
+```csharp
+private EngineEventSubscription _attackSub;
+
+public override void OnActivate(FrameRef frame)
+{
+    _attackSub = EngineEventOneShot.Subscribe<AttackActionEvent>(
+        Engine,
+        filter:    e => e.Attacker.Index == EntityRef.Index,
+        onPlay:    e => PlayAttackAnimation(),
+        onCancel:  _ => CancelActionTrigger(),
+        lateGuard: HasActiveAction);
+}
+
+public override void OnDeactivate()
+{
+    _attackSub?.Dispose();
+    _attackSub = null;
+}
+```
+
+`OnSyncedEvent` (verified-time channel without Cancel pair) is intentionally outside this helper's scope — subscribe
+directly when verified-time fallback Stop is needed.
+
 ---
 
 ## 8. Entity Lifecycle API
@@ -641,4 +750,41 @@ Thresholds live in `SessionConfig` and are server-authoritative. Games typically
 
 ---
 
-*Last updated: 2026-05-20*
+## 11. Attribute ID planes (mutually independent)
+
+Klotho exposes three positional-int attributes that look syntactically similar but live in independent ID planes:
+
+| Attribute | Plane | Range / convention |
+|---|---|---|
+| `[KlothoComponent(ComponentTypeId)]` | ECS Frame Heap component discriminator | `0..UserMinId-1` reserved for runtime; user range >= `KlothoComponentAttribute.UserMinId` (100). |
+| `[KlothoSerializable(TypeId)]` | Entity / Command / Message wire discriminator (per category) | Distinct sub-planes per base class — `EntityBase` / `CommandBase` / `NetworkMessageBase` do not share IDs. |
+| `[KlothoDataAsset(TypeId, AssetId = ..., Key = ...)]` | DataAsset wire discriminator (`TypeId`) + runtime instance id (`AssetId`) + optional `Key` | `TypeId` is wire-stable. `AssetId` (named) is the runtime instance id used by `IDataAssetRegistry.Get<T>()`. `Key` (named) is an optional string handle for `GetByKey<T>(string)`. Generator auto-emits `AssetId` property + `ctor(int)` + (when `AssetId` is set) parameterless `ctor() : this(AssetIdFromAttribute)`. |
+
+These planes do not collide. `[KlothoComponent(100)]` and `[KlothoDataAsset(100)]` can coexist on different types without conflict.
+
+#### DataAsset lookup overloads
+
+`IDataAssetRegistry` exposes typed lookups that auto-resolve the `AssetId` / `Key` named-args on `[KlothoDataAsset]`:
+
+| Overload | Resolution |
+|---|---|
+| `Get<T>()` / `TryGet<T>(out T)` | Reads the `AssetId` named-arg on `T`'s attribute. Throws `InvalidOperationException` when the asset omits `AssetId` (single-instance assets only). |
+| `GetByKey<T>(string)` / `TryGetByKey<T>(string, out T)` | Reads the `Key` named-arg on `T`'s attribute. Backed by a `(Type, string)` tuple index built at `Register` time. |
+| `Get<T>(int id)` / `TryGet<T>(int id, out T)` | Caller-supplied id literal — for multi-instance assets where the same class has multiple registered instances (e.g. `BotDifficultyAsset 1700..1702`). |
+
+The first two are the preferred entry points for single-instance assets — no magic-id literal at the call site. The third remains the escape hatch for multi-instance fan-out where the id is part of the domain (slot index, class index, etc.).
+
+### User-defined NetworkMessageType values
+
+`NetworkMessageType.UserDefined_Start = 200` reserves the byte range >= 200 for game-specific message types. Games may cast freely past this point — both:
+
+```csharp
+[KlothoSerializable(MessageTypeId = (NetworkMessageType)200)]   // generator emits raw-cast override
+[KlothoSerializable(MessageTypeId = (NetworkMessageType)201)]   // generator emits raw-cast override
+```
+
+are auto-handled by the generator. There is no need to manually override `MessageTypeId` — the generator emits the override and the factory registration for both enum-named and raw-cast values. Values below 200 must match a defined `NetworkMessageType` member; unknown sub-200 values are silently skipped (the base class abstract `MessageTypeId` will then fail to compile, surfacing the mistake).
+
+---
+
+*Last updated: 2026-05-25*

@@ -57,9 +57,9 @@ namespace Brawler
                 _skills[c][1] = frame.AssetRegistry.Get<SkillConfigAsset>(_stats[c].Skill1Id);
             }
 
-            _attack   = frame.AssetRegistry.Get<BasicAttackConfigAsset>(1301);
-            _movement = frame.AssetRegistry.Get<MovementPhysicsAsset>(1500);
-            _item     = frame.AssetRegistry.Get<ItemConfigAsset>(1400);
+            _attack   = frame.AssetRegistry.Get<BasicAttackConfigAsset>();
+            _movement = frame.AssetRegistry.Get<MovementPhysicsAsset>();
+            _item     = frame.AssetRegistry.Get<ItemConfigAsset>();
         }
 
         // ────────────────────────────────────────────

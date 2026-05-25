@@ -195,6 +195,13 @@ namespace xpTURN.Klotho
         {
             if ((_viewFlags & ViewFlags.DisableUpdate) != 0) return;
             if (Engine == null || !EntityRef.IsValid) return;
+            OnUpdateView();
+        }
+
+        internal virtual void InternalLateUpdateView()
+        {
+            if ((_viewFlags & ViewFlags.DisableUpdate) != 0) return;
+            if (Engine == null || !EntityRef.IsValid) return;
 
             // Frame may be null immediately after Late Join, FullState restore, or ring warmup — guard against it.
             var predictedRef = Engine.PredictedFrame;
@@ -208,7 +215,7 @@ namespace xpTURN.Klotho
 
             ref readonly var curr = ref predicted.GetReadOnly<TransformComponent>(EntityRef);
 
-            // ── CSP lerp (PredictedPrevious ↔ Predicted) ──
+            // ── CSP lerp (PredictedPrevious ↔ Predicted) — uses RenderClock.PredictedAlpha that updates per frame ──
             float alpha = Engine.RenderClock.PredictedAlpha;
             Vector3    currPos = ToVector3(curr.Position);
             Quaternion currRot = Quaternion.Euler(0f, (float)curr.Rotation.ToFloat() * Mathf.Rad2Deg, 0f);
@@ -238,10 +245,13 @@ namespace xpTURN.Klotho
                 }
             }
 
-            // Here we only read the smoothed offset; ErrorVisualState.Tick is performed in InternalLateUpdateView.
-            // If Tick is called per-tick, it accumulates redundantly with the same deltaTime,
-            // and forward motion is mistaken for rollback, causing accumulated error to be emitted on rotation/direction changes and making the motion stutter.
             bool teleported = Engine.HasEntityTeleported(EntityRef.Index);
+
+            // EnableSnapshotInterpolation skips _errorVisual — the verified-frame interpolation already renders
+            // the authoritative state, so applying rollback-delta-based offset would double-correct and jitter.
+            bool skipPosError = (_viewFlags & ViewFlags.DisablePositionUpdate) != 0
+                             || (_viewFlags & ViewFlags.EnableSnapshotInterpolation) != 0;
+            bool skipYawError = (_viewFlags & ViewFlags.EnableSnapshotInterpolation) != 0;
 
             // ── Populate UpdatePositionParameter ──
             var param = new UpdatePositionParameter
@@ -250,34 +260,28 @@ namespace xpTURN.Klotho
                 NewRotation             = newRot,
                 UninterpolatedPosition  = currPos,
                 UninterpolatedRotation  = currRot,
-                ErrorVisualVector       = (_viewFlags & ViewFlags.DisablePositionUpdate) != 0
-                                            ? Vector3.zero : _errorVisual.SmoothedPosError,
-                ErrorVisualQuaternion   = Quaternion.Euler(0f, _errorVisual.SmoothedYawError * Mathf.Rad2Deg, 0f),
+                ErrorVisualVector       = skipPosError ? Vector3.zero : _errorVisual.SmoothedPosError,
+                ErrorVisualQuaternion   = skipYawError ? Quaternion.identity
+                                                       : Quaternion.Euler(0f, _errorVisual.SmoothedYawError * Mathf.Rad2Deg, 0f),
                 DeltaTime               = Time.deltaTime,
                 Teleported              = teleported,
             };
 
             ApplyTransform(ref param);
-            OnUpdateView();
-        }
 
-        internal virtual void InternalLateUpdateView()
-        {
-            if ((_viewFlags & ViewFlags.DisableUpdate) != 0) return;
-            if (Engine != null && EntityRef.IsValid)
-            {
-                // Refresh the error visual once per frame. The engine exposes only the delta caused by rollback
-                // and excludes forward motion, so accumulation/decay/interpolation is performed only once at LateUpdate
-                // to avoid redundant accumulation even when multiple ticks run in the same frame.
-                var (dx, dy, dz) = Engine.GetPositionDelta(EntityRef.Index);
-                Vector3 rollbackDelta   = new Vector3(dx, dy, dz);
-                float   rollbackYawDelta = Engine.GetYawDelta(EntityRef.Index);
-                bool    teleported       = Engine.HasEntityTeleported(EntityRef.Index);
+            // Refresh the error visual once per frame. The engine exposes only the delta caused by rollback
+            // and excludes forward motion, so accumulation/decay/interpolation is performed only once at LateUpdate
+            // to avoid redundant accumulation even when multiple ticks run in the same frame.
+            // Read-before-tick order — this frame's ApplyTransform uses the previous frame's smoothed value,
+            // and the next frame's read sees the advanced value.
+            var (dx, dy, dz) = Engine.GetPositionDelta(EntityRef.Index);
+            Vector3 rollbackDelta    = new Vector3(dx, dy, dz);
+            float   rollbackYawDelta = Engine.GetYawDelta(EntityRef.Index);
 
-                _errorVisual.Tick(
-                    rollbackDelta, rollbackYawDelta, Time.deltaTime,
-                    teleported, Engine.Logger, EntityRef.Index);
-            }
+            _errorVisual.Tick(
+                rollbackDelta, rollbackYawDelta, Time.deltaTime,
+                teleported, Engine.Logger, EntityRef.Index);
+
             OnLateUpdateView();
         }
 

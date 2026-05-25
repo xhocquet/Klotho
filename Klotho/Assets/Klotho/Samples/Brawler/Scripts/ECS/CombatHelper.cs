@@ -7,7 +7,7 @@ namespace Brawler
     {
         public static void ApplyKnockback(ref Frame frame, EntityRef target, FPVector2 direction, int basePower)
         {
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
 
             ref var targetChar = ref frame.Get<CharacterComponent>(target);
             targetChar.KnockbackPower += basePower;
@@ -40,7 +40,7 @@ namespace Brawler
         public static void ApplyHitReaction(ref Frame frame, EntityRef target,
             FPVector2 direction, int basePower, int hitReactionTicks)
         {
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
 
             ref var targetChar = ref frame.Get<CharacterComponent>(target);
             targetChar.KnockbackPower += basePower;
@@ -68,7 +68,7 @@ namespace Brawler
         public static void ApplyPush(ref Frame frame, EntityRef target,
             FPVector2 direction, int basePower)
         {
-            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>(1300);
+            var asset = frame.AssetRegistry.Get<CombatPhysicsAsset>();
 
             ref var targetChar = ref frame.Get<CharacterComponent>(target);
             targetChar.KnockbackPower += basePower;

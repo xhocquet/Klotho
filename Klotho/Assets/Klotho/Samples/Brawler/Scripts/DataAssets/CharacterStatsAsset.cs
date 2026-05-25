@@ -7,8 +7,6 @@ namespace Brawler
     [KlothoDataAsset(100)]
     public partial class CharacterStatsAsset : IDataAsset
     {
-        public int AssetId { get; }
-
         [KlothoOrder(0)] public int  PrototypeId;
         [KlothoOrder(1)] public FP64 MoveSpeed;
         [KlothoOrder(2)] public FP64 Mass                = FP64.One;
@@ -18,10 +16,5 @@ namespace Brawler
         [KlothoOrder(6)] public FP64 ColliderOffsetY     = FP64.One;
         [KlothoOrder(7)] public int Skill0Id;
         [KlothoOrder(8)] public int Skill1Id;
-
-        public CharacterStatsAsset(int assetId)
-        {
-            AssetId     = assetId;
-        }
     }
 }

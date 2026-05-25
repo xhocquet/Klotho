@@ -85,7 +85,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Brawler.View::Brawler.CharacterView
   _bindBehaviour: 1
   _viewFlags: 0
-  _interpolationTarget: {fileID: 8023215948148342676}
+  _interpolationTarget: {fileID: 0}
   _errorVisual:
     MinRate: 3
     MaxRate: 10

@@ -18,7 +18,7 @@ namespace Brawler
 
         public void Update(ref Frame frame)
         {
-            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
+            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
 
             ref var state = ref frame.GetSingleton<GameTimerStateComponent>();
 

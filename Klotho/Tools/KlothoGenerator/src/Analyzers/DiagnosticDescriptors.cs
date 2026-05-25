@@ -194,5 +194,13 @@ namespace xpTURN.Klotho.Generator.Analyzers
             "KlothoGenerator.DataAsset",
             DiagnosticSeverity.Error,
             isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor DataAssetMixedUserGenerated = new DiagnosticDescriptor(
+            "KLSG_DA006",
+            "Mixed user/generated DataAsset members",
+            "[KlothoDataAsset] class '{0}' declares {1} but not {2}. Author both or neither — mixed user/generated ownership is unsupported (CS0200/CS0103 risk).",
+            "KlothoGenerator.DataAsset",
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
     }
 }

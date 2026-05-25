@@ -1,10 +1,6 @@
 using System;
 using UnityEngine;
 
-using Microsoft.Extensions.Logging;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
-using ZLogger;
-
 using xpTURN.Klotho;
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
@@ -28,19 +24,17 @@ namespace Brawler
         public event Action OnLocalCharacterSpawned;
         public event Action OnLocalCharacterDespawned;
 
-        private KlothoEngine _engine;
+        private IKlothoEngine _engine;
         private EcsSimulation _simulation;
         private EntityViewUpdater _evu;
-        private ILogger _logger;
 
         private bool _platformsAssigned;
 
-        public void Initialize(KlothoEngine engine, EcsSimulation simulation, EntityViewUpdater evu, ILogger logger = null)
+        public void Initialize(IKlothoEngine engine, EcsSimulation simulation, EntityViewUpdater evu)
         {
             _engine = engine;
             _simulation = simulation;
             _evu = evu;
-            _logger = logger;
 
             _platformsAssigned = false;
 

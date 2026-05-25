@@ -168,6 +168,7 @@ namespace xpTURN.Klotho.Tests.Network
             public void Start() { }
             public void Update(float deltaTime) { }
             public void InputCommand(ICommand command, int extraDelay = 0) { }
+            public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void EscalateExtraDelay(int step, int max) { }
             public void Stop() { }
             public void AbortMatch(AbortReason reason) { }

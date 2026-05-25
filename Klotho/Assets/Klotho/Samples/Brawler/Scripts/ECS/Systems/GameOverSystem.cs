@@ -91,7 +91,7 @@ namespace Brawler
         // ────────────────────────────────────────────
         void TryTimeoutGameOver(ref Frame frame, ref GameTimerStateComponent state)
         {
-            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
+            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
             int gameDurationMs = rules.GameDurationSeconds * 1000;
 
             int elapsedMs = (frame.Tick - state.StartTick) * frame.DeltaTimeMs;

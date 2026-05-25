@@ -219,9 +219,24 @@ namespace xpTURN.Klotho.Generator.Analyzers
                         var tc = namedArg.Value;
                         if (tc.Type is INamedTypeSymbol enumType && tc.Value != null)
                         {
-                            var enumName = FindEnumMemberName(enumType, tc.Value);
-                            if (enumName != null)
-                                info.MessageTypeEnum = enumName;
+                            // SYNC WITH NetworkMessageType.UserDefined_Start in INetworkMessage.cs.
+                            const int UserDefinedStart = 200;
+                            int rawValue = System.Convert.ToInt32(tc.Value);
+
+                            if (rawValue >= UserDefinedStart)
+                            {
+                                // User-defined region: always emit raw-cast, even when the value
+                                // happens to coincide with a sentinel name (e.g. UserDefined_Start = 200).
+                                info.MessageTypeRawValue = rawValue;
+                            }
+                            else
+                            {
+                                // Runtime region: only accept defined enum members. Unknown values
+                                // (incl. the attribute default 0) silently drop, preserving prior behavior.
+                                var enumName = FindEnumMemberName(enumType, tc.Value);
+                                if (enumName != null)
+                                    info.MessageTypeEnum = enumName;
+                            }
                         }
                         break;
                     }

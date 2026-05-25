@@ -63,6 +63,30 @@ namespace xpTURN.Klotho.ECS
                 _snapshotParticipants.Add(sp);
         }
 
+        /// <summary>
+        /// Returns the first registered system instance assignable to <typeparamref name="T"/>,
+        /// or <c>null</c> if none. Useful when a callback boundary needs to expose a system's
+        /// secondary interface (e.g. <c>IFPPhysicsWorldProvider</c> implemented by
+        /// <c>PhysicsSystem</c>) without storing a process-wide static reference.
+        /// </summary>
+        public T GetSystem<T>() where T : class => _systemRunner.Find<T>();
+
+        /// <summary>
+        /// Returns true and assigns <paramref name="system"/> if a matching system is registered.
+        /// </summary>
+        public bool TryGetSystem<T>(out T system) where T : class
+        {
+            system = _systemRunner.Find<T>();
+            return system != null;
+        }
+
+        /// <summary>
+        /// Appends every registered system instance assignable to <typeparamref name="T"/>
+        /// into <paramref name="buffer"/>. Returns the appended count.
+        /// </summary>
+        public int GetSystems<T>(List<T> buffer) where T : class
+            => _systemRunner.FindAll(buffer);
+
 public void Initialize()
         {
             _frame.Clear();

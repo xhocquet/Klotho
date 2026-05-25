@@ -12,69 +12,70 @@
 All 6 session-entry points (StartHost / JoinP2PAsync / JoinServerDrivenAsync / ReconnectAsync / SpectateAsync / StartReplayFromFile) go through `KlothoSessionFlow` + `KlothoSessionDriver`. The controller does not call `KlothoSession.Create` / `KlothoSession.CreateSpectator` / `ReplaySystem.LoadFromFile` / `_session.Update` directly — those primitives are reserved as escape hatches.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ [Unity scene loads]                                          │
-│                                                              │
-│ BrawlerGameController.Awake()                                │
-│   • DontDestroyOnLoad                                        │
-│   • CreateLogger()  → KlothoLogger.CreateDefault            │
-│   • _sessionDriver hooks wired:                              │
-│       PreSessionUpdate += OnPreSessionUpdate                 │
-│       Stopping         += OnSessionDriverStopping            │
-│       IdlePoll         += OnSessionDriverIdlePoll            │
-│                                                              │
-│ BrawlerGameController.Start()                                │
-│   • Pre-load: StaticColliders, NavMesh, DataAssets, Registry │
-│   • new PlayerPrefsReconnectCredentialsStore()               │
-│   • new LiteNetLibTransport(_logger, …)                      │
-│   • new BrawlerInputCapture() + Enable()                     │
-│   • Mode-specific roomId reset (P2P → -1)                    │
-│   • _flow = new KlothoSessionFlow(KlothoFlowSetup { ... })   │
-│       (CallbacksFactory = BuildCallbacks)                    │
-│   • _flow.OnSessionCreated += OnFlowSessionCreated           │
-│   • [KLOTHO_FAULT_INJECTION] ApplyFaultInjection()           │
-│   • KlothoAutoReconnect.TryStart(...) — cold-start gate      │
-│       (SD client / P2P guest only)                           │
-│   • GameMenu.SetActionType(CreateRoom / JoinRoom)            │
-│                                                              │
-│ [Wait — GameMenu button input]                               │
-│                                                              │
-│ ┌─ StartHost() ────────┐  ┌─ JoinGame() ─────────────┐       │
-│ │ _flow.StartHost(     │  │ JoinGameAsync (UniTask)  │       │
-│ │   simCfg, sessionCfg)│  │  _flow.JoinAsync(        │       │
-│ │ session.HostGame +   │  │    transport, host, port,│       │
-│ │   Transport.Listen   │  │    preJoin, roomId,      │       │
-│ │ SendPlayerConfig     │  │    sessionConfig, ct)    │       │
-│ │                      │  │ SendPlayerConfig         │       │
-│ └──────────────────────┘  └──────────────────────────┘       │
-│                                                              │
-│ ┌─ StartSpectator() ──────────┐  ┌─ ReconnectAsync() ─┐      │
+┌───────────────────────────────────────────────────────────────┐
+│ [Unity scene loads]                                           │
+│                                                               │
+│ BrawlerGameController.Awake()                                 │
+│   • DontDestroyOnLoad                                         │
+│   • CreateLogger()  → KlothoLogger.CreateDefault              │
+│   • _sessionDriver hooks wired:                               │
+│       PreSessionUpdate += OnPreSessionUpdate                  │
+│       Stopping         += OnSessionDriverStopping             │
+│       IdlePoll         += OnSessionDriverIdlePoll             │
+│                                                               │
+│ BrawlerGameController.Start()                                 │
+│   • Pre-load: StaticColliders, NavMesh, DataAssets, Registry  │
+│   • new PlayerPrefsReconnectCredentialsStore()                │
+│   • new LiteNetLibTransport(_logger, …)                       │
+│   • new BrawlerInputCapture() + Enable()                      │
+│   • Mode-specific roomId reset (P2P → -1)                     │
+│   • _flow = new KlothoSessionFlow(KlothoFlowSetup { ... })    │
+│       (CallbacksFactory = BuildCallbacks)                     │
+│   • _flow.OnSessionCreated += OnFlowSessionCreated            │
+│   • [KLOTHO_FAULT_INJECTION] ApplyFaultInjection()            │
+│   • KlothoAutoReconnect.TryStart(...) — cold-start gate       │
+│       (SD client / P2P guest only)                            │
+│   • GameMenu.SetActionType(CreateRoom / JoinRoom)             │
+│                                                               │
+│ [Wait — GameMenu button input]                                │
+│                                                               │
+│ ┌─ StartHost() ────────┐  ┌─ JoinGame() ─────────────┐        │
+│ │ _flow.StartHost(     │  │ JoinGameAsync (UniTask)  │        │
+│ │   simCfg, sessionCfg)│  │  _flow.JoinAsync(        │        │
+│ │ session.HostGame +   │  │    transport, host, port,│        │
+│ │   Transport.Listen   │  │    preJoin, roomId,      │        │
+│ │ SendPlayerConfig     │  │    sessionConfig, ct)    │        │
+│ │                      │  │ SendPlayerConfig         │        │
+│ └──────────────────────┘  └──────────────────────────┘        │
+│                                                               │
+│ ┌─ StartSpectator() ──────────┐  ┌─ ReconnectAsync()  ─┐      │
 │ │ StartSpectatorAsync(ct)     │  │ _flow.ReconnectAsync│      │
 │ │  var spTransport = new ...  │  │   (transport,       │      │
 │ │  _flow.SpectateAsync(       │  │    creds,           │      │
 │ │    spTransport, host, port, │  │    sessionConfig,   │      │
 │ │    roomId, ct)              │  │    ct)              │      │
 │ └─────────────────────────────┘  └─────────────────────┘      │
-│                                                              │
-│ ┌─ OnFlowSessionCreated(session) — fires on all 5 paths ─┐   │
-│ │  _sessionDriver.Attach(session)                        │   │
-│ │  [KLOTHO_FAULT_INJECTION] FaultInjectionRuntime        │   │
-│ │     .AttachToSession(session, _transport, ...)         │   │
-│ │  if (!IsSpectator && !IsReplay)                        │   │
-│ │     _simCallbacks.SetNetworkService(session.Net...)    │   │
-│ │  InitializeViewSync(session.Engine, session.Simulation)│   │
-│ └────────────────────────────────────────────────────────┘   │
-│                                                              │
-│ [Game loop — driven by KlothoSessionDriver]                  │
-│   • Driver.Update → PreSessionUpdate hook (input capture)    │
-│                   → session.Update(dt)                       │
-│                   → PostSessionUpdate hook (no-op)           │
-│   • Idle (session==null) → IdlePoll → transport.PollEvents() │
-│   • ISimulationCallbacks.OnInitializeWorld (once)            │
-│   • Engine auto-injects InitialStateSnapshot on replay path  │
-│   • IViewCallbacks.OnGameStart (once, on game start)         │
-│   • Per tick: OnPollInput → Simulation.Tick → OnTickExecuted │
-└──────────────────────────────────────────────────────────────┘
+│                                                               │
+│ ┌─ OnFlowSessionCreated(session) — fires on all 5 paths  ─┐   │
+│ │  _sessionDriver.Attach(session)                         │   │
+│ │  [KLOTHO_FAULT_INJECTION] FaultInjectionRuntime         │   │
+│ │     .AttachToSession(session, _transport, ...)          │   │
+│ │  InitializeViewSync(session.Engine, session.Simulation) │   │
+│ │  (SetNetworkService is dispatched by Flow automatically │   │
+│ │   when callbacks implement INetworkServiceReceiver —    │   │
+│ │   Brawler callbacks do not implement it; no call site)  │   │
+│ └─────────────────────────────────────────────────────────┘   │
+│                                                               │
+│ [Game loop — driven by KlothoSessionDriver]                   │
+│   • Driver.Update → PreSessionUpdate hook (input capture)     │
+│                   → session.Update(dt)                        │
+│                   → PostSessionUpdate hook (no-op)            │
+│   • Idle (session==null) → IdlePoll → transport.PollEvents()  │
+│   • ISimulationCallbacks.OnInitializeWorld (once)             │
+│   • Engine auto-injects InitialStateSnapshot on replay path   │
+│   • IViewCallbacks.OnGameStart (once, on game start)          │
+│   • Per tick: OnPollInput → Simulation.Tick → OnTickExecuted  │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 Hook-vs-method ownership:
@@ -187,7 +188,7 @@ public class BrawlerSettings
 Notes:
 - `BrawlerGameController.Update()` no longer polls session state. The per-frame `UpdateStatus` push was lifted — state / phase / player-count / ready-state changes are routed through `KlothoSession.StateChanged` / `PhaseChanged` / `PlayerCountChanged` / `AllPlayersReadyChanged` events subscribed once on `OnFlowSessionCreated`. The session-Update loop lives in `KlothoSessionDriver` — wired via `Awake` hook registration. The spectator path also routes through the same driver since the framework now returns a `KlothoSession` from `_flow.SpectateAsync`.
 - `_entityViewUpdater` is the EntityViewUpdater field name (renamed from the older `_viewUpdater`); its setup runs via `InitializeViewSync(engine, simulation)` rather than a direct `Initialize(engine)` call. EVU also owns the built-in **PlayerViewRegistry** (player ↔ view lookup) — previously a sample-side helper.
-- `_credentialsStore` underpins cold-start auto-reconnect (`Start()` → `KlothoAutoReconnect.TryStart(...)` → `ReconnectAsync(ct)`). It is injected into the Flow via `KlothoFlowSetup.CredentialsStore` — no separate `InjectCredentialsStoreIntoSession()` call.
+- `_credentialsStore` underpins cold-start auto-reconnect (`Start()` → `KlothoAutoReconnect.TryStart(...)` → `ReconnectAsync(ct)`). It is injected into the Flow via `KlothoFlowSetup.CredentialsStore` — no separate `InjectCredentialsStoreIntoSession()` call. Process-exit teardown (`OnApplicationQuit` / `OnDestroy` → `TeardownAll`) calls `_sessionDriver?.DetachAndStop(keepReconnectCredentials: true)` so persisted credentials survive into the next launch — `StopGame` (match-end / explicit stop) keeps the default `false` and discards them via the graceful session-end path.
 - `BrawlerGameController` implements `IKlothoSessionObserver`, and `KlothoFlowSetup.LifecycleObserver = this` registers it as the single subscription site for session lifecycle (replaces per-event `+=` wiring across StartHost / JoinGame / Reconnect / StopGame).
 - `BrawlerPlayerConfig` is sent automatically on guest / reconnect paths via `KlothoFlowSetup.InitialPlayerConfigFactory`. The 3 controller-side `session.SendPlayerConfig(...)` calls (formerly in `StartHost` / `JoinGameAsync` / `ReconnectAsync`) are removed.
 - The spectator transport is instantiated by `KlothoFlowSetup.SpectatorTransportFactory` — `StartSpectatorAsync` no longer creates a `LiteNetLibTransport` inline. Replay loading goes through `_flow.StartReplayFromFile(path)` which throws `ReplayLoadException` on failure.
@@ -351,9 +352,12 @@ private SessionCallbacks BuildCallbacks(ISimulationConfig simCfg, ISessionConfig
 }
 
 // OnSessionCreated — fires once per Flow entry point right after KlothoSession.Create.
-// Centralizes Driver attach + FaultInjection wiring + simCallbacks.SetNetworkService +
-// InitializeViewSync — game-side wiring drift across 5 entry points eliminated.
-private void OnFlowSessionCreated(KlothoSession session)
+// Centralizes Driver attach + FaultInjection wiring + InitializeViewSync — game-side
+// wiring drift across 5 entry points eliminated. SetNetworkService is no longer called
+// here: Flow auto-dispatches it on host/guest entry when SimulationCallbacks implements
+// INetworkServiceReceiver. Brawler callbacks omit that interface, so there's
+// no game-side call site for SetNetworkService at all.
+private void OnFlowSessionCreated(IKlothoSession session)
 {
     _sessionDriver.Attach(session);
 
@@ -371,9 +375,6 @@ private void OnFlowSessionCreated(KlothoSession session)
         _faultInjectionHotkey?.Attach(session, _logger);
     }
 #endif
-
-    if (!isSpectator && !isReplay)
-        _simCallbacks.SetNetworkService(session.NetworkService);
 
     InitializeViewSync(session.Engine, session.Simulation);
 }
@@ -449,7 +450,7 @@ Notes:
 - The host path is P2P-only. SD does not use `StartHost()` — the dedicated server (Appendix H) is the SD authority. The Inspector `Mode = ServerDriven` setting is rejected with a logged error rather than silently mutated to P2P.
 - `BrawlerSimulationCallbacks` construction lives in `BuildCallbacks` (§E-3) — fires once per session entry. `MaxPlayers` derives from the `sessionCfg` parameter the Flow passes in (server-authoritative for guest/spectator; Inspector value for host).
 - The host no longer needs `OnGameStart += InjectInitialStateSnapshot`. The replay snapshot is auto-injected by `Engine.StartReplay`; the live host path does not need it.
-- `_simCallbacks.SetNetworkService(...)` / `InitializeViewSync(...)` are no longer called inline — both move to `OnFlowSessionCreated` so the wiring runs identically for every entry point (host / guest / reconnect / spectator / replay).
+- `InitializeViewSync(...)` is no longer called inline — it moves to `OnFlowSessionCreated` so the wiring runs identically for every entry point (host / guest / reconnect / spectator / replay). `SetNetworkService(...)` is not called by the game side at all — Flow auto-dispatches it via the `INetworkServiceReceiver` opt-in marker; Brawler callbacks omit the interface.
 
 ---
 
@@ -534,13 +535,47 @@ private async UniTaskVoid StartSpectatorAsync(CancellationToken ct)
 
 Notes:
 - The returned `_session` is an ordinary `KlothoSession` — `KlothoSessionDriver` (attached inside `OnFlowSessionCreated`) drives the spectator tick. There is no separate `_spectatorEngine` / `_spectatorSimulation` field any more.
-- Spectator vs replay is identified at runtime via `session.Engine.IsSpectatorMode` / `IsReplayMode` (canonical signal). `OnFlowSessionCreated` skips `_simCallbacks.SetNetworkService(...)` for spectator/replay and skips FaultInjection attach for spectator (spectator uses a separate `spectatorTransport`).
+- Spectator vs replay is identified at runtime via `session.Engine.IsSpectatorMode` / `IsReplayMode` (canonical signal). `OnFlowSessionCreated` skips FaultInjection attach for spectator (spectator uses a separate `spectatorTransport`). `SetNetworkService` is no longer called by the game side at all — Flow auto-dispatches it via the `INetworkServiceReceiver` opt-in, and Brawler callbacks omit the interface so spectator/replay are naturally skipped at the Flow boundary.
 - Spectator mode uses the same `IKlothoSessionObserver` for lifecycle (`OnSessionStopped`, `OnResyncCompleted`, etc.). Error-correction (capture-pre-rollback / PuP) is enabled in spectator mode just like the regular client; the EC pair is wired internally when a batch of verified input arrives.
 - `SpectatorSessionSetup` has no `CredentialsStore` / `SessionConfig` / `MaxPlayers` fields — those values arrive over the wire and are owned by the framework. Only `CallbacksFactory` is required.
 
 ---
 
 ## E-6. BrawlerSimulationCallbacks — Fields, State, Reactive Hooks
+
+> **Updated (2026-05-25)**: The spawn-retry / past-tick escalation loop documented below has been **absorbed by the framework `ReliableCommandTracker`**. The current Brawler code uses a 1-line `engine.IssueOnce(_spawnBuilder)` call (see §E-6-5 below) instead of the 7 fields + `HandleCommandRejected` / `OnResyncCompleted` / `OnPollInput` spawn-only branches shown in §E-6-1..E-6-4. The legacy listing is preserved here for context until a future revision rewrites the section against the current code.
+
+### Replacement pattern (current shape)
+
+```csharp
+public class BrawlerSimulationCallbacks : ISimulationCallbacks
+{
+    private readonly Func<ICommand>     _spawnBuilder;   // bound delegate, single-alloc
+    private IReliableCommandHandle      _spawnHandle;
+
+    public BrawlerSimulationCallbacks(/* ... */)
+    {
+        _spawnBuilder = BuildSpawnCommand;
+    }
+
+    private void SendSpawnCommand(IKlothoEngine engine)
+        => _spawnHandle = engine.IssueOnce(_spawnBuilder);   // ReliabilityPolicy.Default
+
+    private ICommand BuildSpawnCommand()
+        => new SpawnCharacterCommand(_playerConfig.SelectedCharacterClass);
+
+    public void OnPollInput(IKlothoEngine engine, int playerId, int tick)
+    {
+        if (_spawnHandle != null && _spawnHandle.WouldCollideAt(tick)) return;
+        if (HasCharacterFor(playerId)) _spawnHandle?.Confirm();
+        // ... regular input handling ...
+    }
+}
+```
+
+`ReliabilityPolicy.Default` (RetryIntervalTicks=20 / ExtraDelayStep=4 / ExtraDelayMax=40 / TreatDuplicateAsAck=true / TreatPastTickAsEscalation=true) matches the prior invariant. `OnResyncCompleted` is now framework-internal (tracker resets every outstanding handle's `LastAttemptTick=-1`); the game side no longer needs to wire it explicitly. `FaultInjection.DropSpawnCommandPlayerIds` / `ForceSpawnRetryPlayerIds` hooks remain effective via tracker-internal semantics — no game-side branching.
+
+### Legacy listing (historical context)
 
 The callbacks class has grown to host two reactive-escalation paths and a state-driven spawn loop on top of its core responsibilities. Subsections below mirror the actual source layout.
 

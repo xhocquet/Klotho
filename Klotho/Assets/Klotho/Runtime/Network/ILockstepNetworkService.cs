@@ -116,9 +116,12 @@ namespace xpTURN.Klotho.Network
         void JoinRoom(string roomName);
 
         /// <summary>
-        /// Leave room
+        /// Leave room.
+        /// keepReconnectCredentials: when true, persisted cold-start Reconnect credentials are
+        /// retained (used by process-shutdown paths so a relaunch can still attempt Reconnect).
+        /// Default false matches "user-intent leave" — credentials are discarded.
         /// </summary>
-        void LeaveRoom();
+        void LeaveRoom(bool keepReconnectCredentials = false);
 
         /// <summary>
         /// Set ready state

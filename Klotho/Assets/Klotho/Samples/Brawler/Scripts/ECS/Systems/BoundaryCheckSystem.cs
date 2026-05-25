@@ -27,7 +27,7 @@ namespace Brawler
 
         public void Update(ref Frame frame)
         {
-            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>(1001);
+            var rules = frame.AssetRegistry.Get<BrawlerGameRulesAsset>();
 
             FP64 half = rules.StageBoundsSize / FP64.FromInt(2);
             var stageBounds = new FPBounds2(
