@@ -139,7 +139,7 @@ Tools/
 ### 1) Define a Component
 
 ```csharp
-[KlothoComponent(100)]  // 1–99 reserved for the framework, 100+ for game developers
+[KlothoComponent(100)]  // 1–99: framework, 100+: game
 public partial struct HeroComponent : IComponent
 {
     public int Level;
