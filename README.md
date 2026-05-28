@@ -113,7 +113,7 @@ https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
 https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
 ```
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.3`).
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.4`).
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
