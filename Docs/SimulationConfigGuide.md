@@ -1,8 +1,8 @@
 # SimulationConfig Recommended-Value Guide (per Genre / Platform)
 
-> This document is a starting-point guide for how to configure the key parameters of [`ISimulationConfig`](../Assets/Klotho/Runtime/Core/ISimulationConfig.cs) / [`SimulationConfig`](../Assets/Klotho/Runtime/Core/Engine/SimulationConfig.cs) by game genre and platform.
+> This document is a starting-point guide for how to configure the key parameters of [`ISimulationConfig`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/ISimulationConfig.cs) / [`SimulationConfig`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs) by game genre and platform.
 >
-> **Recommended values are only a starting point.** Tune them against measured RTT/jitter, content-driven input frequency, and concurrent entity counts. Default definitions live in [`SimulationConfig.cs`](../Assets/Klotho/Runtime/Core/Engine/SimulationConfig.cs); field semantics are documented in [Specification.md §2.2](./Specification.md#22-default-configuration-values).
+> **Recommended values are only a starting point.** Tune them against measured RTT/jitter, content-driven input frequency, and concurrent entity counts. Default definitions live in [`SimulationConfig.cs`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs); field semantics are documented in [Specification.md §2.2](./Specification.md#22-default-configuration-values).
 
 ---
 
@@ -214,6 +214,6 @@ Each turn is discrete; simulation advances after input arrives. **Slow tick + no
 ## 7. References
 
 - Field semantics / defaults: [`Specification.md §2.2`](./Specification.md#22-default-configuration-values)
-- Real-world SD example: [`Tools/BrawlerDedicatedServer/simulationconfig.json`](../Tools/BrawlerDedicatedServer/simulationconfig.json)
+- Real-world SD example: [`Tools/BrawlerDedicatedServer/simulationconfig.json`](../Klotho/Tools/BrawlerDedicatedServer/simulationconfig.json)
 - Per-mode message flow: [`Specification.md §9`](./Specification.md)
 - Brawler sample bootstrap: [`Samples/Brawler.E.Bootstrap.md`](./Samples/Brawler.E.Bootstrap.md)

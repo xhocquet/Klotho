@@ -92,44 +92,111 @@ Three-layer separation:
 - **Unity 2022.3+**
 - **C# 8.0** (some assemblies opt into newer C# language features via the `xpTURN.Polyfill` package, which supplies the runtime-attribute shims required by C# 11)
 - **UniTask** — async (Cysharp)
-- **ZLogger + Microsoft.Extensions.Logging** — structured logging
-- **LiteNetLib** — default reference implementation for UDP transport (MIT, pure C#). The network transport layer is abstracted via the `INetworkTransport` interface and can be replaced with any other library.
-- **Newtonsoft.Json** — DataAsset JSON serialization
-- **K4os.Compression.LZ4** — replay compression
+- **xpTURN.Klotho.Logging (IKLogger)** — in-house structured logging (no external logging dependency). Optional MEL interop via the `Plugins~/Logging.Mel` sample adapter (`Microsoft.Extensions.Logging.Abstractions` DLL is consumer-provided).
+- **LiteNetLib** — default reference implementation for UDP transport (MIT, pure C#, vendored under `Runtime/ThirdParty/LiteNetLib.v2.1.4`). The network transport layer is abstracted via the `INetworkTransport` interface and can be replaced with any other library.
+- **Newtonsoft.Json** — DataAsset JSON serialization (`com.unity.nuget.newtonsoft-json`)
+- **K4os.Compression.LZ4** — replay compression (vendored under `Runtime/ThirdParty/`)
 
 Details: [Docs/BaseLibraries.md](Docs/BaseLibraries.md)
 
 ---
 
+## Installation
+
+1. Open **Window > Package Manager**
+2. Click **+** > **Add package from git URL...**
+3. Enter each URL in order (the first two are required git dependencies that UPM cannot auto-resolve):
+
+```text
+https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
+https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
+https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
+```
+
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.3`).
+
+Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
+
+### Optional samples
+
+After install, open Unity Package Manager → select **xpTURN.Klotho** → **Samples** → "Import" to copy the **MEL Logging Plugin** adapter into your `Assets/Samples/`. Activating the adapter still requires you to supply `Microsoft.Extensions.Logging.Abstractions` (consumer-provided).
+
+Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this repo if you want to inspect or modify them.
+
+### Dedicated server
+
+Klotho's source generator requires the dedicated-server build to compile core sources in the same compilation unit (binary distribution is not viable). Two install patterns:
+
+**A. git submodule (recommended)** — vendor this repo into your game project as a submodule under `<yourGame>/Packages/com.xpturn.klotho`. The `Server~/KlothoServer.Core.props` resolves all core paths via `$(MSBuildThisFileDirectory)`, so your server csproj just imports it at the correct relative depth:
+
+```xml
+<!-- Server csproj at <yourGame>/MyDedicatedServer.csproj (project root) -->
+<Import Project="Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+
+<!-- Server csproj at <yourGame>/Tools/MyDedicatedServer/MyDedicatedServer.csproj (nested 2 levels) -->
+<Import Project="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+```
+
+Adjust the `..\` depth to match where your csproj sits relative to the Unity project root.
+
+**B. UPM `Library/PackageCache` + `<KlothoPackageRoot>`** — if you don't want a submodule, set `<KlothoPackageRoot>` per-project to your resolved PackageCache path. The `@<hash>` suffix changes on every pull, so this needs occasional refresh:
+
+```xml
+<PropertyGroup>
+  <KlothoPackageRoot>$(MSBuildProjectDirectory)\..\..\Library\PackageCache\com.xpturn.klotho@1a2b3c4d</KlothoPackageRoot>
+</PropertyGroup>
+<Import Project="$(KlothoPackageRoot)\Server~\KlothoServer.Core.props" />
+```
+
+Full guide (with `Program.cs`, callbacks, config files, single-room/multi-room/test CLI): [Docs/Samples/Brawler.H.DedicatedServer.md](Docs/Samples/Brawler.H.DedicatedServer.md) — a Brawler-specific reference you can copy and adapt to your game.
+
+---
+
 ## Repository Layout
 
-```
-Assets/Klotho/
-├── Runtime/
-│   ├── Core/            KlothoEngine · KlothoSession · ISimulationCallbacks
-│   │                    · IViewCallbacks · ISimulationConfig · ISessionConfig
-│   │                    · Command/Event/Pool families
-│   ├── Input/           InputBuffer · SimpleInputPredictor
-│   ├── Network/         IKlothoNetworkService · ServerDrivenClientService
-│   │                    · ServerNetworkService · Spectator/Reconnect/LateJoin
-│   │                    · Messages
-│   ├── State/           RingSnapshotManager
-│   ├── Serialization/   SpanWriter/Reader · SerializationBuffer
-│   ├── Replay/          IReplaySystem · ReplayRecorder · ReplayPlayer · LZ4 compression
-│   ├── ECS/             Frame · EntityManager · ComponentStorage<T> · SystemRunner
-│   │                    DataAsset/ (IDataAsset · Registry · Json)
-│   └── Deterministic/   FP64 · FPVector* · Physics · Navigation · Random
-├── Unity/               USimulationConfig · USessionConfig · View/
-├── Editor/              NavMesh · Physics · ECS · FSM · DataAsset tooling
-├── Gameplay/            built-in component / system reference implementations
-├── LiteNetLib/          LiteNetLibTransport (INetworkTransport implementation)
-├── Samples/             Brawler (fighting-game sample)
-└── Tests/               unit / integration / determinism-verification tests
+Klotho ships as an embedded Unity Package (`com.xpturn.klotho`) located at `Klotho/Packages/com.xpturn.klotho/`. The dev project under `Klotho/` is the source-of-truth host; consumers install via UPM (see [Installation](#installation)).
 
-Tools/
-├── KlothoGenerator/     Roslyn source generator (`IIncrementalGenerator`)
-├── Generated/           reference copies of generated code (not included in Unity builds)
-└── gen.build.sh         generator build script
+```
+Klotho/                                        ← Unity dev project (this repo)
+├── Packages/com.xpturn.klotho/                ← ★ framework package (UPM)
+│   ├── package.json
+│   ├── Runtime/
+│   │   ├── Core/              KlothoEngine · KlothoSession · ISimulationCallbacks · IViewCallbacks
+│   │   │                      · ISimulationConfig · ISessionConfig · Command/Event/Pool families
+│   │   ├── Logging/           xpTURN.Klotho.Logging (IKLogger — in-house structured logging)
+│   │   ├── Gameplay/          built-in component / system reference implementations
+│   │   ├── Diagnostics/       FaultInjection · RttSpikeMetricsCollector
+│   │   ├── Input/             InputBuffer · SimpleInputPredictor
+│   │   ├── Network/           IKlothoNetworkService · ServerDriven · ServerNetwork · Spectator
+│   │   │                      · Reconnect/LateJoin · Messages
+│   │   ├── State/             RingSnapshotManager
+│   │   ├── Serialization/     SpanWriter/Reader · SerializationBuffer
+│   │   ├── Replay/            IReplaySystem · ReplayRecorder · ReplayPlayer · LZ4 compression
+│   │   ├── ECS/               Frame · EntityManager · ComponentStorage<T> · SystemRunner
+│   │   │                      · DataAsset/ (IDataAsset · Registry · Json)
+│   │   ├── Deterministic/     FP64 · FPVector* · Physics · Navigation · Random
+│   │   ├── Unity/             USimulationConfig · USessionConfig · View/ · UnityDebugSink
+│   │   ├── LiteNetLib/        LiteNetLibTransport (INetworkTransport implementation)
+│   │   └── ThirdParty/        vendored: LiteNetLib.v2.1.4, K4os.Compression.LZ4.v1.3.8, ...
+│   ├── Editor/                NavMesh · Physics · ECS · FSM · DataAsset tooling
+│   ├── Plugins/Analyzers/     KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
+│   ├── Prefabs/               debug/visualization prefabs (EcsDebugBridge · FPPhysics*Visualizer)
+│   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample")
+│   └── Server~/               dedicated-server build assets (MSBuild props + Config helpers)
+│
+├── Assets/                                    ← dev-only (not redistributed via UPM)
+│   ├── Brawler/               4-player fighting-game sample
+│   ├── NavMesh/               navmesh sample
+│   ├── Tests/                 unit / integration / determinism-verification tests
+│   ├── Benchmarks/            performance benchmarks
+│   └── Scenes/  Settings/  StreamingAssets/  ...
+│
+└── Tools/                                     ← .NET tooling (not redistributed)
+    ├── KlothoGenerator/       Roslyn source generator (`IIncrementalGenerator`) — built by gen.build.sh
+    ├── BrawlerDedicatedServer/  Brawler dedicated server (.NET console)
+    ├── DeterminismVerification/ determinism verification (.NET console)
+    ├── Generated/             reference copies of generated `.g.cs` (not included in Unity builds)
+    └── gen.build.sh           generator build script
 ```
 
 ---
@@ -240,7 +307,7 @@ Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameD
 
 ## Sample
 
-[Assets/Klotho/Samples/Brawler](Assets/Klotho/Samples/Brawler) — a 4-player fighting-game sample
+[Klotho/Assets/Brawler](Klotho/Assets/Brawler) — a 4-player fighting-game sample (in the dev project of this repo)
 
 - ECS-based combat / movement / skills / cooldowns / knockback / items / traps
 - HFSM-based bot AI (`BotHFSMRoot` / `BotActions` / `BotDecisions`)

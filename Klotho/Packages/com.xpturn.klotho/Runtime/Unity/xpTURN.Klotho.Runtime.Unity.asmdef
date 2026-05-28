@@ -1,0 +1,20 @@
+{
+    "name": "xpTURN.Klotho.Runtime.Unity",
+    "rootNamespace": "",
+    "references": [
+        "xpTURN.Klotho.Logging",
+        "xpTURN.Klotho.Logging.Unity",
+        "Unity.InputSystem",
+        "UniTask",
+        "xpTURN.Klotho.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

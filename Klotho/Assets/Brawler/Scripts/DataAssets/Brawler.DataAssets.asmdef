@@ -1,0 +1,17 @@
+{
+    "name": "Brawler.DataAssets",
+    "rootNamespace": "",
+    "references": [
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

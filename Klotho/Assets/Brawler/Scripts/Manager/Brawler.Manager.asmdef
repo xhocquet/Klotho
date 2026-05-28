@@ -1,0 +1,28 @@
+{
+    "name": "Brawler.Manager",
+    "rootNamespace": "",
+    "references": [
+        "Unity.InputSystem",
+        "Unity.TextMeshPro",
+        "LiteNetLib",
+        "xpTURN.Klotho.Logging",
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Runtime",
+        "xpTURN.Klotho.Runtime.Unity",
+        "xpTURN.Klotho.LiteNetLib",
+        "xpTURN.Klotho.Gameplay",
+        "Brawler.ECS",
+        "Brawler.DataAssets",
+        "Brawler.View",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

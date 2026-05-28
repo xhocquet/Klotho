@@ -1,0 +1,16 @@
+{
+    "name": "xpTURN.Klotho.Logging.Unity",
+    "rootNamespace": "xpTURN.Klotho.Logging",
+    "references": [
+        "xpTURN.Klotho.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

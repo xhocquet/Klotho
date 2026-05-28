@@ -1,0 +1,24 @@
+{
+    "name": "xpTURN.Klotho.SizeOfTests",
+    "rootNamespace": "",
+    "references": [
+        "UnityEngine.TestRunner",
+        "xpTURN.Klotho.Runtime",
+        "GUID:9dd49314b0f384594a8936d5e432f42c",
+        "GUID:81cf1a05953fb412d8a439160cd15b14"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "System.Runtime.CompilerServices.Unsafe.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

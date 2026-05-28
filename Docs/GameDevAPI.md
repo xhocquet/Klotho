@@ -739,7 +739,7 @@ Notes:
 
 ## 10. Dynamic InputDelay (client-reactive policy)
 
-Non-host sessions automatically attach a `DynamicInputDelayPolicy` (in `Assets/Klotho/Runtime/Core/Engine/`) that escalates `engine.RecommendedExtraDelay` when the server-driven push control falls behind:
+Non-host sessions automatically attach a `DynamicInputDelayPolicy` (in `Packages/com.xpturn.klotho/Runtime/Core/Engine/`) that escalates `engine.RecommendedExtraDelay` when the server-driven push control falls behind:
 
 - **Trigger A — PastTick reject sliding window**: non-spawn `CommandRejected(PastTick)` events accumulate within a tick-based window (`SessionConfig.ReactiveWindowTicks`); when the count crosses `ReactiveEscalateThreshold`, the policy calls `engine.EscalateExtraDelay(ReactiveStep, ReactiveMax)`.
 - **Trigger B — rollback burst**: rollback events accumulate within `SessionConfig.RollbackWindowTicks`; reaching `RollbackBurstCount` triggers the same escalation. Primary fallback for P2P guests (no `CommandRejectedMessage`).

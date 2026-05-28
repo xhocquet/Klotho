@@ -16,9 +16,9 @@ Steps that apply regardless of mode.
 ### I-1-1. Open the sample
 
 1. Open the `Klotho/` project in Unity 6.3
-2. Open the scene: `Assets/Klotho/Samples/Brawler/Scenes/BrawlerScene.unity`
+2. Open the scene: `Assets/Brawler/Scenes/BrawlerScene.unity`
 3. In the scene, confirm `BrawlerGameController` Inspector slots are bound:
-   - **Simulation Config** — `Assets/Klotho/Samples/Brawler/Config/SimulationConfig.asset`
+   - **Simulation Config** — `Assets/Brawler/Config/SimulationConfig.asset`
    - **Static Colliders Asset** — `Data/BrawlerScene.StaticColliders.bytes`
    - **Nav Mesh Asset** — `Data/BrawlerScene.NavMeshData.bytes`
    - **Data Asset** — `Data/BrawlerAssets.bytes`

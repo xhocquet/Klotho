@@ -1,10 +1,8 @@
 using System;
 using System.IO;
 using System.Threading;
-using Microsoft.Extensions.Logging;
-using ZLogger;
-using ZLogger.Providers;
-using Utf8StringInterpolation;
+
+using xpTURN.Klotho.Logging;
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
@@ -64,7 +62,7 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
     var navMeshPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.NavMeshData.bytes");
     var assetPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerAssets.bytes");
 
-    var logLevel = args.Length > 2 ? Enum.Parse<LogLevel>(args[2]) : LogLevel.Warning;
+    var logLevel = args.Length > 2 ? Enum.Parse<KLogLevel>(args[2]) : KLogLevel.Warning;
     using var loggerFactory = CreateLoggerFactory(logLevel);
     var logger = loggerFactory.CreateLogger("Server");
 
@@ -95,7 +93,7 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
     var transport = new LiteNetLibTransport(logger, connectionKey: KLOTHO_CONNECTION_KEY);
     if (!transport.Listen("0.0.0.0", port, maxRooms * (maxPlayersPerRoom + maxSpectatorsPerRoom)))
     {
-        logger.ZLogError($"[BrawlerDedicatedServer] Failed to bind port {port} — exiting.");
+        logger.KError($"[BrawlerDedicatedServer] Failed to bind port {port} — exiting.");
         Environment.Exit(1);
     }
 
@@ -121,14 +119,14 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
             botCount),
     });
 
-    logger.ZLogInformation(
+    logger.KInformation(
         $"[BrawlerDedicatedServer] Server listening on port {port}, maxPlayers={maxPlayersPerRoom}, maxSpectators={maxSpectatorsPerRoom}, botCount={botCount}, tickInterval={tickIntervalMs}ms");
 
     // Main loop (includes Graceful Shutdown)
     var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
     loop.Run();
 
-    logger.ZLogInformation($"[BrawlerDedicatedServer] Server stopped.");
+    logger.KInformation($"[BrawlerDedicatedServer] Server stopped.");
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -145,7 +143,7 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     var navMeshPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.NavMeshData.bytes");
     var assetPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerAssets.bytes");
 
-    var logLevel = args.Length > 4 ? Enum.Parse<LogLevel>(args[4]) : LogLevel.Warning;
+    var logLevel = args.Length > 4 ? Enum.Parse<KLogLevel>(args[4]) : KLogLevel.Warning;
     using var loggerFactory = CreateLoggerFactory(logLevel);
     var logger = loggerFactory.CreateLogger("Server");
 
@@ -180,7 +178,7 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     var transport = new LiteNetLibTransport(logger, connectionKey: KLOTHO_CONNECTION_KEY);
     if (!transport.Listen("0.0.0.0", port, maxRooms * (maxPlayersPerRoom + maxSpectatorsPerRoom)))
     {
-        logger.ZLogError($"[BrawlerDedicatedServer] Failed to bind port {port} — exiting.");
+        logger.KError($"[BrawlerDedicatedServer] Failed to bind port {port} — exiting.");
         Environment.Exit(1);
     }
 
@@ -206,36 +204,29 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
             botCount),
     });
 
-    logger.ZLogInformation(
+    logger.KInformation(
         $"[BrawlerDedicatedServer] Server listening on port {port}, maxRooms={maxRooms}, maxPlayersPerRoom={maxPlayersPerRoom}, botCount={botCount}, tickInterval={tickIntervalMs}ms");
 
     // Main loop (includes Graceful Shutdown)
     var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
     loop.Run();
 
-    logger.ZLogInformation($"[BrawlerDedicatedServer] Server stopped.");
+    logger.KInformation($"[BrawlerDedicatedServer] Server stopped.");
 }
 
 // ═══════════════════════════════════════════════════════════
 // Common logger factory
 // ═══════════════════════════════════════════════════════════
-static ILoggerFactory CreateLoggerFactory(LogLevel logLevel)
+static IKLoggerFactory CreateLoggerFactory(KLogLevel logLevel)
 {
-    return LoggerFactory.Create(builder =>
+    return KLoggerFactory.Create(builder =>
     {
         builder.SetMinimumLevel(logLevel);
-        builder.AddZLoggerConsole();
-
-        builder.AddZLoggerRollingFile(options =>
+        builder.AddConsole();
+        builder.AddRollingFile(options =>
         {
-            options.FilePathSelector = (dt, index) => $"Logs/Server_{dt:yyyy-MM-dd-HH-mm-ss}_{index:000}.log";
-            options.RollingInterval = RollingInterval.Day;
+            options.FilePrefix = "Server";
             options.RollingSizeKB = 1024 * 1024;
-            options.UsePlainTextFormatter(formatter =>
-            {
-                formatter.SetPrefixFormatter($"{0}|{1:short}|", (in MessageTemplate template, in LogInfo info) => template.Format(info.Timestamp, info.LogLevel));
-                formatter.SetExceptionFormatter((writer, ex) => Utf8String.Format(writer, $"{ex.Message}\n{ex.StackTrace}"));
-            });
         });
     });
 }

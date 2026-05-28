@@ -1,0 +1,44 @@
+{
+  "name": "com.xpturn.klotho",
+  "version": "0.2.4",
+  "displayName": "xpTURN.Klotho",
+  "description": "Deterministic Multiplayer Simulation Framework for Unity (CSP / Rollback / Frame Sync / Server-Driven / Replay).",
+  "unity": "2022.3",
+  "license": "Apache-2.0",
+  "documentationUrl": "https://github.com/xpTURN/Klotho/blob/main/README.md",
+  "changelogUrl": "https://github.com/xpTURN/Klotho/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/xpTURN/Klotho/blob/main/LICENSE",
+  "dependencies": {
+    "com.unity.inputsystem": "1.18.0",
+    "com.unity.ai.navigation": "2.0.12",
+    "com.unity.nuget.newtonsoft-json": "3.2.2"
+  },
+  "samples": [
+    {
+      "displayName": "MEL Logging Plugin",
+      "description": "Microsoft.Extensions.Logging adapter plugin for IKLogger (requires MEL.Abstractions DLL — consumer-provided)",
+      "path": "Plugins~/Logging.Mel"
+    }
+  ],  
+  "keywords": [
+    "xpTURN",
+    "klotho",
+    "multiplayer",
+    "networking",
+    "deterministic",
+    "simulation",
+    "rollback",
+    "lockstep",
+    "frame-sync",
+    "client-side-prediction",
+    "server-authoritative",
+    "replay",
+    "fixed-point",
+    "ecs"
+  ],
+  "author": {
+    "name": "xpTURN",
+    "email": "xpturn@gmail.com",
+    "url": "https://github.com/xpTURN"
+  }
+}

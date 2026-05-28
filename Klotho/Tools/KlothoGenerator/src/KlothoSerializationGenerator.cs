@@ -214,19 +214,27 @@ namespace xpTURN.Klotho.Generator
 
         private static string ResolveProjectRoot(Compilation compilation)
         {
-            // Find project root by looking for "Assets/" in syntax tree file paths
+            // Find project root by looking for "Assets/" or embedded "Packages/" in syntax tree file paths.
+            // PackageCache paths (Library/PackageCache/...) intentionally do not match — emit is skipped there.
             foreach (var tree in compilation.SyntaxTrees)
             {
                 var filePath = tree.FilePath;
                 if (string.IsNullOrEmpty(filePath)) continue;
 
-                var idx = filePath.IndexOf(Path.DirectorySeparatorChar + "Assets" + Path.DirectorySeparatorChar, StringComparison.Ordinal);
-                if (idx < 0)
-                    idx = filePath.IndexOf("/Assets/", StringComparison.Ordinal);
+                var idx = FindMarker(filePath, "Assets");
+                if (idx < 0) idx = FindMarker(filePath, "Packages");
                 if (idx >= 0)
                     return filePath.Substring(0, idx);
             }
             return null;
+        }
+
+        private static int FindMarker(string filePath, string segment)
+        {
+            var idx = filePath.IndexOf(Path.DirectorySeparatorChar + segment + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            if (idx < 0)
+                idx = filePath.IndexOf("/" + segment + "/", StringComparison.Ordinal);
+            return idx;
         }
 
         /// <summary>

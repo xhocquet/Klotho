@@ -12,10 +12,10 @@
   </PropertyGroup>
 
   <!-- Tier 1+2+3: server framework shared sources -->
-  <Import Project="..\Server\KlothoServer.Core.props" />
+  <Import Project="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
 
   <PropertyGroup>
-    <BrawlerRoot>..\..\Assets\Klotho\Samples\Brawler\Scripts</BrawlerRoot>
+    <BrawlerRoot>..\..\Assets\Brawler\Scripts</BrawlerRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,7 +26,7 @@
 
   <ItemGroup>
     <!-- Brawler Data (.bytes) → copy to bin/Data/ -->
-    <Content Include="..\..\Assets\Klotho\Samples\Brawler\Data\*.bytes">
+    <Content Include="..\..\Assets\Brawler\Data\*.bytes">
       <Link>Data\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

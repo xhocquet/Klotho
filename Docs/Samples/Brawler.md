@@ -62,7 +62,7 @@ See [Brawler.I.HowToRun.md](Brawler.I.HowToRun.md) for step-by-step instructions
 ### 3-1. Five Assemblies
 
 ```
-Assets/Klotho/Samples/Brawler/Scripts/
+Assets/Brawler/Scripts/
 ├── ECS/              (Brawler.ECS)            — deterministic code only
 ├── DataAssets/       (Brawler.DataAssets)     — static-config asset definitions
 ├── Manager/          (Brawler.Manager)        — callback impls, session controller
@@ -80,7 +80,7 @@ Brawler.View         ──► Brawler.Manager + UnityEngine
 Brawler.View.Editor  ──► Brawler.View + UnityEditor
 ```
 
-All Runtime assemblies include `Microsoft.Extensions.Logging` + `ZLogger` as `precompiledReferences`.
+All Runtime assemblies use the in-house `xpTURN.Klotho.Logging` (`IKLogger`) — no external logging `precompiledReferences`.
 
 ### 3-3. Config Assets
 
@@ -559,7 +559,7 @@ public class CharacterActionVfxViewComponent : EntityViewComponent
 ### 13-1. Folder Layout
 
 ```
-Assets/Klotho/Samples/Brawler/
+Assets/Brawler/
 ├── Config/
 │   ├── SimulationConfig.asset           (USimulationConfig)
 │   └── BrawlerEntityViewFactory.asset

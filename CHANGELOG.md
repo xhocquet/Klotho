@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.4] - 2026-05-28
+
+### Logging — IKLogger transition (breaking)
+
+- ZLogger + `Microsoft.Extensions.Logging` dependencies fully removed → in-house `xpTURN.Klotho.Logging` (`IKLogger` + `KLogHandler{Trace,Debug,Information,Warning,Error,Critical}` ref-struct interpolated handlers + `KInformation` / `KDebug` / `KWarning` / `KError` extension methods + `UnityDebugSink` / Rolling-File sink). Core stays zero external-logging dependency with `noEngineReferences: true`.
+- Optional MEL interop: `Plugins~/Logging.Mel` adapter (`xpTURN.Klotho.Logging.Mel`) — activates when the consumer provides `Microsoft.Extensions.Logging.Abstractions` DLL. Exposed through the UPM "Import Sample" mechanism.
+- Game-side call migration: `_logger?.ZLogInformation(...)` → `_logger?.KInformation(...)` (same for other levels).
+
+### Packaging — IMP47 UPM (breaking layout)
+
+- Framework relocated to an embedded UPM package (`com.xpturn.klotho`) at `Klotho/Packages/com.xpturn.klotho/` (`Runtime`, `Editor`, `Plugins/Analyzers`, `Prefabs`, `Plugins~/Logging.Mel`, `Server~`). asmdef GUIDs preserved + `.meta` files moved alongside sources — cross-asmdef references remain intact.
+- Dev project flattening: `Assets/Klotho/{Samples/Brawler, Samples/NavMesh, Tests, Benchmarks}` → `Assets/{Brawler, NavMesh, Tests, Benchmarks}` (the `Klotho/` namespace folder is gone).
+- External install: open Unity Package Manager → "Add package from git URL..." → add `UniTask → Polyfill → Klotho` (`https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho`) in order. New "Installation" section in README.
+- Third-party source vendoring under `Runtime/ThirdParty/`: `LiteNetLib.v2.1.4` / `K4os.Compression.LZ4.v1.3.8` / `System.Runtime.CompilerServices.Unsafe.v6.1.2`. NuGetForUnity removed (`packages.config` is empty, core `precompiledReferences` are empty).
+- Three debug/visualization prefabs (`EcsDebugBridge`, `FPPhysicsWorldVisualizer`, `FPStaticColliderVisualizer`) moved into the package's `Prefabs/`.
+
+### Dedicated server build
+
+- `Tools/Server/` → `Packages/.../Server~/`: `KlothoServer.Core.props` uses `$(MSBuildThisFileDirectory)`-relative paths so it works identically in embedded and PackageCache layouts. `ProjectReference KlothoGenerator.csproj` → `<Analyzer Include="...\Plugins\Analyzers\KlothoGenerator.dll" />` (consumer-compatible). ItemGroup consolidated into a single `Runtime/**/*.cs` glob with `Unity/` and `**/Json/**` excludes.
+- Because the source generator requires source-sharing, a consumer dedicated server pulls all of Tier 1-3 (Runtime / Logging / Gameplay / LiteNetLib transport / ThirdParty) with a single `<Import Project="Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />`. Two install patterns — (A) git submodule (recommended) or (B) PackageCache + `<KlothoPackageRoot>` — documented in the README "Dedicated server" section.
+
+### Source generator
+
+- `KlothoSerializationGenerator.ResolveProjectRoot` now recognizes the `/Packages/` marker in addition to `/Assets/` → moved core assemblies' `Tools/Generated/` debug-dump output restored. Consumer paths under `Library/PackageCache/com.xpturn.klotho@<hash>/...` match neither marker → `projectRoot=null` → emit skipped automatically (no PackageCache pollution on the consumer side).
+
+### Docs
+
+- `README.md` (Tech Stack / Repository Layout / new Installation / Dedicated server / Sample path), `Docs/BaseLibraries.md` (full rewrite — IKLogger / Vendored restructure), `Docs/Specification.md` (Directory Layout tree rewritten), `Docs/FEATURES.md`, `Docs/GameDevAPI.md`, `Docs/Navigation.md`, `Docs/SimulationConfigGuide.md`, and `Docs/Samples/Brawler.{md, E.Bootstrap, F.SceneNumbers, H.DedicatedServer, I.HowToRun}.md` updated end-to-end for the new package layout / flattening / IKLogger transition. Brawler.H gains a "Reference template" section (Brawler-vs-consumer mapping table). All 77 markdown links validated.
+
 ## [0.2.3] - 2026-05-25
 
 - IMP-46 A: `INetworkServiceReceiver` (opt-in marker interface) — `ISimulationCallbacks` implementations declare this when they need the `IKlothoNetworkService` handle on host/guest entry. `KlothoSessionFlow.FireOnSessionCreated` dispatches it right after `OnSessionCreated` and before `InitialPlayerConfigFactory`, gated on session kind (Host/Guest) + non-null callbacks + `session.SimulationCallbacks is INetworkServiceReceiver recv`. Brawler `BrawlerGameController.OnHostOrGuestSessionCreated` no longer hand-calls `SetNetworkService`; `BrawlerSimulationCallbacks` drops its empty-body `SetNetworkService(IKlothoNetworkService _)`.

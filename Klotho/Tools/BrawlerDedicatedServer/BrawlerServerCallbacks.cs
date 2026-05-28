@@ -1,8 +1,7 @@
 using System.IO;
+using xpTURN.Klotho.Logging;
 using System.Collections.Generic;
-using Microsoft.Extensions.Logging;
-using ZLogger;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
+
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
@@ -15,7 +14,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
 {
     public class BrawlerServerCallbacks : ISimulationCallbacks
     {
-        private readonly ILogger _logger;
+        private readonly IKLogger _logger;
 
         private readonly List<FPStaticCollider> _staticColliders;
         private readonly FPNavMesh _navMesh;
@@ -24,7 +23,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
         private readonly int _maxPlayers;
         private readonly int _botCount;
 
-        public BrawlerServerCallbacks(ILogger logger,
+        public BrawlerServerCallbacks(IKLogger logger,
                                         List<FPStaticCollider> staticColliders,
                                         FPNavMesh navMesh,
                                         int maxPlayers,
@@ -58,7 +57,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
 
         public void OnInitializeWorld(IKlothoEngine engine)
         {
-            _logger?.ZLogInformation($"[BrawlerServerCallbacks] OnInitializeWorld: seed={engine.RandomSeed}");
+            _logger?.KInformation($"[BrawlerServerCallbacks] OnInitializeWorld: seed={engine.RandomSeed}");
             BrawlerSimSetup.InitializeWorldState(engine, _maxPlayers, _botCount);
         }
 

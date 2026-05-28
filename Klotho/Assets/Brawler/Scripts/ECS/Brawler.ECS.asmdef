@@ -1,0 +1,22 @@
+{
+    "name": "Brawler.ECS",
+    "rootNamespace": "",
+    "references": [
+        "LiteNetLib",
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Logging",
+        "xpTURN.Klotho.Runtime",
+        "xpTURN.Klotho.LiteNetLib",
+        "xpTURN.Klotho.Gameplay",
+        "Brawler.DataAssets"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

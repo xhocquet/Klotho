@@ -218,7 +218,7 @@ private void CreateLogger()
         level: _logLevel,
         filePrefix: "Client",
         categoryName: "Client");
-    _logger?.ZLogInformation($"ZLogger logging started!");
+    _logger?.KInformation($"Klotho logging started!");
 }
 
 private void OnPreSessionUpdate(KlothoSession session, float dt)
@@ -626,7 +626,7 @@ public class BrawlerSimulationCallbacks : ISimulationCallbacks
 }
 ```
 
-> The previous client-reactive PastTick / rollback-burst escalation fields (`_lastServerPushTick`, `_reactiveWindowStartTick`, `SERVER_PUSH_GRACE_TICKS`, `REACTIVE_*`, `ROLLBACK_*`) were lifted into the framework class **`DynamicInputDelayPolicy`** (`Assets/Klotho/Runtime/Core/Engine/DynamicInputDelayPolicy.cs`). The policy is attached automatically by `KlothoSession` on non-host sessions; thresholds are sourced from `SessionConfig` (`ServerPushGraceTicks`, `ReactiveWindowTicks`, `ReactiveEscalateThreshold`, `ReactiveStep`, `ReactiveMax`, `RollbackBurstCount`, `RollbackWindowTicks`, `ReactiveEscalateCooldownTicks`). The sample only keeps the spawn-cmd-specific escalation (above).
+> The previous client-reactive PastTick / rollback-burst escalation fields (`_lastServerPushTick`, `_reactiveWindowStartTick`, `SERVER_PUSH_GRACE_TICKS`, `REACTIVE_*`, `ROLLBACK_*`) were lifted into the framework class **`DynamicInputDelayPolicy`** (`Packages/com.xpturn.klotho/Runtime/Core/Engine/DynamicInputDelayPolicy.cs`). The policy is attached automatically by `KlothoSession` on non-host sessions; thresholds are sourced from `SessionConfig` (`ServerPushGraceTicks`, `ReactiveWindowTicks`, `ReactiveEscalateThreshold`, `ReactiveStep`, `ReactiveMax`, `RollbackBurstCount`, `RollbackWindowTicks`, `ReactiveEscalateCooldownTicks`). The sample only keeps the spawn-cmd-specific escalation (above).
 
 ### E-6-2. Engine wiring — `SetEngine`
 

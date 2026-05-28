@@ -119,52 +119,82 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 ### Directory Layout
 
 ```
-Assets/Klotho/
-├── Runtime/
-│   ├── Core/           KlothoEngine, KlothoSession, KlothoSessionSetup,
-│   │                   IKlothoEngine, IKlothoSession,
-│   │                   ISimulationCallbacks, IViewCallbacks,
-│   │                   ISimulationConfig, ISessionConfig, SimulationConfig, SessionConfig,
-│   │                   NetworkMode, ICommand, CommandFactory, CommandRegistry,
-│   │                   ICommandSender, WarmupRegistry, DedicatedServerLoop,
-│   │                   Pool(CommandPool, EventPool, ListPool, DictionaryPool, StreamPool),
-│   │                   SimulationEvent, EventBuffer, EventCollector, EventDispatcher
-│   ├── Input/          IInputBuffer, IInputPredictor, IInputHandler, InputBuffer
-│   ├── Network/        IKlothoNetworkService, IServerDrivenNetworkService, INetworkTransport,
-│   │                   KlothoNetworkService, ServerDrivenClientService, ServerNetworkService,
-│   │                   ISpectatorService, SpectatorService,
-│   │                   Room, RoomManager, RoomRouter, RoomScopedTransport, ServerLoop,
-│   │                   ServerInputCollector, NetworkMessages, SharedTimeClock
-│   ├── State/          IStateSnapshot, IStateSnapshotManager, RingSnapshotManager
-│   ├── Serialization/  SpanWriter, SpanReader, SerializationBuffer, ISpanSerializable
-│   ├── Replay/         IReplaySystem, ReplayRecorder, ReplayPlayer, ReplayData
-│   │                   (LZ4 compression — K4os.Compression.LZ4)
-│   ├── ECS/            Frame, EntityManager, ComponentStorage, ComponentStorageRegistry,
-│   │                   EntityPrototypeRegistry, IEntityPrototype, SystemRunner,
-│   │                   FrameRingBuffer, EcsStateSnapshot, EcsSimulation, FixedString32/64,
-│   │                   ISystem/IInitSystem/ICommandSystem/ISyncEventSystem/ISignal family
-│   │                   DataAsset/ (IDataAsset, DataAssetRegistry, DataAssetRef,
-│   │                               DataAssetReader/Writer, [KlothoDataAsset(typeId)],
-│   │                               Json/ — xpTURN.Klotho.DataAsset.Json assembly)
-│   └── Deterministic/  FP64, FPVector2/3/4, FPQuaternion, FPMatrix, FPPhysicsWorld,
-│                       FPStaticCollider, FPStaticBVH, FPStaticColliderSerializer,
-│                       FPNavMesh, FPNavMeshSerializer, NavAgentComponent, FPNavAgentSystem,
-│                       DeterministicRandom, FPAnimationCurve, etc.
-├── Unity/          USimulationConfig, USessionConfig, EcsDebugBridge,
-│                   View/ (EntityView, EntityViewComponent, EntityViewFactory,
-│                          EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
-│                          BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
-│                          UpdatePositionParameter, ErrorVisualState, BindBehaviour.cs)
-│                   FPStaticColliderOverride, FPStaticColliderVisualizer
-├── Editor/         NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
-│                   Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
-│                   ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)
-│                   FSM/ (HFSMVisualizerWindow)
-│                   DataAsset/ (JsonToBytesConverter)
-├── Gameplay/       built-in component / system / command / event reference implementations
-├── LiteNetLib/     LiteNetLibTransport — INetworkTransport implementation (xpTURN.Klotho.LiteNetLib)
-├── Samples/        Brawler (fighting-game sample)
-└── Tests/          unit tests
+Klotho/                                ← Unity dev project (this repo)
+├── Packages/com.xpturn.klotho/        ← ★ framework package (UPM `?path=`)
+│   ├── package.json
+│   ├── Runtime/
+│   │   ├── Core/           KlothoEngine, KlothoSession, KlothoSessionSetup,
+│   │   │                   IKlothoEngine, IKlothoSession,
+│   │   │                   ISimulationCallbacks, IViewCallbacks,
+│   │   │                   ISimulationConfig, ISessionConfig, SimulationConfig, SessionConfig,
+│   │   │                   NetworkMode, ICommand, CommandFactory, CommandRegistry,
+│   │   │                   ICommandSender, WarmupRegistry, DedicatedServerLoop,
+│   │   │                   Pool(CommandPool, EventPool, ListPool, DictionaryPool, StreamPool),
+│   │   │                   SimulationEvent, EventBuffer, EventCollector, EventDispatcher,
+│   │   │                   ModuleInitializerHelper
+│   │   ├── Logging/        xpTURN.Klotho.Logging (IKLogger, KLoggerFactory, KLogBuilder,
+│   │   │                   KLogHandlers — interpolated handlers, Sinks)
+│   │   ├── Gameplay/       built-in component / system / command / event reference implementations
+│   │   │                   (xpTURN.Klotho.Gameplay, noEngineReferences)
+│   │   ├── Diagnostics/    FaultInjection, FaultInjectionLoader, RttSpikeMetricsCollector
+│   │   ├── Input/          IInputBuffer, IInputPredictor, IInputHandler, InputBuffer
+│   │   ├── Network/        IKlothoNetworkService, IServerDrivenNetworkService, INetworkTransport,
+│   │   │                   KlothoNetworkService, ServerDrivenClientService, ServerNetworkService,
+│   │   │                   ISpectatorService, SpectatorService,
+│   │   │                   Room, RoomManager, RoomRouter, RoomScopedTransport, ServerLoop,
+│   │   │                   ServerInputCollector, NetworkMessages, MessageRegistry, SharedTimeClock
+│   │   ├── State/          IStateSnapshot, IStateSnapshotManager, RingSnapshotManager
+│   │   ├── Serialization/  SpanWriter, SpanReader, SerializationBuffer, ISpanSerializable
+│   │   ├── Replay/         IReplaySystem, ReplayRecorder, ReplayPlayer, ReplayData
+│   │   │                   (LZ4 compression — K4os.Compression.LZ4, vendored)
+│   │   ├── ECS/            Frame, EntityManager, ComponentStorage, ComponentStorageRegistry,
+│   │   │                   EntityPrototypeRegistry, IEntityPrototype, SystemRunner,
+│   │   │                   FrameRingBuffer, EcsStateSnapshot, EcsSimulation, FixedString32/64,
+│   │   │                   ISystem/IInitSystem/ICommandSystem/ISyncEventSystem/ISignal family
+│   │   │                   DataAsset/ (IDataAsset, DataAssetRegistry, DataAssetRef,
+│   │   │                               DataAssetReader/Writer, [KlothoDataAsset(typeId)],
+│   │   │                               Json/ — xpTURN.Klotho.DataAsset.Json assembly)
+│   │   ├── Deterministic/  FP64, FPVector2/3/4, FPQuaternion, FPMatrix, FPPhysicsWorld,
+│   │   │                   FPStaticCollider, FPStaticBVH, FPStaticColliderSerializer,
+│   │   │                   FPNavMesh, FPNavMeshSerializer, NavAgentComponent, FPNavAgentSystem,
+│   │   │                   DeterministicRandom, FPAnimationCurve, etc.
+│   │   ├── Unity/          USimulationConfig, USessionConfig, EcsDebugBridge,
+│   │   │                   View/ (EntityView, EntityViewComponent, EntityViewFactory,
+│   │   │                          EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
+│   │   │                          BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
+│   │   │                          UpdatePositionParameter, ErrorVisualState)
+│   │   │                   FPStaticColliderOverride, FPStaticColliderVisualizer,
+│   │   │                   Logging/ (UnityDebugSink, KLogBuilderUnityExtensions)
+│   │   ├── LiteNetLib/     LiteNetLibTransport — INetworkTransport implementation
+│   │   │                   (xpTURN.Klotho.LiteNetLib, noEngineReferences)
+│   │   └── ThirdParty/     vendored: LiteNetLib.v2.1.4 (UDP networking),
+│   │                       K4os.Compression.LZ4.v1.3.8 (replay compression),
+│   │                       System.Runtime.CompilerServices.Unsafe.v6.1.2 (Span primitives)
+│   ├── Editor/             NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
+│   │                       Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
+│   │                       ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)
+│   │                       FSM/ (HFSMVisualizerWindow)
+│   │                       DataAsset/ (JsonToBytesConverter)
+│   ├── Plugins/Analyzers/  KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
+│   ├── Prefabs/            debug/visualization prefabs (EcsDebugBridge,
+│   │                       FPPhysicsWorldVisualizer, FPStaticColliderVisualizer)
+│   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample" → MEL Logging Plugin)
+│   └── Server~/            dedicated-server build assets (MSBuild props +
+│                           Config helpers: ConfigPathResolver, Session/SimulationConfigLoader)
+│
+├── Assets/                 ← dev-only (not redistributed via UPM)
+│   ├── Brawler/            4-player fighting-game sample
+│   ├── NavMesh/            navmesh sample
+│   ├── Tests/              unit / integration / determinism-verification tests
+│   ├── Benchmarks/         performance benchmarks
+│   └── Scenes/  Settings/  StreamingAssets/  ...
+│
+└── Tools/                  ← .NET tooling (not redistributed)
+    ├── KlothoGenerator/    Roslyn source generator project (built by gen.build.sh)
+    ├── BrawlerDedicatedServer/  Brawler dedicated server (.NET console)
+    ├── DeterminismVerification/ determinism verification (.NET console)
+    ├── Generated/          reference copies of generated `.g.cs` (not included in Unity builds)
+    └── gen.build.sh        generator build script
 ```
 
 ---

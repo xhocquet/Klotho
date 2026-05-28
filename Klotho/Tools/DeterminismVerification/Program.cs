@@ -39,7 +39,6 @@ foreach (int seed in seeds)
     sim.AddSystem(new RandomStressSystem(), SystemPhase.LateUpdate);
 
     sim.Initialize();
-    sim.SetPlayerCount(1);
 
     // Seed initial entities
     SeedInitialEntities(sim, seed);
@@ -82,7 +81,6 @@ Console.Write("Self-verify seed 42... ");
     sim.AddSystem(new TrigStressSystem(), SystemPhase.PostUpdate);
     sim.AddSystem(new RandomStressSystem(), SystemPhase.LateUpdate);
     sim.Initialize();
-    sim.SetPlayerCount(1);
     SeedInitialEntities(sim, 42);
 
     var inputRng = new DeterministicRandom(42);

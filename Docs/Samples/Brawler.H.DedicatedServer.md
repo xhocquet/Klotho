@@ -13,9 +13,24 @@
 - The **authoritative server** for ServerDriven mode (`Mode = ServerDriven`) — clients send only input commands after `Connect`
 - Three execution modes: single-room (`MaxRooms = 1` over the same RoomManager infrastructure) / multi-room (`--multi`, `MaxRooms = N`) / E2E test runner (`--test`)
 - Uses **the same system set** (`BrawlerSimSetup.RegisterSystems`) as the Brawler client → determinism is guaranteed automatically
-- Logging is `ZLogger` console + daily rolling file (`Logs/Server_*.log`)
+- Logging is `IKLogger` console + daily rolling file (`Logs/Server_*.log`)
 
 The headless server is **optional**. If your sample only uses P2P or host mode, you can skip this document.
+
+### Using this document as a reference template
+
+This appendix describes `Tools/BrawlerDedicatedServer/` as it exists in this repo — concrete code, paths, and CLI for the Brawler sample. **If you are building your own game's dedicated server, copy this folder as a starting point** and adapt the Brawler-specific parts:
+
+| What's Brawler-specific | Replace with |
+| ---- | ---- |
+| `Tools/BrawlerDedicatedServer/` folder location | Your game's server folder (e.g. `<yourGame>/Tools/MyDedicatedServer/` or anywhere with a `.csproj`) |
+| `BrawlerServerCallbacks.cs` (extends `ISimulationCallbacks`) | Your `MyGameServerCallbacks.cs` — wire your game's systems via `RegisterSystems` |
+| Tier 4 `Compile Include` in csproj — `Assets/Brawler/Scripts/{DataAssets,ECS}/**` | Your game's deterministic code path (e.g. `Assets/MyGame/Scripts/{DataAssets,ECS}/**`) |
+| Tier 4 `Content Include` — `Assets/Brawler/Data/*.bytes` | Your game's exported `.bytes` (static colliders / navmesh / data assets) |
+| `simulationconfig.json` / `sessionconfig.json` values | Tuned for your game's tick rate, latency budget, max players, etc. |
+| `Program.cs` CLI flags (`--multi`, `--test`, etc.) | Your operational requirements |
+
+Tiers 1–3 (Runtime, LiteNetLib, Transport, Server utils, Gameplay) are **shared across all games** via [`Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props`](../../Klotho/Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props) — your csproj imports the props with one line and inherits all of them. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct `<Import Project>` depth for your csproj location.
 
 ---
 
@@ -47,21 +62,21 @@ As a result, `BrawlerDedicatedServer.csproj` merges the following tiers into a s
 
 | Tier | Path | Link Location |
 |---|---|---|
-| 1 Runtime | `Assets/Klotho/Runtime/**/*.cs` (excluding `Json/**`) | `Runtime/...` |
-| 1 LiteNetLib | `Assets/Plugins/LiteNetLib/**/*.cs` | `LiteNetLib/...` |
-| 1 Transport | `Assets/Klotho/LiteNetLib/LiteNetLibTransport.cs`, etc. | `Transport/...` |
-| 2 Server utils | `Tools/Server/*.cs` (`SimulationConfigLoader`, `SessionConfigLoader`, `ConfigPathResolver`) | `Server/...` |
-| 3 Gameplay | `Assets/Klotho/Gameplay/**/*.cs` | `Gameplay/...` |
-| 4 Game | `Assets/Klotho/Samples/Brawler/Scripts/DataAssets/**` + `.../ECS/**` | `Game/...` |
+| 1 Runtime | `Packages/com.xpturn.klotho/Runtime/**/*.cs` (excluding `Unity/**`, `**/Json/**`) | `Runtime/...` |
+| 1 LiteNetLib | `Packages/com.xpturn.klotho/Runtime/ThirdParty/LiteNetLib.v2.1.4/**/*.cs` | (under `Runtime/ThirdParty/...`) |
+| 1 Transport | `Packages/com.xpturn.klotho/Runtime/LiteNetLib/*.cs` (`LiteNetLibTransport`, etc.) | (under `Runtime/LiteNetLib/...`) |
+| 2 Server utils | `Packages/com.xpturn.klotho/Server~/*.cs` (`SimulationConfigLoader`, `SessionConfigLoader`, `ConfigPathResolver`) | `Server/...` |
+| 3 Gameplay | `Packages/com.xpturn.klotho/Runtime/Gameplay/**/*.cs` | (under `Runtime/Gameplay/...`) |
+| 4 Game | `Assets/Brawler/Scripts/DataAssets/**` + `.../ECS/**` | `Game/...` |
 
-> The shared include rules for tiers 1–3 are defined in [Tools/Server/KlothoServer.Core.props](../../Tools/Server/KlothoServer.Core.props); Brawler-specific includes (tier 4) are specified directly in `BrawlerDedicatedServer.csproj`.
+> The shared include rules for tiers 1–3 are defined in [Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props](../../Klotho/Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props) (single `Runtime/**/*.cs` glob with `Unity/` and `Json/` excludes); Brawler-specific includes (tier 4) are specified directly in `BrawlerDedicatedServer.csproj`. Game projects import the props via `<Import Project="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />`.
 
 ### H-2-2. Bundled Data Files
 
-`Assets/Klotho/Samples/Brawler/Data/*.bytes` is copied under `Data/` of the build output as `PreserveNewest`:
+`Assets/Brawler/Data/*.bytes` is copied under `Data/` of the build output as `PreserveNewest`:
 
 ```xml
-<Content Include="..\..\Assets\Klotho\Samples\Brawler\Data\*.bytes">
+<Content Include="..\..\Assets\Brawler\Data\*.bytes">
   <Link>Data\%(Filename)%(Extension)</Link>
   <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 </Content>
@@ -113,7 +128,7 @@ The actual file, verbatim:
 
 Key choices:
 - `Mode = ServerDriven` — the server collects, orders, and redistributes input
-- `TickIntervalMs = 25` → 40 Hz. **The host (server) propagates this value to guests via `SimulationConfigMessage`**, so clients simulate at the same tick rate using the server's value regardless of their local `USimulationConfig` ([SimulationConfigMessage.cs](../../Assets/Klotho/Runtime/Network/Messages/SimulationConfigMessage.cs); for spectators, `SimulationConfig` + `SessionConfig` ride along in [SpectatorAcceptMessage.cs](../../Assets/Klotho/Runtime/Network/Messages/SpectatorAcceptMessage.cs) so spectators enter with the same simulation / session parameters).
+- `TickIntervalMs = 25` → 40 Hz. **The host (server) propagates this value to guests via `SimulationConfigMessage`**, so clients simulate at the same tick rate using the server's value regardless of their local `USimulationConfig` ([SimulationConfigMessage.cs](../../Klotho/Packages/com.xpturn.klotho/Runtime/Network/Messages/SimulationConfigMessage.cs); for spectators, `SimulationConfig` + `SessionConfig` ride along in [SpectatorAcceptMessage.cs](../../Klotho/Packages/com.xpturn.klotho/Runtime/Network/Messages/SpectatorAcceptMessage.cs) so spectators enter with the same simulation / session parameters).
 - `UsePrediction = false` — the server doesn't need prediction
 - `SDInputLeadTicks = 4` — server-relative lead ticks; the buffer that absorbs client input latency
 - `LateJoinDelaySafety = 2`, `RttSanityMaxMs = 240` — feed the server-side `RecommendedExtraDelayCalculator` (Sync / LateJoin / Reconnect seed + mid-match push). See Specification.md §2.2.
@@ -285,7 +300,7 @@ Notes:
 
 ### H-5-3. The Main Loop — `ServerLoop`
 
-Defined in `Assets/Klotho/Runtime/Core/Server/ServerLoop.cs`. Per iteration:
+Defined in `Packages/com.xpturn.klotho/Runtime/Core/Server/ServerLoop.cs`. Per iteration:
 
 - `transport.PollEvents()` — socket receive (single port, all rooms)
 - `roomManager.Tick(dt)` — accumulate / execute ticks per room

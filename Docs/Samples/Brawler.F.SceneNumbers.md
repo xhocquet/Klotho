@@ -116,7 +116,7 @@ Warrior (root)
 │   ├── CharacterAnimatorViewComponent (EntityViewComponent)
 │   │   └── _animator → Animator on the same object
 │   └── CharacterActionVfxViewComponent (EntityViewComponent)
-│       ├── _attackVfxPrefab → Assets/Klotho/Samples/Brawler/SFX/SlashVfx.prefab
+│       ├── _attackVfxPrefab → Assets/Brawler/SFX/SlashVfx.prefab
 │       └── _skillVfxByClass → [Skill0, Skill1] VFX prefabs
 ├── (child) ShieldFx (initially inactive) → ShieldFx.prefab
 └── (child) BoostFx (initially inactive) → BoostFx.prefab

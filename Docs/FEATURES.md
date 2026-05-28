@@ -58,7 +58,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **DedicatedServerLoop** — dedicated-server loop (for standalone server processes)
 - **Object pooling** — ListPool, DictionaryPool, StreamPool, CommandPool, EventPool (GC avoidance)
 - **WarmupRegistry** — JIT-warmup pre-registration (command / event / message types)
-- **Logging** — built on the standard `Microsoft.Extensions.Logging.ILogger<T>` interface. Implementation: ZLogger (`ZLogger.Unity`) + `Microsoft.Extensions.Logging.Abstractions`
+- **Logging** — built on `xpTURN.Klotho.Logging` (`IKLogger`) — in-house structured logging with zero external dependencies. Optional MEL interop via the `Plugins~/Logging.Mel` adapter (consumer-provided `Microsoft.Extensions.Logging.Abstractions.dll`)
 
 ## Deterministic Math
 
@@ -259,7 +259,7 @@ Supports client-side prediction, rollback, and frame synchronization.
   - **EntityViewUpdater** — simulation state → view sync; owns the built-in **PlayerViewRegistry\<TView\>** (lifted from sample). EVU drives `Register` / `Unregister` automatically from `OwnerComponent` add/remove; game code uses `Get(playerId)` for lookup and subscribes to `OnViewRegistered` / `OnLocalViewRegistered` / `OnLocalViewUnregistered` for player-view event hooks
   - **KlothoSessionFlow / KlothoSessionFlowAsync** — recommended 5-entry-point builder for session creation (`StartHost` / `JoinAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplay`). Sync primitives in Runtime.Core, UniTask wrappers in Runtime.Unity. `KlothoConnectionAsync` (Runtime.Unity) remains as an escape-hatch primitive — Flow consumes it internally.
   - **KlothoSessionDriver** — MonoBehaviour adapter that drives `KlothoSession.Update` / `Stop` through Unity's Update loop; exposes `PreSessionUpdate` / `PostSessionUpdate` / `Stopping` / `IdlePoll` hooks for game-side input capture and cleanup
-  - **KlothoAutoReconnect / KlothoLogger** — cold-start credentials gate + ZLogger.Unity + Rolling File factory (Runtime.Unity helpers)
+  - **KlothoAutoReconnect / KlothoLogger** — cold-start credentials gate + IKLogger + Rolling File sink (Runtime.Unity helpers)
   - **VerifiedFrameInterpolator** — interpolation based on verified frames
   - **BindBehaviour** — component-binding MonoBehaviour
   - **UpdatePositionParameter / ViewFlags / ErrorVisualState** — auxiliary types

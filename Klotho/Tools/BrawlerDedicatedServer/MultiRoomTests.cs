@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
-using Microsoft.Extensions.Logging;
-using ZLogger;
+
+using xpTURN.Klotho.Logging;
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.ECS;
@@ -20,18 +20,18 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
     /// </summary>
     public static class MultiRoomTests
     {
-        private static ILoggerFactory _loggerFactory;
-        private static ILogger _logger;
+        private static IKLoggerFactory _loggerFactory;
+        private static IKLogger _logger;
         private static int _passed;
         private static int _failed;
         private static readonly MessageSerializer _serializer = new MessageSerializer();
 
         public static int RunAll()
         {
-            _loggerFactory = LoggerFactory.Create(b =>
+            _loggerFactory = KLoggerFactory.Create(b =>
             {
-                b.SetMinimumLevel(LogLevel.Warning);
-                b.AddZLoggerConsole();
+                b.SetMinimumLevel(KLogLevel.Warning);
+                b.AddConsole();
             });
             _logger = _loggerFactory.CreateLogger("Test");
             _passed = 0;
