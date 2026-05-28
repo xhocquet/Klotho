@@ -117,6 +117,15 @@ Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Kl
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
+### Polyfill activation (C# 9–11 syntax)
+
+Klotho uses C# 11 features (`required`, `init`, custom interpolated string handlers, etc.) in some assemblies. After installing `xpTURN.Polyfill`, enable the language version once per project:
+
+1. Run **Edit > Polyfill > Player Settings > Apply Additional Compiler Arguments -langversion (All Installed Platforms)**.
+2. Settings are persisted to **ProjectSettings/xpTURN.Polyfill.Settings.json**.
+
+This adds `-langversion:preview` to Player Settings (Unity build), inserts `<LangVersion>preview</LangVersion>` into regenerated `.csproj` (IDE), and defines the `CSHARP_PREVIEW` scripting symbol. Without this step, Klotho assemblies that rely on C# 11 syntax may fail to compile. Details: [Polyfill README](https://github.com/xpTURN/Polyfill#project-settings-c-langversion).
+
 ### Optional samples
 
 After install, open Unity Package Manager → select **xpTURN.Klotho** → **Samples** → "Import" to copy the **MEL Logging Plugin** adapter into your `Assets/Samples/`. Activating the adapter still requires you to supply `Microsoft.Extensions.Logging.Abstractions` (consumer-provided).
