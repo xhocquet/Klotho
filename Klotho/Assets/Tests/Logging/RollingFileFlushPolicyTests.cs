@@ -6,9 +6,9 @@ using xpTURN.Klotho.Logging;
 namespace xpTURN.Klotho.Logging.Tests
 {
     /// <summary>
-    /// Verifies the rolling file sink flush policy: buffered writes are pushed to disk on
-    /// Error/Critical (crash-context durability), when unflushed output crosses a size threshold,
-    /// and on Dispose. Each case writes to a temp directory and reads the file back.
+    /// Verifies that the rolling file sink flushes every line to disk so logs are immediately
+    /// visible (no buffering window), and that Dispose pushes the final state out cleanly. Each
+    /// case writes to a temp directory and reads the file back.
     /// </summary>
     [TestFixture]
     public class RollingFileFlushPolicyTests
@@ -30,39 +30,42 @@ namespace xpTURN.Klotho.Logging.Tests
         }
 
         [Test]
-        public void InfoBelowThreshold_Buffered_ThenError_FlushesBufferedTail()
+        public void EveryLine_FlushedImmediately_AcrossLevels()
         {
             var sink = new RollingFileSink("Test", 1024 * 1024, _dir);
             try
             {
                 sink.Write(KLogLevel.Information, "info-1", null);
-                sink.Write(KLogLevel.Information, "info-2", null);
-                Assert.That(ReadLogFile(), Does.Not.Contain("info-1"), "info should still be buffered");
+                Assert.That(ReadLogFile(), Does.Contain("info-1"));
 
-                sink.Write(KLogLevel.Error, "boom", null);
+                sink.Write(KLogLevel.Warning, "warn-1", null);
+                Assert.That(ReadLogFile(), Does.Contain("warn-1"));
+
+                sink.Write(KLogLevel.Debug, "dbg-1", null);
                 var text = ReadLogFile();
                 Assert.That(text, Does.Contain("info-1"));
-                Assert.That(text, Does.Contain("info-2"));
-                Assert.That(text, Does.Contain("boom"));
+                Assert.That(text, Does.Contain("warn-1"));
+                Assert.That(text, Does.Contain("dbg-1"));
             }
             finally { sink.Dispose(); }
         }
 
         [Test]
-        public void InfoExceedsThreshold_AutoFlushes()
+        public void Error_FlushedImmediately_WithException()
         {
             var sink = new RollingFileSink("Test", 1024 * 1024, _dir);
             try
             {
-                var line = new string('y', 200);
-                for (int i = 0; i < 60; i++) sink.Write(KLogLevel.Information, line, null); // ~12KB > 8KB threshold
-                Assert.That(ReadLogFile(), Does.Contain("yyy"));
+                sink.Write(KLogLevel.Error, "boom", new InvalidOperationException("why"));
+                var text = ReadLogFile();
+                Assert.That(text, Does.Contain("boom"));
+                Assert.That(text, Does.Contain("why"));
             }
             finally { sink.Dispose(); }
         }
 
         [Test]
-        public void Dispose_FlushesRemainder()
+        public void Dispose_FlushesAndCloses()
         {
             var sink = new RollingFileSink("Test", 1024 * 1024, _dir);
             sink.Write(KLogLevel.Information, "tail", null);

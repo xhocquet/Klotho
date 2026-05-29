@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.4c] - 2026-05-29
+
+### Fix — Logging file sink
+
+- `RollingFileSink`: per-line flush + `ProcessExit` hook — logs immediately visible, Unity-client quit-time tail loss fixed.
+
 ## [0.2.4] - 2026-05-28
 
 ### Logging — IKLogger transition (breaking)

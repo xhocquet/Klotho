@@ -76,22 +76,27 @@ namespace xpTURN.Klotho.Logging
         private readonly string _prefix;
         private readonly long _rollingSizeBytes;
 
-        // Buffered writes are flushed on Error/Critical (so crash-context logs are durable) and
-        // whenever this many unflushed chars accumulate. Bounds data loss on a process crash without
-        // a per-line flush. Flush pushes to the OS file cache, which survives process death.
-        private const long FlushThresholdChars = 8 * 1024;
-
         private StreamWriter _writer;
         private DateTime _curDate;
         private int _index;
         private long _written;
-        private long _unflushed;
+
+        // Final flush on process termination when callers leak the factory. Unsubscribed on Dispose.
+        private readonly EventHandler _processExitHandler;
 
         public RollingFileSink(string filePrefix = "Client", int rollingSizeKB = 1024 * 1024, string dir = "Logs")
         {
             _prefix = filePrefix;
             _rollingSizeBytes = (long)rollingSizeKB * 1024;
             _dir = dir;
+            _processExitHandler = OnProcessExit;
+            try { AppDomain.CurrentDomain.ProcessExit += _processExitHandler; } catch { }
+            try { AppDomain.CurrentDomain.DomainUnload += _processExitHandler; } catch { }
+        }
+
+        private void OnProcessExit(object sender, EventArgs e)
+        {
+            try { lock (_gate) CloseWriter(); } catch { }
         }
 
         public void Write(KLogLevel level, string message, Exception exception)
@@ -113,18 +118,18 @@ namespace xpTURN.Klotho.Logging
                     len += 2 + (exception.Message?.Length ?? 0) + (exception.StackTrace?.Length ?? 0);
                 }
                 _writer.Write(Environment.NewLine);
-                long lineLen = len + Environment.NewLine.Length;
-                _written += lineLen;
-                _unflushed += lineLen;
+                _written += len + Environment.NewLine.Length;
 
                 if (_written >= _rollingSizeBytes)
                 {
                     RollNext(now); // CloseWriter flushes the old file; OpenWriter resets counters
                 }
-                else if (level >= KLogLevel.Error || _unflushed >= FlushThresholdChars)
+                else
                 {
+                    // Flush each line so logs are immediately visible and a process crash loses at most
+                    // the current line in flight. Flush pushes to the OS file cache, which survives the
+                    // process. One syscall per line; negligible at typical game logging volumes.
                     try { _writer.Flush(); } catch { }
-                    _unflushed = 0;
                 }
             }
         }
@@ -151,7 +156,6 @@ namespace xpTURN.Klotho.Logging
             string path = Path.Combine(_dir, $"{_prefix}_{now:yyyy-MM-dd-HH-mm-ss-fff}_{_index:000}.log");
             _writer = new StreamWriter(new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read), Encoding.UTF8) { AutoFlush = false };
             _written = 0;
-            _unflushed = 0;
         }
 
         private void CloseWriter()
@@ -162,6 +166,11 @@ namespace xpTURN.Klotho.Logging
         }
 
         public void Flush() { lock (_gate) { try { _writer?.Flush(); } catch { } } }
-        public void Dispose() { lock (_gate) CloseWriter(); }
+        public void Dispose()
+        {
+            try { AppDomain.CurrentDomain.ProcessExit -= _processExitHandler; } catch { }
+            try { AppDomain.CurrentDomain.DomainUnload -= _processExitHandler; } catch { }
+            lock (_gate) CloseWriter();
+        }
     }
 }
