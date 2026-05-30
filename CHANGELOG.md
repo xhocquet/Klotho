@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.5] - 2026-05-30
+
+### Sample — P2pSample
+
+- New minimum P2P sample under `Samples/P2pSample/` — a 2-player sumo match (cube-on-plane, WASD move, push-off-edge respawn, 60s GameOverEvent). Independent Unity 6.3 project sibling of `Klotho/`, consumes `com.xpturn.klotho 0.2.4` via the same UPM git URL that external users would use (`?path=Klotho/Packages/com.xpturn.klotho#v0.2.4`). Game-side LOC ≈ 795 across 15 files (Sim 7 / View 8) — ~66% the size of Brawler with the same deterministic-core + view-bootstrap pattern. Visuals use Unity built-in primitives only (Cube / Plane) — no external assets.
+- Documentation: [`Samples/P2pSample/README.md`](Samples/P2pSample/README.md) (4-step quick start) and [`Docs/Samples/P2pSample.md`](Docs/Samples/P2pSample.md) (architecture walkthrough + common pitfalls). README "Optional samples" anchor updated.
+- Common pitfalls surfaced while building this sample (now documented in `Docs/Samples/P2pSample.md` §6): Synced events dispatch via `engine.OnSyncedEvent` (not `OnEventConfirmed`); `session.HostGame(...)` is mandatory after `flow.StartHost(...)` to activate host role; `[KlothoOrder(N)]` is required on every DataAsset field (else generator skips serialization → `.bytes` truncated to header); JoinP2PAsync cancellation does not unwind LiteNetLib peer registration, so a re-entry guard is needed; `AllPlayersReadyChanged` is host-only — guest UI must derive from `SessionPhase` instead.
+
+### Sample — SdSample
+
+- New minimum **ServerDriven** sample under `Samples/SdSample/` — the dedicated-server sibling of P2pSample: same 2-player sumo game, but a Unity client + a minimal .NET 8 dedicated server (`Server/`). `Sim` deterministic code is reused from P2pSample (renamespaced); the server `.csproj` source-shares the same `Sim/*.cs` via the package's `Server~/KlothoServer.Core.props` (KlothoGenerator single-compilation), and uses `RoomManager(MaxRooms=1)` + `RoomRouter` + `ServerLoop`. Client uses `JoinServerDrivenAsync` (no local host), `Mode=ServerDriven`. Game-side LOC ≈ 916 (Sim 292 / Client View 540 / Server 107). Verified: server 1 + 2 clients, server-authoritative + client prediction, per-component hash match (deterministic), WASD move, fall-off respawn, 60s GameOver clean shutdown.
+- Documentation: [`Samples/SdSample/README.md`](Samples/SdSample/README.md) (server + 2 clients quick start) and [`Docs/Samples/SdSample.md`](Docs/Samples/SdSample.md) (architecture + SD-specific gotchas). README "Optional samples" anchor updated.
+- SD-specific pitfalls surfaced reusing a P2P game on a server topology (documented in `Docs/Samples/SdSample.md` §5): the SD client skips `OnInitializeWorld` (boots from the server FullState), so callbacks must not depend on state cached there — `OnPollInput` dropped all input via a stale `_engine` guard (SG11), and the static ground registered there was missing on the client → landing-tick desync, fixed by registering statics in `RegisterSystems` which runs on every peer (SG14); SD network playerIds are 1-based, so entity spawn / id mapping must match `MoveCommand.PlayerId` (SG12); the match-end Synced event must implement `IMatchEndEvent` or the server never drains (SG13).
+
+### Logging — AsyncEvent flush (opt-in)
+
+- `RollingFileSink` gains an opt-in `KFlushMode` (`PerLine` default — unchanged behavior; `AsyncEvent` — event-driven background-thread flush). `AsyncEvent` removes the per-line flush syscall from the hot path and coalesces bursts into a single flush, while a unified termination path (`Dispose` / `ProcessExit` / `DomainUnload`) drains the tail on graceful exit. Exposed via `KRollingFileOptions.FlushMode` / `AddRollingFile`.
+- Dedicated server (`Tools/BrawlerDedicatedServer`) now selects `AsyncEvent` for its rolling file log.
+
+### Diagnostics — static collider fingerprint (IMP48)
+
+- Regression guard for the SD client static-ground-missing desync: static colliders are not part of the state hash, so the omission used to surface only as a downstream dynamic-body desync. A low-cost `FPHash` fingerprint (collider count + per-collider fields) is now logged at boot (`[Physics][StaticGeometry] boot: count=N fp=0x...` — a server-vs-client diff reveals a `count=0` omission) and in the desync dumps. Core state hash / snapshot serialization unchanged.
+- `FullStateResponseMessage` gains a `StaticFingerprint` field — the server self-populates it on every FullState send and the client compares on receive, logging `[KlothoEngine] Static geometry mismatch: ...` at join (before the desync, pointing at the cause); `0` is a "not provided" sentinel, logged once per divergence episode. No interface / delegate / `ApplyFullState` signature changes; `IStaticColliderService` gains `GetStaticFingerprint()`.
+- Verified (Brawler SD): normal match server = client fingerprint match with zero false positives; with the client static dropped, the mismatch `KError` fires at the join tick ahead of the first `Determinism failure`.
+
 ## [0.2.4c] - 2026-05-29
 
 ### Fix — Logging file sink

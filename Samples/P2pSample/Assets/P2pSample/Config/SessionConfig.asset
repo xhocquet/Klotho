@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c4d8a2f1b3e44a5b9d6e8c7f1a2b3d4, type: 3}
+  m_Name: SessionConfig
+  m_EditorClassIdentifier: xpTURN.Klotho.Runtime.Unity::xpTURN.Klotho.USessionConfig
+  <RandomSeed>k__BackingField: 0
+  <MaxPlayers>k__BackingField: 2
+  <MinPlayers>k__BackingField: 2
+  <MaxSpectators>k__BackingField: 0
+  <AllowLateJoin>k__BackingField: 0
+  <LateJoinDelayTicks>k__BackingField: 10
+  <ReconnectTimeoutMs>k__BackingField: 60000
+  <ReconnectMaxRetries>k__BackingField: 3
+  <LateJoinDelaySafety>k__BackingField: 2
+  <RttSanityMaxMs>k__BackingField: 240
+  <MinStallAbortTicks>k__BackingField: 600
+  <CountdownDurationMs>k__BackingField: 3000
+  <AbortGraceMs>k__BackingField: 1500
+  <EndGracePolicy>k__BackingField: 0
+  <EndGraceMs>k__BackingField: 5000
+  <ClientShutdownGraceMs>k__BackingField: 4500

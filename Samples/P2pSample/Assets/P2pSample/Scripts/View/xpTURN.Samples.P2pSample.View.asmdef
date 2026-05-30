@@ -1,0 +1,26 @@
+{
+    "name": "xpTURN.Samples.P2pSample.View",
+    "rootNamespace": "xpTURN.Samples.P2pSample",
+    "references": [
+        "xpTURN.Samples.P2pSample.Sim",
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Logging",
+        "xpTURN.Klotho.Logging.Unity",
+        "xpTURN.Klotho.Runtime",
+        "xpTURN.Klotho.Runtime.Unity",
+        "xpTURN.Klotho.LiteNetLib",
+        "xpTURN.Klotho.Gameplay",
+        "LiteNetLib",
+        "Unity.InputSystem",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

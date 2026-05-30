@@ -128,7 +128,7 @@ public class MySimulationCallbacks : ISimulationCallbacks
     }
 
     // Create initial-world entities — called inside Engine.Start(), before SaveSnapshot(0).
-    // Runs identically on all peers — deterministic code only.
+    // Deterministic code only. ⚠ NOT called on the ServerDriven client (see note below).
     public void OnInitializeWorld(IKlothoEngine engine)
     {
         // Examples: fixed-terrain / item spawn, initial player-entity setup, etc.
@@ -145,6 +145,22 @@ public class MySimulationCallbacks : ISimulationCallbacks
     }
 }
 ```
+
+> **ServerDriven: `OnInitializeWorld` is skipped on the client.** A ServerDriven client boots its initial state from the server's **FullState** snapshot and does **not** call `OnInitializeWorld` (only the server / a P2P host does). The FullState snapshot carries dynamic entity state but **not static colliders**. Consequences:
+>
+> - **Register deterministic static geometry in `RegisterSystems`, not `OnInitializeWorld`.** `RegisterSystems` runs on *every* peer (server and client); `OnInitializeWorld` does not. If you call `PhysicsSystem.LoadStaticColliders(...)` only from `OnInitializeWorld`, the SD client's physics world has no ground/walls → dynamic bodies fall through / pass static geometry → state diverges from the server (desync). Build the static-collider BVH where all peers run it:
+>   ```csharp
+>   public void RegisterSystems(EcsSimulation sim)
+>   {
+>       var physics = new PhysicsSystem(gravity: someGravity);
+>       physics.LoadStaticColliders("scene", staticColliders);   // ← here, runs on server AND SD client
+>       sim.AddSystem(physics, SystemPhase.Update);
+>       // ...
+>   }
+>   ```
+> - **Don't cache `engine`/state in `OnInitializeWorld` for use by client-side callbacks** (`OnPollInput`, etc.) — that path never runs on the SD client, so the cached reference stays null and the callback silently no-ops (e.g. input never sent). Use the arguments passed to each callback instead (`OnPollInput`'s `playerId` is already the local player id).
+>
+> (Data-driven / runtime-mutated static colliders that can't be reproduced deterministically on every peer must instead be carried in the FullState snapshot — a framework concern beyond this guide.)
 
 ### IViewCallbacks — Client View Only
 

@@ -114,7 +114,7 @@ namespace Brawler
                 level: _logLevel,
                 filePrefix: "Client",
                 categoryName: "Client");
-            _logger?.KInformation($"ZLogger logging started!");
+            _logger?.KInformation($"Brawler logging started!");
         }
 
         private void Awake()

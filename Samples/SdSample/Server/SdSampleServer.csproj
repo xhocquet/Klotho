@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>xpTURN.Samples.SdSample.Server</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <!-- Klotho server framework shared sources + KlothoGenerator analyzer + NuGet (LZ4 / Newtonsoft) -->
+  <Import Project="..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+
+  <PropertyGroup>
+    <SdSimRoot>..\Assets\SdSample\Scripts\Sim</SdSimRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SdSample deterministic sources — the same .cs the Unity client compiles.
+         Source-shared (not a project reference) so KlothoGenerator registers every
+         [KlothoSerializable] type in one compilation unit. -->
+    <Compile Include="$(SdSimRoot)\**\*.cs" Link="Game\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DataAsset (.bytes) baked by the Unity project, copied next to the executable under Data/.
+         Glob form: no build error before the first bake (run JsonToBytes before building). -->
+    <Content Include="..\Assets\SdSample\Data\*.bytes">
+      <Link>Data\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="simulationconfig.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="sessionconfig.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

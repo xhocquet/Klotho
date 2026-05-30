@@ -113,7 +113,7 @@ https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
 https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
 ```
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.4`).
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.5`).
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
@@ -129,6 +129,10 @@ This adds `-langversion:preview` to Player Settings (Unity build), inserts `<Lan
 ### Optional samples
 
 After install, open Unity Package Manager → select **xpTURN.Klotho** → **Samples** → "Import" to copy the **MEL Logging Plugin** adapter into your `Assets/Samples/`. Activating the adapter still requires you to supply `Microsoft.Extensions.Logging.Abstractions` (consumer-provided).
+
+**P2pSample** — a minimum P2P sample (2 cubes, 60s sumo match) consuming this package via the same UPM git URL. Located at [`Samples/P2pSample/`](Samples/P2pSample/) in this repo — open the folder directly in Unity Hub. See [`Samples/P2pSample/README.md`](Samples/P2pSample/README.md) for the 4-step quick start, or [`Docs/Samples/P2pSample.md`](Docs/Samples/P2pSample.md) for the architecture walkthrough.
+
+**SdSample** — the ServerDriven sibling of P2pSample (same sumo game, dedicated-server topology): a Unity client + a minimal .NET 8 dedicated server. Located at [`Samples/SdSample/`](Samples/SdSample/) — see [`Samples/SdSample/README.md`](Samples/SdSample/README.md) (server + 2 clients quick start) or [`Docs/Samples/SdSample.md`](Docs/Samples/SdSample.md) (architecture + SD-specific gotchas).
 
 Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this repo if you want to inspect or modify them.
 

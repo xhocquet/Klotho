@@ -1,0 +1,17 @@
+{
+    "name": "xpTURN.Klotho.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

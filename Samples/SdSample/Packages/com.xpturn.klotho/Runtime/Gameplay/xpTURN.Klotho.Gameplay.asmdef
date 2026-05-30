@@ -1,0 +1,17 @@
+{
+    "name": "xpTURN.Klotho.Gameplay",
+    "rootNamespace": "",
+    "references": [
+        "xpTURN.Klotho.Runtime",
+        "xpTURN.Polyfill.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

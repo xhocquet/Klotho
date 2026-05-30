@@ -1,0 +1,19 @@
+{
+    "name": "xpTURN.Samples.P2pSample.Sim",
+    "rootNamespace": "xpTURN.Samples.P2pSample",
+    "references": [
+        "xpTURN.Polyfill.Runtime",
+        "xpTURN.Klotho.Logging",
+        "xpTURN.Klotho.Runtime",
+        "xpTURN.Klotho.Gameplay"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

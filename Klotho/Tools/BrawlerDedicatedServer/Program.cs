@@ -227,6 +227,7 @@ static IKLoggerFactory CreateLoggerFactory(KLogLevel logLevel)
         {
             options.FilePrefix = "Server";
             options.RollingSizeKB = 1024 * 1024;
+            options.FlushMode = KFlushMode.AsyncEvent;
         });
     });
 }

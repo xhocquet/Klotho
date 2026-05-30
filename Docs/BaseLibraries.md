@@ -44,6 +44,7 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 - `IKLogger` / `KLoggerFactory` — zero external-deps logging interface
 - `KLogHandler{Trace,Debug,Information,Warning,Error,Critical}` ref-struct interpolated handlers + `KInformation`/`KDebug`/`KWarning`/`KError` extension methods — uses Polyfill's `InterpolatedStringHandlerAttribute` for GC-free formatting
 - Pluggable sinks — `UnityDebugSink`, Rolling-File sink (in `Runtime/Unity/Logging`)
+- `RollingFileSink` flush policy — `KFlushMode.PerLine` (default; one flush per line, immediate visibility, ≤ 1 line crash window) or opt-in `KFlushMode.AsyncEvent` (background-thread flush — no per-line flush syscall on the hot path, natural batching of bursts, drains on `Dispose`/process-exit). Select via `AddRollingFile(o => o.FlushMode = KFlushMode.AsyncEvent)`. The dedicated server uses `AsyncEvent`.
 
 **Klotho usage**: Standard logging interface used framework-wide.
 
