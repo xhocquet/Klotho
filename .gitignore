@@ -23,6 +23,19 @@
 **/Klotho/*.sln
 **/Klotho/*.slnx
 
+**/P2pSample/*.csproj
+**/P2pSample/*.sln
+**/P2pSample/*.slnx
+
+**/SdSample/*.csproj
+**/SdSample/*.sln
+**/SdSample/*.slnx
+
+Samples/P2pSample/Packages/packages-lock.json
+Samples/SdSample/Packages/packages-lock.json
+
+**/Tools/Generated
+
 /**/[Aa]ssets/[Pp]ackages/
 /**/Library/
 /**/Logs/
