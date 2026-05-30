@@ -2,7 +2,7 @@
 
 Minimum **ServerDriven** sample consuming the `com.xpturn.klotho` UPM package. Same 2-cube sumo game as P2pSample, but the simulation authority lives in a separate **dedicated .NET server** — clients only `Join` (no local host) and predict against the server's verified state.
 
-> Target: `com.xpturn.klotho v0.2.5` · Unity 6.3 · URP · .NET 8 (server)
+> Target: `com.xpturn.klotho v0.2.6` · Unity 6.3 · URP · .NET 8 (server)
 
 > **P2pSample vs SdSample**: same game (`Sim` code is byte-identical bar the namespace), different netcode topology. P2P = peers self-host (1 Unity project). SD = **server console + Unity clients** (this sample). 한 매치 = 서버 1 + 클라 2.
 
@@ -12,7 +12,7 @@ Minimum **ServerDriven** sample consuming the `com.xpturn.klotho` UPM package. S
 
 - Unity **6.3+** (client)
 - **.NET 8 SDK** (`dotnet`) — the dedicated server is a console app under [`Server/`](Server/)
-- **`com.xpturn.klotho` is an *embedded* package** at [`Packages/com.xpturn.klotho/`](Packages/com.xpturn.klotho/) (a copied-in package, v0.2.5 — Unity resolves it `source: embedded`), **not** git-fetched. Reason: the dedicated server's `.csproj` `<Import>`s `Server~/KlothoServer.Core.props` and needs a **stable relative path** (`..\Packages\com.xpturn.klotho\Server~\…`); a git-fetched package lands in `Library/PackageCache/com.xpturn.klotho@<hash>/` with a per-resolve hashed path MSBuild can't reference reliably. Embedding points both the Unity client and the server at one in-project copy (§4).
+- **`com.xpturn.klotho` is an *embedded* package** at [`Packages/com.xpturn.klotho/`](Packages/com.xpturn.klotho/) (a copied-in package, v0.2.6 — Unity resolves it `source: embedded`), **not** git-fetched. Reason: the dedicated server's `.csproj` `<Import>`s `Server~/KlothoServer.Core.props` and needs a **stable relative path** (`..\Packages\com.xpturn.klotho\Server~\…`); a git-fetched package lands in `Library/PackageCache/com.xpturn.klotho@<hash>/` with a per-resolve hashed path MSBuild can't reference reliably. Embedding points both the Unity client and the server at one in-project copy (§4).
 - The remaining deps are git-fetched via UPM on first open — see [`Packages/manifest.json`](Packages/manifest.json):
 
   ```jsonc

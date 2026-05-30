@@ -15,6 +15,10 @@ using xpTURN.Klotho.BrawlerDedicatedServer.Tests;
 
 const string KLOTHO_CONNECTION_KEY = "xpTURN.Brawler";
 
+// Force-load the split Klotho/game assemblies and run JIT warmups before any factory
+// is constructed (see KlothoServerBootstrap for why this is required).
+KlothoServerBootstrap.Initialize("Brawler");
+
 // ── CLI parsing ──
 // Single room: dotnet run -- <port> <botCount> [logLevel]
 // Multi-room:  dotnet run -- --multi <port> <maxRooms> <botCount> [logLevel]

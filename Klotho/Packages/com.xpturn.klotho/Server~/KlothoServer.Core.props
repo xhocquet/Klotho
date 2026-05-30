@@ -3,11 +3,16 @@
   Imported via <Import> from each game-specific DedicatedServer.csproj.
 
   Why use .props (source sharing) instead of ProjectReference (binary reference):
-  The source generator (KlothoGenerator) emits RegisterGeneratedTypes as a partial
-  method on CommandFactory/MessageSerializer, so every [KlothoSerializable] type
-  must live in a single compilation unit.
-  Splitting via ProjectReference would force the partial class to cross assembly
-  boundaries, leaving registration incomplete.
+  Registration itself does not require this — KlothoGenerator already handles
+  cross-assembly types via [ModuleInitializer] + CommandRegistry/MessageRegistry,
+  and only same-assembly types use the RegisterGeneratedTypes partial method.
+  The reasons for a single source-linked compilation here are:
+    1. Build simplicity: the dedicated server is built with plain MSBuild outside
+       the engine, so source-linking the Runtime tree avoids per-assembly project
+       references and analyzer setup.
+    2. Initialization timing: [ModuleInitializer] only fires once its assembly is
+       loaded, so a referenced-but-untouched assembly could leave registration
+       incomplete at the point of use. A single compilation removes that risk.
 -->
 <Project>
   <PropertyGroup>
@@ -36,7 +41,7 @@
              Exclude="$(KlothoRuntimeRoot)\Unity\**\*.cs;$(KlothoRuntimeRoot)\**\Json\**\*.cs"
              Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
 
-    <!-- Server shared utilities (props-co-located helpers). -->
-    <Compile Include="$(MSBuildThisFileDirectory)*.cs" Link="Server\%(Filename)%(Extension)" />
+    <!-- Server shared utilities (config loaders, path resolver). -->
+    <Compile Include="$(MSBuildThisFileDirectory)KlothoServer\*.cs" Link="Server\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

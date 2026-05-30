@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.6] - 2026-05-30
+
+### Dedicated server — project references
+
+- New per-assembly server projects under `Server~/` that mirror the client asmdef boundaries (`LiteNetLib`, `xpTURN.Klotho.Logging` / `.Runtime` / `.Gameplay` / `.LiteNetLib`, and a `KlothoServer` aggregate holding the server-only helpers), as an alternative to source-sharing via `KlothoServer.Core.props`. Server helpers (`ConfigPathResolver` / `SessionConfigLoader` / `SimulationConfigLoader`) moved into `KlothoServer/`. Existing `.props`-based builds unchanged.
+- With Klotho split across referenced assemblies, registration runs through `[ModuleInitializer]` (fires only once an assembly loads). New `KlothoServerBootstrap` loads every Klotho/game assembly from the deploy directory and runs warmups before any factory is built — a directory scan (not a reference walk, since the compiler drops references to assemblies whose types are never used directly). Assumes a multi-file, untrimmed deploy.
+- `BrawlerDedicatedServer` migrated to ProjectReferences + `KlothoGenerator` analyzer; `Program.cs` calls `KlothoServerBootstrap.Initialize("Brawler")` at startup. Verified: build clean, `--test` suite passes (79 tests, 0 failures).
+- `DeterminismVerification` migrated from ~50 lines of hand-listed source includes to ProjectReferences (Runtime + Logging only — no networking, so no KlothoServer/Gameplay/transport); `Program.cs` calls `WarmupRegistry.RunAll()`. Verified: determinism run passes (3 seeds × 10k ticks + seed-42 self-verify).
+- `SdSample` embedded Klotho synced to the same mirror layout; `SdSampleServer` migrated to ProjectReferences with `KlothoServerBootstrap.Initialize("SdSample", "xpTURN.Samples")`. Verified: build clean, server starts and warmup serializes all registered commands/messages with no errors.
+
+### Docs
+
+- Dedicated-server guidance updated from props source-sharing to project references.
+
 ## [0.2.5] - 2026-05-30
 
 ### Sample — P2pSample

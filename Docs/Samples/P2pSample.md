@@ -1,6 +1,6 @@
 # P2pSample — Minimum P2P Sample
 
-> Target framework: **xpTURN.Klotho v0.2.5**
+> Target framework: **xpTURN.Klotho v0.2.6**
 > Purpose: the smallest end-to-end P2P sample that exercises the deterministic ECS + LiteNetLib transport + view bootstrap surface — useful as a starting point for game devs picking up the package, and as a regression checkpoint for the package itself.
 > Audience: game developers consuming `com.xpturn.klotho` via UPM who want a 60-minute "hello world" before tackling the full Brawler sample.
 > Source: [`<repo>/Samples/P2pSample/`](../../Samples/P2pSample/)

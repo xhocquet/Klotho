@@ -179,8 +179,9 @@ Klotho/                                ← Unity dev project (this repo)
 │   ├── Prefabs/            debug/visualization prefabs (EcsDebugBridge,
 │   │                       FPPhysicsWorldVisualizer, FPStaticColliderVisualizer)
 │   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample" → MEL Logging Plugin)
-│   └── Server~/            dedicated-server build assets (MSBuild props +
-│                           Config helpers: ConfigPathResolver, Session/SimulationConfigLoader)
+│   └── Server~/            dedicated-server build assets (per-assembly csproj mirroring client
+│                           asmdefs + KlothoServer/: KlothoServerBootstrap, ConfigPathResolver,
+│                           Session/SimulationConfigLoader)
 │
 ├── Assets/                 ← dev-only (not redistributed via UPM)
 │   ├── Brawler/            4-player fighting-game sample

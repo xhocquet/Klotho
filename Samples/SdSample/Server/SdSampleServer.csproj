@@ -9,17 +9,31 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
 
-  <!-- Klotho server framework shared sources + KlothoGenerator analyzer + NuGet (LZ4 / Newtonsoft) -->
-  <Import Project="..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+  <!-- Klotho server framework assemblies (mirror the client asmdef structure).
+       KlothoServer aggregates the helpers + transitively pulls in the rest at runtime;
+       the engine-agnostic assemblies are referenced explicitly for compile-time visibility. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+  </ItemGroup>
+
+  <!-- Source generator for the SdSample game-specific types compiled into this exe. -->
+  <ItemGroup>
+    <Analyzer Include="..\Packages\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
 
   <PropertyGroup>
     <SdSimRoot>..\Assets\SdSample\Scripts\Sim</SdSimRoot>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- SdSample deterministic sources — the same .cs the Unity client compiles.
-         Source-shared (not a project reference) so KlothoGenerator registers every
-         [KlothoSerializable] type in one compilation unit. -->
+    <!-- SdSample deterministic sources — the same .cs the Unity client compiles, built
+         into this exe. The generator emits cross-assembly registration for these types
+         ([ModuleInitializer] + CommandRegistry/MessageRegistry), since CommandFactory now
+         lives in the referenced xpTURN.Klotho.Runtime assembly. -->
     <Compile Include="$(SdSimRoot)\**\*.cs" Link="Game\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 

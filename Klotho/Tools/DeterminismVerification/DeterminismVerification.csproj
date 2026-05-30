@@ -8,72 +8,32 @@
     <Nullable>disable</Nullable>
   </PropertyGroup>
 
-  <!-- Source Generator (KlothoGenerator) -->
+  <!-- Klotho engine-agnostic assemblies (mirror the client asmdef structure).
+       Determinism verification needs only the deterministic core + logging; it does no
+       networking, so Gameplay/transport (and KlothoServer) are intentionally not referenced. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+  </ItemGroup>
+
+  <!-- Source Generator (KlothoGenerator, built from source) for the verification-specific
+       components/commands compiled into this exe. -->
   <ItemGroup>
     <ProjectReference Include="..\KlothoGenerator\KlothoGenerator.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <!-- Source file links -->
   <PropertyGroup>
-    <RuntimeRoot>..\..\Packages\com.xpturn.klotho\Runtime</RuntimeRoot>
     <VerificationRoot>..\..\Assets\Tests\DeterminismVerification</VerificationRoot>
-    <LoggingRoot>..\..\Packages\com.xpturn.klotho\Runtime\Logging</LoggingRoot>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Shared verification code (components, systems, commands, HashDumpWriter) -->
+    <!-- Verification code (components, systems, commands, HashDumpWriter).
+         DeterminismVerificationRunner.cs excluded (Unity MonoBehaviour). -->
     <Compile Include="$(VerificationRoot)\Components\*.cs" Link="Verification\Components\%(Filename)%(Extension)" />
     <Compile Include="$(VerificationRoot)\Systems\*.cs" Link="Verification\Systems\%(Filename)%(Extension)" />
     <Compile Include="$(VerificationRoot)\Commands\*.cs" Link="Verification\Commands\%(Filename)%(Extension)" />
     <Compile Include="$(VerificationRoot)\HashDumpWriter.cs" Link="Verification\HashDumpWriter.cs" />
-    <!-- DeterminismVerificationRunner.cs excluded (Unity MonoBehaviour) -->
-
-    <!-- Deterministic -->
-    <Compile Include="$(RuntimeRoot)\Deterministic\Math\*.cs" Link="Runtime\Deterministic\Math\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\Random\*.cs" Link="Runtime\Deterministic\Random\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\Geometry\*.cs" Link="Runtime\Deterministic\Geometry\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\Physics\*.cs" Link="Runtime\Deterministic\Physics\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\Navigation\*.cs" Link="Runtime\Deterministic\Navigation\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\Curve\*.cs" Link="Runtime\Deterministic\Curve\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Deterministic\FPHash.cs" Link="Runtime\Deterministic\FPHash.cs" />
-
-    <!-- ECS (Core, Components, Snapshot, Attributes, System interfaces, DataAsset) -->
-    <Compile Include="$(RuntimeRoot)\ECS\EcsSimulation.cs" Link="Runtime\ECS\EcsSimulation.cs" />
-    <Compile Include="$(RuntimeRoot)\ECS\Core\*.cs" Link="Runtime\ECS\Core\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\ECS\Components\*.cs" Link="Runtime\ECS\Components\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\ECS\Snapshot\*.cs" Link="Runtime\ECS\Snapshot\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\ECS\Attributes\*.cs" Link="Runtime\ECS\Attributes\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\ECS\System\*.cs" Link="Runtime\ECS\System\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\ECS\DataAsset\**\*.cs"
-             Exclude="$(RuntimeRoot)\ECS\DataAsset\Json\**\*.cs"
-             Link="Runtime\ECS\DataAsset\%(RecursiveDir)%(Filename)%(Extension)" />
-
-    <!-- Core -->
-    <Compile Include="$(RuntimeRoot)\Core\ISimulation.cs" Link="Runtime\Core\ISimulation.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\ICommand.cs" Link="Runtime\Core\ICommand.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\ModuleInitializerHelper.cs" Link="Runtime\Core\ModuleInitializerHelper.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\ISimulationEventRaiser.cs" Link="Runtime\Core\ISimulationEventRaiser.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\SimulationEvent.cs" Link="Runtime\Core\SimulationEvent.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\Attributes\*.cs" Link="Runtime\Core\Attributes\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Core\Command\*.cs" Link="Runtime\Core\Command\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Core\Pool\*.cs" Link="Runtime\Core\Pool\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Core\Engine\EventDispatcher.cs" Link="Runtime\Core\Engine\EventDispatcher.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\Event\EventBuffer.cs" Link="Runtime\Core\Event\EventBuffer.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\Event\EventCollector.cs" Link="Runtime\Core\Event\EventCollector.cs" />
-    <Compile Include="$(RuntimeRoot)\Core\Warmup\*.cs" Link="Runtime\Core\Warmup\%(Filename)%(Extension)" />
-
-    <!-- Serialization -->
-    <Compile Include="$(RuntimeRoot)\Serialization\*.cs" Link="Runtime\Serialization\%(Filename)%(Extension)" />
-    <Compile Include="$(RuntimeRoot)\Serialization\Attributes\*.cs" Link="Runtime\Serialization\Attributes\%(Filename)%(Extension)" />
-
-    <!-- Network (NetworkMessageType enum, INetworkMessage, MessageRegistry) -->
-    <Compile Include="$(RuntimeRoot)\Network\Messages\NetworkMessages.cs" Link="Runtime\Network\Messages\NetworkMessages.cs" />
-    <Compile Include="$(RuntimeRoot)\Network\Messages\MessageRegistry.cs" Link="Runtime\Network\Messages\MessageRegistry.cs" />
-    <Compile Include="$(RuntimeRoot)\Network\INetworkMessage.cs" Link="Runtime\Network\INetworkMessage.cs" />
-
-    <!-- Logging core (engine-agnostic; Unity sink excluded) -->
-    <Compile Include="$(LoggingRoot)\**\*.cs" Link="Logging\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

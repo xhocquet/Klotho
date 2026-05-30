@@ -2,7 +2,7 @@
 
 Minimum P2P sample consuming the `com.xpturn.klotho` UPM package. Two cubes on a 10×10 platform — push each other off, fall-off costs 1 point, 60s match.
 
-> Target: `com.xpturn.klotho v0.2.5` · Unity 6.3 · URP
+> Target: `com.xpturn.klotho v0.2.6` · Unity 6.3 · URP
 
 ---
 
@@ -16,13 +16,13 @@ Minimum P2P sample consuming the `com.xpturn.klotho` UPM package. Two cubes on a
     "dependencies": {
       "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
       "com.xpturn.polyfill": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",
-      "com.xpturn.klotho":   "https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.5",
+      "com.xpturn.klotho":   "https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.6",
       ...
     }
   }
   ```
 
-  To pin a different version, change the `#v0.2.5` tag suffix on `com.xpturn.klotho`.
+  To pin a different version, change the `#v0.2.6` tag suffix on `com.xpturn.klotho`.
 
 ---
 

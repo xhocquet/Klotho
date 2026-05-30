@@ -30,7 +30,7 @@ This appendix describes `Tools/BrawlerDedicatedServer/` as it exists in this rep
 | `simulationconfig.json` / `sessionconfig.json` values | Tuned for your game's tick rate, latency budget, max players, etc. |
 | `Program.cs` CLI flags (`--multi`, `--test`, etc.) | Your operational requirements |
 
-Tiers 1–3 (Runtime, LiteNetLib, Transport, Server utils, Gameplay) are **shared across all games** via [`Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props`](../../Klotho/Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props) — your csproj imports the props with one line and inherits all of them. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct `<Import Project>` depth for your csproj location.
+Tiers 1–3 (Runtime, LiteNetLib, Transport, Logging, Server utils, Gameplay) are the **engine-agnostic Klotho assemblies under [`Packages/com.xpturn.klotho/Server~/`](../../Klotho/Packages/com.xpturn.klotho/Server~/)** (mirroring the client asmdef structure) — your csproj `<ProjectReference>`s them and adds the `KlothoGenerator` analyzer for its own game types. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct reference depth for your csproj location.
 
 ---
 
@@ -38,7 +38,7 @@ Tiers 1–3 (Runtime, LiteNetLib, Transport, Server utils, Gameplay) are **share
 
 ```
 Tools/BrawlerDedicatedServer/
-├── BrawlerDedicatedServer.csproj   — net8.0 Exe; directly includes Klotho Runtime + Brawler game sources
+├── BrawlerDedicatedServer.csproj   — net8.0 Exe; ProjectReferences the Server~ Klotho assemblies + includes Brawler game sources
 ├── BrawlerDedicatedServer.sln
 ├── Program.cs                      — CLI entry (single-room · multi-room · test branches)
 ├── BrawlerServerCallbacks.cs       — ISimulationCallbacks impl (no view callbacks)
@@ -52,24 +52,25 @@ Tools/BrawlerDedicatedServer/
 └── Logs/                           — created at runtime
 ```
 
-### H-2-1. Why source-sharing instead of `ProjectReference`
+### H-2-1. Why project references (mirroring the client asmdef structure)
 
-`BrawlerDedicatedServer.csproj` pulls Klotho Runtime (entire) and Brawler.ECS / DataAssets `.cs` files in directly via `<Compile Include>`, **compiling them into a single assembly**. The reason for not using asmdef boundaries is documented at the top of `Tools/Server/KlothoServer.Core.props`:
+`BrawlerDedicatedServer.csproj` `<ProjectReference>`s the engine-agnostic Klotho assemblies under `Server~/` — the same asmdef boundaries the Unity client uses — and compiles only the Brawler game sources (`Brawler.ECS` / `DataAssets` `.cs`) into the exe.
 
-> KlothoGenerator emits `RegisterGeneratedTypes` for `CommandFactory` / `MessageSerializer` as a **partial method**, so all `[KlothoSerializable]` types must live in one compilation unit. Splitting via `ProjectReference` prevents the partial registrations from crossing assembly boundaries, causing missing entries.
+Registration works across those assembly boundaries: `CommandFactory` / `MessageSerializer` live in `xpTURN.Klotho.Runtime`, so KlothoGenerator fills their `RegisterGeneratedTypes` **partial method** for that assembly's own types, and emits `[ModuleInitializer]` + `CommandRegistry`/`MessageRegistry` registration for every other assembly (Gameplay, plus the game types compiled into this exe). `KlothoServerBootstrap.Initialize("Brawler")` in `Program.cs` force-loads the referenced assemblies and runs warmups at startup, so every registration is applied before the first room constructs a factory. (An earlier build source-linked the whole Runtime tree into one assembly to keep registration in a single compilation unit; that is no longer required.)
 
-As a result, `BrawlerDedicatedServer.csproj` merges the following tiers into a single assembly:
+The referenced / compiled tiers:
 
-| Tier | Path | Link Location |
+| Tier | Assembly / source | Provided by |
 |---|---|---|
-| 1 Runtime | `Packages/com.xpturn.klotho/Runtime/**/*.cs` (excluding `Unity/**`, `**/Json/**`) | `Runtime/...` |
-| 1 LiteNetLib | `Packages/com.xpturn.klotho/Runtime/ThirdParty/LiteNetLib.v2.1.4/**/*.cs` | (under `Runtime/ThirdParty/...`) |
-| 1 Transport | `Packages/com.xpturn.klotho/Runtime/LiteNetLib/*.cs` (`LiteNetLibTransport`, etc.) | (under `Runtime/LiteNetLib/...`) |
-| 2 Server utils | `Packages/com.xpturn.klotho/Server~/*.cs` (`SimulationConfigLoader`, `SessionConfigLoader`, `ConfigPathResolver`) | `Server/...` |
-| 3 Gameplay | `Packages/com.xpturn.klotho/Runtime/Gameplay/**/*.cs` | (under `Runtime/Gameplay/...`) |
-| 4 Game | `Assets/Brawler/Scripts/DataAssets/**` + `.../ECS/**` | `Game/...` |
+| 1 Runtime | `xpTURN.Klotho.Runtime` (Core, ECS, Network, Serialization, Replay, Diagnostics — excludes `Unity/`, `**/Json/`) | `<ProjectReference>` |
+| 1 LiteNetLib | `LiteNetLib` (vendored third-party transport lib) | `<ProjectReference>` (transitive) |
+| 1 Transport | `xpTURN.Klotho.LiteNetLib` (`LiteNetLibTransport`, etc.) | `<ProjectReference>` |
+| 1 Logging | `xpTURN.Klotho.Logging` | `<ProjectReference>` |
+| 2 Server utils | `KlothoServer` (`SimulationConfigLoader`, `SessionConfigLoader`, `ConfigPathResolver`, `KlothoServerBootstrap`) | `<ProjectReference>` |
+| 3 Gameplay | `xpTURN.Klotho.Gameplay` | `<ProjectReference>` |
+| 4 Game | `Assets/Brawler/Scripts/DataAssets/**` + `.../ECS/**` | `<Compile Include>` into the exe |
 
-> The shared include rules for tiers 1–3 are defined in [Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props](../../Klotho/Packages/com.xpturn.klotho/Server~/KlothoServer.Core.props) (single `Runtime/**/*.cs` glob with `Unity/` and `Json/` excludes); Brawler-specific includes (tier 4) are specified directly in `BrawlerDedicatedServer.csproj`. Game projects import the props via `<Import Project="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />`.
+> Tiers 1–3 are the per-assembly projects under [`Packages/com.xpturn.klotho/Server~/`](../../Klotho/Packages/com.xpturn.klotho/Server~/); `BrawlerDedicatedServer.csproj` references them plus the `KlothoGenerator` analyzer (for the tier-4 types compiled into the exe). Tier-4 includes are specified directly in the csproj.
 
 ### H-2-2. Bundled Data Files
 
@@ -468,7 +469,7 @@ The core of determinism is **"do not configure the system set differently"**. Bo
 When building **a dedicated server for your own game** modeled after Brawler:
 
 1. Create a new `Tools/MyGameDedicatedServer/` folder; copy `BrawlerDedicatedServer.csproj`.
-2. Keep `<Import Project="..\Server\KlothoServer.Core.props" />` — reuses the shared tier 1–3 includes.
+2. Keep the `<ProjectReference>`s to the `Server~` assemblies and the `KlothoGenerator` analyzer, plus the `KlothoServerBootstrap.Initialize("YourGamePrefix")` startup call — reuses the shared tier 1–3 assemblies.
 3. Rename `<BrawlerRoot>` to `<MyGameRoot>` and replace the tier-4 include paths with your game's `DataAssets` / `ECS` folders.
 4. Replace the `.bytes` paths in `<Content Include="..."/>` with your game's Data folder.
 5. Author `MyGameServerCallbacks : ISimulationCallbacks` mirroring `BrawlerServerCallbacks` (call `MyGameSimSetup.RegisterSystems` from `RegisterSystems`).

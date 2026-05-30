@@ -1,0 +1,28 @@
+<!--
+  xpTURN.Klotho.Gameplay — server mirror of the Runtime/Gameplay asmdef.
+  CommandFactory lives in xpTURN.Klotho.Runtime, so KlothoGenerator emits
+  cross-assembly registration here ([ModuleInitializer] + CommandRegistry/MessageRegistry).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>xpTURN.Klotho.Gameplay</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Analyzer Include="$(MSBuildThisFileDirectory)..\..\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)..\..\Runtime\Gameplay\**\*.cs"
+             Link="Gameplay\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

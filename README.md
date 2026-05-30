@@ -113,7 +113,7 @@ https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
 https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
 ```
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.5`).
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.6`).
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
@@ -138,27 +138,38 @@ Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this r
 
 ### Dedicated server
 
-Klotho's source generator requires the dedicated-server build to compile core sources in the same compilation unit (binary distribution is not viable). Two install patterns:
+Klotho ships as Unity package source (not a binary NuGet), so a dedicated server builds the engine-agnostic assemblies from your vendored copy of the package. `Server~/` holds per-assembly server projects that mirror the client asmdef structure; your server csproj `<ProjectReference>`s them. Two install patterns:
 
-**A. git submodule (recommended)** — vendor this repo into your game project as a submodule under `<yourGame>/Packages/com.xpturn.klotho`. The `Server~/KlothoServer.Core.props` resolves all core paths via `$(MSBuildThisFileDirectory)`, so your server csproj just imports it at the correct relative depth:
+**A. git submodule (recommended)** — vendor this repo into your game project as a submodule under `<yourGame>/Packages/com.xpturn.klotho`, then reference the `Server~` projects at the correct relative depth:
 
 ```xml
-<!-- Server csproj at <yourGame>/MyDedicatedServer.csproj (project root) -->
-<Import Project="Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
-
 <!-- Server csproj at <yourGame>/Tools/MyDedicatedServer/MyDedicatedServer.csproj (nested 2 levels) -->
-<Import Project="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+<ItemGroup>
+  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+</ItemGroup>
+<!-- Source generator for your game's [KlothoSerializable]/[KlothoComponent] types compiled into the exe -->
+<ItemGroup>
+  <Analyzer Include="..\..\Packages\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+</ItemGroup>
 ```
 
-Adjust the `..\` depth to match where your csproj sits relative to the Unity project root.
+Adjust the `..\` depth to match where your csproj sits. At startup call `KlothoServerBootstrap.Initialize("YourGamePrefix")` — it force-loads the split assemblies and runs warmups so the cross-assembly `[ModuleInitializer]` registrations (commands / messages / components) complete before the first room is built.
 
-**B. UPM `Library/PackageCache` + `<KlothoPackageRoot>`** — if you don't want a submodule, set `<KlothoPackageRoot>` per-project to your resolved PackageCache path. The `@<hash>` suffix changes on every pull, so this needs occasional refresh:
+**B. UPM `Library/PackageCache` + `<KlothoServerRoot>`** — if you don't want a submodule, point a property at your resolved PackageCache `Server~` path. The `@<hash>` suffix changes on every pull, so this needs occasional refresh:
 
 ```xml
 <PropertyGroup>
-  <KlothoPackageRoot>$(MSBuildProjectDirectory)\..\..\Library\PackageCache\com.xpturn.klotho@1a2b3c4d</KlothoPackageRoot>
+  <KlothoServerRoot>$(MSBuildProjectDirectory)\..\..\Library\PackageCache\com.xpturn.klotho@1a2b3c4d\Server~</KlothoServerRoot>
 </PropertyGroup>
-<Import Project="$(KlothoPackageRoot)\Server~\KlothoServer.Core.props" />
+<ItemGroup>
+  <ProjectReference Include="$(KlothoServerRoot)\KlothoServer\KlothoServer.csproj" />
+  <ProjectReference Include="$(KlothoServerRoot)\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+  <!-- + Logging / Gameplay / LiteNetLib as above -->
+</ItemGroup>
 ```
 
 Full guide (with `Program.cs`, callbacks, config files, single-room/multi-room/test CLI): [Docs/Samples/Brawler.H.DedicatedServer.md](Docs/Samples/Brawler.H.DedicatedServer.md) — a Brawler-specific reference you can copy and adapt to your game.
@@ -195,7 +206,7 @@ Klotho/                                        ← Unity dev project (this repo)
 │   ├── Plugins/Analyzers/     KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
 │   ├── Prefabs/               debug/visualization prefabs (EcsDebugBridge · FPPhysics*Visualizer)
 │   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample")
-│   └── Server~/               dedicated-server build assets (MSBuild props + Config helpers)
+│   └── Server~/               dedicated-server build assets (per-assembly csproj mirroring client asmdefs + KlothoServerBootstrap + Config helpers)
 │
 ├── Assets/                                    ← dev-only (not redistributed via UPM)
 │   ├── Brawler/               4-player fighting-game sample

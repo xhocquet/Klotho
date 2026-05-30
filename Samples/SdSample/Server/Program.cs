@@ -8,6 +8,10 @@ using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Network;
 using xpTURN.Samples.SdSample.Server;
 
+// Force-load the split Klotho/game assemblies and run JIT warmups before any factory
+// is constructed (see KlothoServerBootstrap for why this is required).
+KlothoServerBootstrap.Initialize("SdSample", "xpTURN.Samples");
+
 // CLI: dotnet run -- [port] [logLevel]     (default 7777 / Information)
 int port = args.Length > 0 ? int.Parse(args[0]) : 7777;
 var logLevel = args.Length > 1 ? Enum.Parse<KLogLevel>(args[1]) : KLogLevel.Information;

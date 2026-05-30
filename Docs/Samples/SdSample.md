@@ -1,6 +1,6 @@
 # SdSample — Minimum ServerDriven Sample
 
-> Target framework: **xpTURN.Klotho v0.2.5**
+> Target framework: **xpTURN.Klotho v0.2.6**
 > Purpose: the smallest end-to-end **ServerDriven (SD)** sample — same sumo game as P2pSample, but with an authoritative dedicated server + thin predicting clients. Shows how to stand up a Klotho dedicated server and how the deterministic core is shared between the .NET server and the Unity client.
 > Audience: game devs consuming `com.xpturn.klotho` who want a minimal dedicated-server reference before the full Brawler server.
 > Source: [`<repo>/Samples/SdSample/`](../../Samples/SdSample/)
@@ -31,7 +31,7 @@ Identical rules to [P2pSample](./P2pSample.md) (top-down sumo: 2 cubes, WASD, fa
 | **Mode = ServerDriven** | `USimulationConfig.Mode = ServerDriven` (client) + server `simulationconfig.json` (`Mode: "ServerDriven"`, authoritative) |
 | **`JoinServerDrivenAsync`** | single client entry point (no `StartHost`) — sends a `RoomHandshakeMessage` pre-join, `roomId = 0` |
 | **Dedicated server** | `ServerNetworkService` + `RoomManager(MaxRooms=1)` + `RoomRouter` + `ServerLoop` ([`Server/Program.cs`](../../Samples/SdSample/Server/Program.cs)) |
-| **Source-shared deterministic core** | server `.csproj` links the same `Sim/*.cs` the client compiles (KlothoGenerator single-compilation, §3) |
+| **Source-shared deterministic core** | server `.csproj` compiles the same `Sim/*.cs` the client does into the exe; the framework comes via `<ProjectReference>` to the `Server~` mirror assemblies (§3) |
 | **`IMatchEndEvent`** | `GameOverEvent : SimulationEvent, IMatchEndEvent` — drives `Engine.OnMatchEnded` → server room drain (§5 SG13) |
 | **`EntityViewFactory` / `EntityView`** | client-only (server has no rendering); `SdPlayerView` colors by 1-based PlayerId |
 
@@ -58,9 +58,9 @@ Server/  (dedicated .NET 8 console — NOT in Assets/)
   └─ SdServerCallbacks         ISimulationCallbacks — RegisterSystems→SdSimSetup, OnPollInput = no-op
 ```
 
-**Shared deterministic setup** — `SdSimSetup.RegisterSystems` / `InitializeWorld` live in the engine-free `Sim` assembly and are invoked by **both** the client (`SdSimulationCallbacks`) and the server (`SdServerCallbacks`), so the world is built identically on every peer. The server compiles the *same source files* (not a DLL) so KlothoGenerator registers the `[KlothoSerializable]` types in a single compilation unit.
+**Shared deterministic setup** — `SdSimSetup.RegisterSystems` / `InitializeWorld` live in the engine-free `Sim` assembly and are invoked by **both** the client (`SdSimulationCallbacks`) and the server (`SdServerCallbacks`), so the world is built identically on every peer. The server compiles the *same `Sim/*.cs` source files* (not a DLL) into the exe; since `CommandFactory` now lives in the referenced `xpTURN.Klotho.Runtime` assembly, KlothoGenerator emits cross-assembly registration (`[ModuleInitializer]`) for those `[KlothoSerializable]` types, and `KlothoServerBootstrap.Initialize(...)` (`Program.cs`) force-loads the split assemblies + runs warmups at startup so every registration completes before the first room.
 
-**Embedded framework package** — `com.xpturn.klotho` is **embedded** at `Samples/SdSample/Packages/com.xpturn.klotho/` (Unity `source: embedded`), not git-fetched. The server `.csproj` imports `..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props` via this fixed in-project path; a git-fetched package would resolve to a hashed `Library/PackageCache/com.xpturn.klotho@<hash>/` path that an MSBuild `<Import>` can't reference reliably. (UniTask / Polyfill are still git-fetched via the manifest.)
+**Embedded framework package** — `com.xpturn.klotho` is **embedded** at `Samples/SdSample/Packages/com.xpturn.klotho/` (Unity `source: embedded`), not git-fetched. The server `.csproj` `<ProjectReference>`s the per-assembly server projects under `..\Packages\com.xpturn.klotho\Server~\` (`KlothoServer` + `xpTURN.Klotho.Runtime`/`Logging`/`Gameplay`/`LiteNetLib`) via this fixed in-project path; a git-fetched package would resolve to a hashed `Library/PackageCache/com.xpturn.klotho@<hash>/` path that an MSBuild project reference can't target reliably. (UniTask / Polyfill are still git-fetched via the manifest.)
 
 ---
 

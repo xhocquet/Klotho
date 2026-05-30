@@ -13,6 +13,10 @@ const int MaxEntities = 512;
 const int DeltaTimeMs = 25; // 40Hz
 int[] seeds = [42, 12345, 987654321];
 
+// Klotho runtime is now a referenced assembly; trigger its [ModuleInitializer]
+// registrations (ECS component storage) before building any simulation.
+WarmupRegistry.RunAll();
+
 Console.WriteLine($"=== Determinism Verification (.NET {Environment.Version}) ===");
 Console.WriteLine($"Ticks: {TotalTicks}, Seeds: {seeds.Length}, MaxEntities: {MaxEntities}");
 Console.WriteLine();
