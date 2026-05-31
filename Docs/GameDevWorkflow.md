@@ -38,6 +38,8 @@ In xpTURN.Klotho, the area owned by the game developer is the **gameplay-logic l
 
 ## 2. Recommended Workflow
 
+> **Determinism guardrail (build-time)** — the `DeterminismAnalyzer` shipped in `KlothoGenerator.dll` flags determinism hazards while you author, before they surface as replay/rollback desync. Inside a deterministic-context type (one implementing a deterministic interface / inheriting a deterministic base, or a ref-`Frame` helper method) it warns on: `KLOTHO_DET002` float/double; `KLOTHO_DET003` non-deterministic API/type (`Mathf`, `Random`, `System.Math`, `DateTime`, float-backed `UnityEngine.Vector2/3/4`/`Quaternion`/`Matrix4x4`); `KLOTHO_DET004` `UnityEngine.Time`. Use `FP64` / `FPVector*` / `frame.Random` instead. The FP64 conversion boundary (`FromFloat` / `ToFloat` / …) is exempt, and test / tool assemblies are skipped.
+
 ### Step 1: Define Components (use IDs ≥ 100)
 
 Use IDs of 100 or above to avoid colliding with the built-in component-ID range (1–99). The source generator emits `Serialize` / `Deserialize` / `GetSerializedSize` / `GetHash` automatically. Duplicate IDs are caught at compile time.
@@ -175,7 +177,8 @@ void OnAnyFlowSessionCreated(KlothoSession session)
 
 // Entry points — pick one per game mode. Branch by KlothoModeStrategy.Resolve(simCfg),
 // not by inspecting simCfg.Mode directly.
-_session = _flow.StartHost(uSimulationConfig, uSessionConfig);                                 // P2P host
+_session = _flow.StartHostAndListen(uSimulationConfig, uSessionConfig, "MyRoom", "0.0.0.0", 9050); // P2P host (StartHost + HostGame + Listen, auto-teardown on failure)
+_session = _flow.StartHost(uSimulationConfig, uSessionConfig);                                 // P2P host (low-level — caller drives HostGame + Listen)
 _session = await _flow.JoinP2PAsync(transport, host, port, uSessionConfig, ct);                // P2P guest
 _session = await _flow.JoinServerDrivenAsync(transport, host, port, roomId, uSessionConfig, ct); // SD client
 _session = await _flow.ReconnectAsync(transport, creds, uSessionConfig, ct);                   // cold-start reconnect (creds: PersistedReconnectCredentials)
@@ -405,4 +408,4 @@ evu.Cleanup();
 
 ---
 
-Last updated: 2026-05-25
+Last updated: 2026-05-31

@@ -5,61 +5,68 @@ using System.Globalization;
 namespace xpTURN.Klotho.Logging
 {
     /// <summary>
-    /// Formatting buffer for the interpolated-string log handlers. A struct backed by a
-    /// reusable [ThreadStatic] char[] so no per-call allocation occurs. Only acquired when the
-    /// target level is enabled; a single string is produced once via ToStringAndReset.
-    /// Re-entrant logging on the same thread (logging while formatting a log) overwrites the
-    /// buffer, so log arguments must be side-effect free and must not log.
+    /// Formatting buffer for the interpolated-string log handlers. A struct that rents a reusable
+    /// [ThreadStatic] char[] so no per-call allocation occurs on the common path. Only acquired when
+    /// the target level is enabled; a single string is produced once via ToStringAndReset, which also
+    /// returns the buffer to the pool.
+    /// Re-entrant logging on the same thread (logging while formatting a log) is safe: the nested
+    /// call finds the pooled buffer already rented and allocates its own, so the outer buffer is
+    /// never corrupted. The pool self-heals if a buffer is not returned (e.g. an exception mid-format).
     /// </summary>
     internal struct CharBufferWriter
     {
-        [ThreadStatic] private static char[] t_buf;
+        // The idle reusable buffer for this thread; null while rented by an active writer.
+        [ThreadStatic] private static char[] t_pooled;
+
+        private char[] _buf;
         private int _pos;
 
         public static CharBufferWriter Acquire(int hint)
         {
-            if (t_buf == null || t_buf.Length < hint)
-                t_buf = new char[Math.Max(256, hint)];
-            return new CharBufferWriter { _pos = 0 };
+            char[] buf = t_pooled;
+            if (buf == null || buf.Length < hint)
+                buf = new char[Math.Max(256, hint)];
+            t_pooled = null; // rent: a re-entrant Acquire on this thread allocates its own buffer
+            return new CharBufferWriter { _buf = buf, _pos = 0 };
         }
 
-        private static void Grow(int curPos, int needed)
+        private void Grow(int needed)
         {
-            int cap = Math.Max(t_buf.Length * 2, curPos + needed);
+            int cap = Math.Max(_buf.Length * 2, _pos + needed);
             var bigger = new char[cap];
-            Array.Copy(t_buf, bigger, curPos);
-            t_buf = bigger;
+            Array.Copy(_buf, bigger, _pos);
+            _buf = bigger;
         }
 
         public void Append(string s)
         {
             if (string.IsNullOrEmpty(s)) return;
-            if (_pos + s.Length > t_buf.Length) Grow(_pos, s.Length);
-            s.AsSpan().CopyTo(t_buf.AsSpan(_pos));
+            if (_pos + s.Length > _buf.Length) Grow(s.Length);
+            s.AsSpan().CopyTo(_buf.AsSpan(_pos));
             _pos += s.Length;
         }
 
         public void Append(ReadOnlySpan<char> s)
         {
             if (s.Length == 0) return;
-            if (_pos + s.Length > t_buf.Length) Grow(_pos, s.Length);
-            s.CopyTo(t_buf.AsSpan(_pos));
+            if (_pos + s.Length > _buf.Length) Grow(s.Length);
+            s.CopyTo(_buf.AsSpan(_pos));
             _pos += s.Length;
         }
 
         // Primitive overloads format directly via TryFormat (no boxing). Grow and retry on overflow.
-        public void AppendF(int v)    { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(uint v)   { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(long v)   { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(ulong v)  { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(float v)  { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(double v) { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
+        public void AppendF(int v)    { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(uint v)   { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(long v)   { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(ulong v)  { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(float v)  { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(double v) { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, default, CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
 
-        public void AppendF(int v, string format)    { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(long v, string format)   { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(ulong v, string format)  { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(float v, string format)  { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
-        public void AppendF(double v, string format) { int w; while (!v.TryFormat(t_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(_pos, 32); _pos += w; }
+        public void AppendF(int v, string format)    { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(long v, string format)   { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(ulong v, string format)  { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(float v, string format)  { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
+        public void AppendF(double v, string format) { int w; while (!v.TryFormat(_buf.AsSpan(_pos), out w, format.AsSpan(), CultureInfo.InvariantCulture)) Grow(32); _pos += w; }
 
         // Generic fallback. Enums resolve to a cached name (no allocation); other value types box once via ToString.
         public void AppendValue<T>(T value)
@@ -85,15 +92,16 @@ namespace xpTURN.Klotho.Logging
 
         private void AppendSpaces(int n)
         {
-            if (_pos + n > t_buf.Length) Grow(_pos, n);
-            for (int i = 0; i < n; i++) t_buf[_pos + i] = ' ';
+            if (_pos + n > _buf.Length) Grow(n);
+            for (int i = 0; i < n; i++) _buf[_pos + i] = ' ';
             _pos += n;
         }
 
         public string ToStringAndReset()
         {
-            string r = new string(t_buf, 0, _pos);
+            string r = new string(_buf, 0, _pos);
             _pos = 0;
+            t_pooled = _buf; // return the buffer (possibly grown) to the pool for reuse
             return r;
         }
     }

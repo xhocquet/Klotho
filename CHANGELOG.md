@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.2.7] - 2026-05-31
+
+### ECS — HFSMBuilder (IMP49)
+
+- New fluent `HFSMBuilder` (`Runtime/ECS/FSM/`) replaces the manual array-of-structs HFSM graph with a `State/Default/To/OnEnter/OnUpdate/OnExit` chain. `Build()` validates the graph at registration and fails fast on structural defects (duplicate ids, dangling target/parent/defaultChild, default-not-set, dense `States[i].StateId == i`), runs a reachability BFS, and stably sorts each state's transitions by descending priority. Since the runtime evaluates transitions by array order (not the `Priority` field), the stable descending sort is what gives priority its meaning. Advisory findings (unreachable / duplicate priority / self-transition) warn via `IKLogger` by default and throw under strict.
+- `BotHFSMRoot` converted to the builder (graph unchanged — transitions were already descending, so the sorted arrays match 1:1), keeping the `Has()` idempotency guard and decision/action instances.
+- `HFSMBuilderTests`: synthetic-graph coverage for each structural throw, advisory warn-vs-strict, stable sort, and same-target transitions.
+
+### Analyzer — DeterminismAnalyzer (DET002~004)
+
+- First true `DiagnosticAnalyzer` in the `KlothoGenerator` DLL (existing ones are generator-embedded helpers). Surfaces determinism hazards at build time instead of waiting until replay/rollback desync. Rules (Category `KlothoGenerator.Determinism`, Warning): `KLOTHO_DET002` (float/double in a deterministic context), `KLOTHO_DET003` (non-deterministic API/type — `Mathf`, `Random`, `System.Math`, `DateTime`, float-backed `UnityEngine.Vector2/3/4`/`Quaternion`/`Matrix4x4`), `KLOTHO_DET004` (`UnityEngine.Time` wall-clock).
+- Context gating (`CompilationStart` → `SymbolStart(NamedType)` → `OperationAction`): rules 002/003 fire only on types implementing a deterministic interface or inheriting a deterministic base; rule scanning for ref-`Frame` helper types is limited to their ref-`Frame` methods (covers `FPNavAvoidance`, `CombatHelper`, `BotFSMHelper`). The FP64 conversion boundary (`FromFloat`/`FromDouble`/`ToFloat`/`ToDouble`/`ToFP64`) exempts argument float-ness while DET003/004 still scan the argument subtree. Test/tool assemblies are skipped.
+- Tests: `Tools/KlothoGenerator.Tests` (NUnit, manual analyzer driver) — 10/10 pass.
+
+### Flow — StartHostAndListen single-entry host bootstrap
+
+- `KlothoSessionFlow.StartHostAndListen` folds the `StartHost` + `HostGame` + `Transport.Listen` sequence into a single call with framework-side teardown, matching the guest path's single-call symmetry. Reads `MaxPlayers` from `sessionConfig` once and listens via `KlothoFlowSetup.Transport`. Listen-bind failure returns `null` (recoverable); other failures (`HostGame`/`CreateRoom`) `Stop()` then rethrow, so a half-started session is never orphaned.
+- P2pSample implements `IKlothoSessionObserver` + wires `LifecycleObserver` so `session.Stop()` cascades to game-side teardown via `OnSessionStopped`; teardown converged into `StopGame()` (IsStopping-guarded). Brawler aligned to `StartHostAndListen`, preserving post-success `SendPlayerConfig` / menu transition. `GameDevAPI.md`: documents `StartHostAndListen`; marks `StartHost` as a low-level escape hatch.
+
+### Logging — re-entrancy / shutdown hardening
+
+- `CharBufferWriter`: per-thread reusable buffer switched from an always-shared `[ThreadStatic]` array to a rent/return pool. A re-entrant log on the same thread (e.g. an argument's `ToString` that logs) now finds the buffer already rented and allocates its own, so the outer message is never corrupted; the pool self-heals if a buffer is not returned (exception mid-format). The non-re-entrant path stays allocation-free.
+- `RollingFileSink.Write`: drops the line when termination has begun (`_stopping`) instead of reopening a writer that would never be flushed or closed — prevents a file-handle leak and a stray log file when a write races with `Dispose`/`ProcessExit`.
+
+### Samples
+
+- **LoggingMelConsole** — new console sample (`Samples/LoggingMelConsole`) routing Klotho's `IKLogger` surface through a standard `Microsoft.Extensions.Logging` pipeline via `MelKLogger`, logging to both console and rolling files under `Logs/` with a ZLogger provider.
+- **P2p/Sd HUD** — `P2pHud`/`SdHud` frame access lifted from the unsafe `((EcsSimulation)engine.Simulation).Frame` downcast to the typed `Engine.PredictedFrame.Frame` accessor, aligning the intro samples with Brawler's standard View pattern. Per-tick polling gains an explicit `Frame == null` guard; one-shot init swaps the cast only (frame presence is a hard precondition). Sim-side init casts preserved (authoritative write paths).
+- **SdSample** — tick rate raised to 60Hz (`TickIntervalMs` 33 → 16, synced across server `simulationconfig.json` + client `SimulationConfig.asset`), halving per-tick input-stamp and remote-render latency from ~66ms to ~32ms at unchanged InputDelay/Interp ticks.
+
 ## [0.2.6] - 2026-05-30
 
 ### Dedicated server — project references

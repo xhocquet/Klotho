@@ -424,13 +424,13 @@ namespace Brawler
                 simulationConfig = sc;
             }
 
-            _session = _flow.StartHost(simulationConfig, _sessionConfig);
-            _session.HostGame("Game", _sessionConfig.MaxPlayers);
-
-            if (!_transport.Listen(_brawlerSettings._hostAddress, _brawlerSettings._port, _sessionConfig.MaxPlayers))
+            _session = _flow.StartHostAndListen(simulationConfig, _sessionConfig, "Game",
+                _brawlerSettings._hostAddress, _brawlerSettings._port);
+            if (_session == null)
             {
+                // listen bind failed — the framework already tore the session down via OnSessionStopped
+                // (StopGame), which restored the menu. Just abort.
                 _logger?.KError($"[Brawler] Failed to host on port {_brawlerSettings._port} — aborting StartHost.");
-                StopGame();
                 return;
             }
 

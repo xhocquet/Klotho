@@ -454,7 +454,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: dfc81ca489b9041d7bab3b84b5e30e2e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: xpTURN.Samples.P2pSample.View::xpTURN.Samples.P2pSample.P2pGameController
-  _logLevel: 0
+  _logLevel: 2
   _hostAddress: localhost
   _port: 777
   _simulationConfig: {fileID: 11400000, guid: 77f85eed0ad1845acadbb9a6cf607032, type: 2}

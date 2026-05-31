@@ -1,6 +1,6 @@
 # SdSample — Minimum ServerDriven Sample
 
-> Target framework: **xpTURN.Klotho v0.2.6**
+> Target framework: **xpTURN.Klotho v0.2.7**
 > Purpose: the smallest end-to-end **ServerDriven (SD)** sample — same sumo game as P2pSample, but with an authoritative dedicated server + thin predicting clients. Shows how to stand up a Klotho dedicated server and how the deterministic core is shared between the .NET server and the Unity client.
 > Audience: game devs consuming `com.xpturn.klotho` who want a minimal dedicated-server reference before the full Brawler server.
 > Source: [`<repo>/Samples/SdSample/`](../../Samples/SdSample/)
@@ -106,7 +106,7 @@ These four bit us porting P2pSample → SD. All four trace back to **the ServerD
 | | Client (`USimulationConfig` asset) | Server (`simulationconfig.json`, authoritative) |
 |---|---|---|
 | Mode | ServerDriven | ServerDriven |
-| TickIntervalMs | 33 | 33 |
+| TickIntervalMs | 16 (60Hz) | 16 (60Hz) |
 | UsePrediction | true (client predicts) | false (server is authoritative) |
 | MaxRollbackTicks / SyncCheckInterval | 50 / 30 | 50 / 30 |
 

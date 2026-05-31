@@ -2,7 +2,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Deterministic.Math;
-using xpTURN.Klotho.ECS;
 using xpTURN.Klotho.Network;
 
 namespace xpTURN.Samples.SdSample
@@ -25,7 +24,7 @@ namespace xpTURN.Samples.SdSample
         public void AttachEngine(IKlothoEngine engine)
         {
             _engine = engine;
-            var frame = ((EcsSimulation)engine.Simulation).Frame;
+            var frame = engine.PredictedFrame.Frame;
             var stats = frame.AssetRegistry.Get<PlayerStatsAsset>();
             int matchDurationMs = (stats.MatchDuration * FP64.FromInt(1000)).ToInt();
             _matchEndTick = matchDurationMs / frame.DeltaTimeMs;
@@ -72,7 +71,8 @@ namespace xpTURN.Samples.SdSample
         public void RefreshScoreAndTimer()
         {
             if (_engine == null) return;
-            var frame = ((EcsSimulation)_engine.Simulation).Frame;
+            var frame = _engine.PredictedFrame.Frame;
+            if (frame == null) return;
 
             int score0 = 0, score1 = 0;
             var filter = frame.Filter<PlayerComponent>();

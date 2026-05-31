@@ -129,6 +129,10 @@ namespace xpTURN.Klotho.Logging
             int n = 0;
             lock (_gate)
             {
+                // Once termination has begun, drop the line instead of reopening a writer that would
+                // never be flushed or closed. A late write racing with Dispose/ProcessExit is lost.
+                if (_stopping) return;
+
                 var now = DateTime.Now;
                 EnsureWriter(now);
                 now.TryFormat(ts, out n, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);

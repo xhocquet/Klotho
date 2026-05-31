@@ -79,16 +79,6 @@ public static class BotHFSMRoot
     static EvadeEnterAction       _evadeEnter;
     static SkillUpdateAction      _skillUpdate;
 
-    // Transition factory properties (creates a new node each time — sharing is also fine)
-    static HFSMTransitionNode T_Evade     => new HFSMTransitionNode { Priority = 90, TargetStateId = Evade,  Decision = _shouldEvade    };
-    static HFSMTransitionNode T_Knockback => new HFSMTransitionNode { Priority = 80, TargetStateId = Chase,  Decision = _isKnockback    };
-    static HFSMTransitionNode T_Attack    => new HFSMTransitionNode { Priority = 70, TargetStateId = Attack, Decision = _inAttackRange  };
-    static HFSMTransitionNode T_Skill     => new HFSMTransitionNode { Priority = 60, TargetStateId = Skill,  Decision = _shouldUseSkill };
-    static HFSMTransitionNode T_Chase     => new HFSMTransitionNode { Priority = 50, TargetStateId = Chase,  Decision = _hasTarget      };
-    static HFSMTransitionNode T_Idle      => new HFSMTransitionNode { Priority = 40, TargetStateId = Idle,   Decision = _noTarget       };
-    static HFSMTransitionNode T_EvadeArrived => new HFSMTransitionNode { Priority = 50,  TargetStateId = Idle,  Decision = _evadeArrived };
-    static HFSMTransitionNode T_SkillDone    => new HFSMTransitionNode { Priority = 100, TargetStateId = Chase, Decision = _skillDone    };
-
     public static void Build(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets,
                              BasicAttackConfigAsset attack, SkillConfigAsset[][] skills)
     {
@@ -101,41 +91,40 @@ public static class BotHFSMRoot
         _evadeEnter     = new EvadeEnterAction(behavior);
         _skillUpdate    = new SkillUpdateAction(behavior, diffAssets, skills);
 
-        // 2) Assemble the 5 state nodes — exclude self-transitions from each state's Transitions
-        var states = new HFSMStateNode[5];
-
-        states[Idle] = new HFSMStateNode {
-            StateId = Idle, ParentId = -1, DefaultChildId = -1,
-            OnEnterActions = new AIAction[] { _clearDest },
-            Transitions    = new[] { T_Evade, T_Knockback, T_Attack, T_Skill, T_Chase },
-        };
-        states[Chase] = new HFSMStateNode {
-            StateId = Chase, ParentId = -1, DefaultChildId = -1,
-            Transitions = new[] { T_Evade, T_Knockback, T_Attack, T_Skill, T_Idle },
-        };
-        states[Attack] = new HFSMStateNode {
-            StateId = Attack, ParentId = -1, DefaultChildId = -1,
-            OnEnterActions = new AIAction[] { _clearDest },
-            Transitions    = new[] { T_Evade, T_Knockback, T_Skill, T_Chase, T_Idle },
-        };
-        states[Evade] = new HFSMStateNode {
-            StateId = Evade, ParentId = -1, DefaultChildId = -1,
-            OnEnterActions = new AIAction[] { _evadeEnter },
-            Transitions    = new[] { T_EvadeArrived },   // only when the evade point is reached
-        };
-        states[Skill] = new HFSMStateNode {
-            StateId = Skill, ParentId = -1, DefaultChildId = -1,
-            OnEnterActions  = new AIAction[] { _clearDest },
-            OnUpdateActions = new AIAction[] { _skillUpdate },
-            Transitions     = new[] { T_SkillDone },     // when the skill action finishes
-        };
-
-        // 3) Register in the registry — HFSMRoot static method
-        HFSMRoot.Register(new HFSMRoot {
-            RootId         = Id,
-            DefaultStateId = Idle,
-            States         = states,
-        });
+        // 2) Assemble the graph fluently — each State() omits its own self-transition.
+        //    To(...) adds a transition; Build() validates the graph (duplicate / dangling /
+        //    non-dense ids, default-not-set, reachability) and stably sorts each state's
+        //    transitions by descending priority before registering it under Id.
+        new HFSMBuilder(Id)
+            .Default(Idle)
+            .State(Idle)                                       // excludes the self transition
+                .OnEnter(_clearDest)
+                .To(Evade,  _shouldEvade,    priority: 90)
+                .To(Chase,  _isKnockback,    priority: 80)
+                .To(Attack, _inAttackRange,  priority: 70)
+                .To(Skill,  _shouldUseSkill, priority: 60)
+                .To(Chase,  _hasTarget,      priority: 50)
+            .State(Chase)                                      // excludes the hasTarget transition
+                .To(Evade,  _shouldEvade,    priority: 90)
+                .To(Chase,  _isKnockback,    priority: 80)
+                .To(Attack, _inAttackRange,  priority: 70)
+                .To(Skill,  _shouldUseSkill, priority: 60)
+                .To(Idle,   _noTarget,       priority: 40)
+            .State(Attack)                                     // excludes the self transition
+                .OnEnter(_clearDest)
+                .To(Evade,  _shouldEvade,    priority: 90)
+                .To(Chase,  _isKnockback,    priority: 80)
+                .To(Skill,  _shouldUseSkill, priority: 60)
+                .To(Chase,  _hasTarget,      priority: 50)
+                .To(Idle,   _noTarget,       priority: 40)
+            .State(Evade)                                      // committed: single exit transition
+                .OnEnter(_evadeEnter)
+                .To(Idle,   _evadeArrived,   priority: 50)
+            .State(Skill)                                      // committed: returns to Chase once the action lock clears
+                .OnEnter(_clearDest)
+                .OnUpdate(_skillUpdate)
+                .To(Chase,  _skillDone,      priority: 100)
+            .Build();
     }
 }
 
@@ -150,9 +139,9 @@ public static class BotStateId
 ```
 
 **Key types**:
-- `HFSMRoot` — Root registry (`.Register`, `.Has`) + the instance type itself (`RootId`, `DefaultStateId`, `States`)
-- `HFSMStateNode` — A single state node (`OnEnter / OnUpdate / OnExit Actions`, `Transitions`)
-- `HFSMTransitionNode` — Transition definition (`Priority`, `TargetStateId`, `Decision`)
+- `HFSMBuilder` — Fluent assembler (`Default`, `State`, `OnEnter / OnUpdate / OnExit`, `To`, `Build`). `Build()` validates the graph at registration and fails fast on structural defects (duplicate / dangling / non-dense state ids, default-not-set), runs a reachability BFS, and stably sorts each state's transitions by descending priority — the runtime evaluates transitions in array order, so the sort is what gives `priority` its meaning. Advisory findings (unreachable / duplicate priority / self-transition) warn via `IKLogger` by default; `Build(strict: true)` promotes them to throws.
+- `HFSMRoot` — Root registry (`.Register`, `.Has`) + the instance type itself (`RootId`, `DefaultStateId`, `States`). `HFSMBuilder.Build()` constructs and registers it for you.
+- `HFSMStateNode` / `HFSMTransitionNode` — The node structs the builder emits (`OnEnter / OnUpdate / OnExit Actions`, `Transitions`; `Priority`, `TargetStateId`, `Decision`). Author via the builder rather than constructing arrays by hand.
 - `AIAction` — Base for state enter / update actions
 - `IBotDecision` — Predicate interface for transitions
 

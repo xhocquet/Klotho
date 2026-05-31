@@ -32,28 +32,9 @@ namespace Brawler
         static EvadeEnterAction       _evadeEnter;
         static SkillUpdateAction      _skillUpdate;
 
-        // ── Transition pool ──────────────────────────────────────────────────
-        // T_Evade     Priority 90 → Evade
-        // T_Knockback Priority 80 → Chase
-        // T_Attack    Priority 70 → Attack
-        // T_Skill     Priority 60 → Skill
-        // T_Chase     Priority 50 → Chase
-        // T_Idle      Priority 40 → Idle
-
-        static HFSMTransitionNode T_Evade     => new HFSMTransitionNode { Priority = 90, TargetStateId = Evade,  Decision = _shouldEvade    };
-        static HFSMTransitionNode T_Knockback => new HFSMTransitionNode { Priority = 80, TargetStateId = Chase,  Decision = _isKnockback    };
-        static HFSMTransitionNode T_Attack    => new HFSMTransitionNode { Priority = 70, TargetStateId = Attack, Decision = _inAttackRange  };
-        static HFSMTransitionNode T_Skill     => new HFSMTransitionNode { Priority = 60, TargetStateId = Skill,  Decision = _shouldUseSkill };
-        static HFSMTransitionNode T_Chase     => new HFSMTransitionNode { Priority = 50, TargetStateId = Chase,  Decision = _hasTarget      };
-        static HFSMTransitionNode T_Idle      => new HFSMTransitionNode { Priority = 40, TargetStateId = Idle,   Decision = _noTarget       };
-
-        // Evade only
-        static HFSMTransitionNode T_EvadeArrived => new HFSMTransitionNode { Priority = 50, TargetStateId = Idle, Decision = _evadeArrived };
-
-        // Skill only — Chase transition after ActionLock is released, Priority 100
-        static HFSMTransitionNode T_SkillDone => new HFSMTransitionNode { Priority = 100, TargetStateId = Chase, Decision = _skillDone };
-
         // ── Build ─────────────────────────────────────────────────────────────
+        // Priority pool: Evade 90, Knockback 80 (→Chase), Attack 70, Skill 60, Chase 50 (→Chase), Idle 40 (→Idle).
+        // Evade/Skill are committed states holding only their single exit transition.
 
         public static void Build(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets,
                                  BasicAttackConfigAsset attack, SkillConfigAsset[][] skills)
@@ -66,91 +47,36 @@ namespace Brawler
             _evadeEnter     = new EvadeEnterAction(behavior);
             _skillUpdate    = new SkillUpdateAction(behavior, diffAssets, skills);
 
-            var states = new HFSMStateNode[5]; // index = StateId
-
-            // Idle (0): excludes T_Idle
-            states[Idle] = new HFSMStateNode
-            {
-                StateId        = Idle,
-                ParentId       = -1,
-                DefaultChildId = -1,
-                OnEnterActions  = new AIAction[] { _clearDest },
-                OnUpdateActions = null,
-                OnExitActions   = null,
-                Transitions     = new[]
-                {
-                    T_Evade, T_Knockback, T_Attack, T_Skill, T_Chase,
-                },
-            };
-
-            // Chase (1): excludes T_Chase
-            states[Chase] = new HFSMStateNode
-            {
-                StateId        = Chase,
-                ParentId       = -1,
-                DefaultChildId = -1,
-                OnEnterActions  = null,
-                OnUpdateActions = null,
-                OnExitActions   = null,
-                Transitions     = new[]
-                {
-                    T_Evade, T_Knockback, T_Attack, T_Skill, T_Idle,
-                },
-            };
-
-            // Attack (2): excludes T_Attack
-            states[Attack] = new HFSMStateNode
-            {
-                StateId        = Attack,
-                ParentId       = -1,
-                DefaultChildId = -1,
-                OnEnterActions  = new AIAction[] { _clearDest },
-                OnUpdateActions = null,
-                OnExitActions   = null,
-                Transitions     = new[]
-                {
-                    T_Evade, T_Knockback, T_Skill, T_Chase, T_Idle,
-                },
-            };
-
-            // Evade (3): excludes all common transitions, holds only T_EvadeArrived
-            states[Evade] = new HFSMStateNode
-            {
-                StateId        = Evade,
-                ParentId       = -1,
-                DefaultChildId = -1,
-                OnEnterActions  = new AIAction[] { _evadeEnter },
-                OnUpdateActions = null,
-                OnExitActions   = null,
-                Transitions     = new[]
-                {
-                    T_EvadeArrived,
-                },
-            };
-
-            // Skill (4): excludes all common transitions, holds only T_SkillDone
-            states[Skill] = new HFSMStateNode
-            {
-                StateId        = Skill,
-                ParentId       = -1,
-                DefaultChildId = -1,
-                OnEnterActions  = new AIAction[] { _clearDest },
-                OnUpdateActions = new AIAction[] { _skillUpdate },
-                OnExitActions   = null,
-                Transitions     = new[]
-                {
-                    T_SkillDone,
-                },
-            };
-
-            var root = new HFSMRoot
-            {
-                RootId         = Id,
-                DefaultStateId = Idle,
-                States         = states,
-            };
-
-            HFSMRoot.Register(root);
+            new HFSMBuilder(Id)
+                .Default(Idle)
+                .State(Idle)                                       // excludes the self transition
+                    .OnEnter(_clearDest)
+                    .To(Evade,  _shouldEvade,    priority: 90)
+                    .To(Chase,  _isKnockback,    priority: 80)
+                    .To(Attack, _inAttackRange,  priority: 70)
+                    .To(Skill,  _shouldUseSkill, priority: 60)
+                    .To(Chase,  _hasTarget,      priority: 50)
+                .State(Chase)                                      // excludes the hasTarget transition
+                    .To(Evade,  _shouldEvade,    priority: 90)
+                    .To(Chase,  _isKnockback,    priority: 80)
+                    .To(Attack, _inAttackRange,  priority: 70)
+                    .To(Skill,  _shouldUseSkill, priority: 60)
+                    .To(Idle,   _noTarget,       priority: 40)
+                .State(Attack)                                     // excludes the self transition
+                    .OnEnter(_clearDest)
+                    .To(Evade,  _shouldEvade,    priority: 90)
+                    .To(Chase,  _isKnockback,    priority: 80)
+                    .To(Skill,  _shouldUseSkill, priority: 60)
+                    .To(Chase,  _hasTarget,      priority: 50)
+                    .To(Idle,   _noTarget,       priority: 40)
+                .State(Evade)                                      // committed: single exit transition
+                    .OnEnter(_evadeEnter)
+                    .To(Idle,   _evadeArrived,   priority: 50)
+                .State(Skill)                                      // committed: returns to Chase once the action lock clears
+                    .OnEnter(_clearDest)
+                    .OnUpdate(_skillUpdate)
+                    .To(Chase,  _skillDone,      priority: 100)
+                .Build();
         }
     }
 

@@ -75,6 +75,50 @@ namespace xpTURN.Klotho.Core
             return session;
         }
 
+        /// <summary>
+        /// Creates a host session, activates the host role, and starts listening — in the correct order,
+        /// with automatic teardown on any failure after the session is created. Folds the StartHost +
+        /// HostGame + Transport.Listen sequence into a single entry point so callers never orphan a
+        /// half-started session.
+        ///
+        /// Outcomes:
+        ///   • success            → returns the running session.
+        ///   • listen bind failed → tears the session down and returns null (expected, recoverable).
+        ///   • any other failure  → tears the session down, then rethrows (e.g. HostGame/CreateRoom).
+        /// In every non-success case the session is already torn down before this method returns/throws.
+        /// </summary>
+        public KlothoSession StartHostAndListen(
+            ISimulationConfig simulationConfig,
+            ISessionConfig    sessionConfig,
+            string            roomName,
+            string            address,
+            int               port)
+        {
+            if (_setup.Transport == null)
+                throw new InvalidOperationException("KlothoFlowSetup.Transport is required for StartHostAndListen.");
+
+            var session = StartHost(simulationConfig, sessionConfig);
+            try
+            {
+                session.HostGame(roomName, sessionConfig.MaxPlayers);
+                if (!_setup.Transport.Listen(address, port, sessionConfig.MaxPlayers))
+                {
+                    _setup.Logger?.KError($"Host listen failed on {address}:{port} — tearing down session.");
+                    session.Stop();
+                    return null;
+                }
+            }
+            catch
+            {
+                // Tear the half-started session down so callers never orphan it; swallow any
+                // secondary teardown error so the original exception is the one that propagates.
+                try { session.Stop(); }
+                catch (Exception stopEx) { _setup.Logger?.KError(stopEx, $"Teardown after host-bootstrap failure threw"); }
+                throw;
+            }
+            return session;
+        }
+
         // ── Replay ──
 
         public KlothoSession StartReplay(IReplayData replayData, ISimulationConfig simulationConfig)

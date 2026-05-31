@@ -4,9 +4,6 @@
 
 **Deterministic Multiplayer Simulation Framework for Unity**
 
-> ⚠️ **Experimental Release**
-> This project is under active development and has not yet reached a stable stage. Public APIs, serialization formats, and network protocols may change without notice. Production use is not recommended.
-
 A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame Synchronization, Server-Driven mode, and Replay. By excluding floating-point and building the simulation solely on 32.32 fixed-point (`FP64`) and a deterministic RNG (Xorshift128+), it guarantees full reproducibility across platforms and compilers.
 
 > Klotho weaves the simulation, one frame at a time.
@@ -113,7 +110,7 @@ https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
 https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
 ```
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.6`).
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho`).
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
@@ -133,6 +130,8 @@ After install, open Unity Package Manager → select **xpTURN.Klotho** → **Sam
 **P2pSample** — a minimum P2P sample (2 cubes, 60s sumo match) consuming this package via the same UPM git URL. Located at [`Samples/P2pSample/`](Samples/P2pSample/) in this repo — open the folder directly in Unity Hub. See [`Samples/P2pSample/README.md`](Samples/P2pSample/README.md) for the 4-step quick start, or [`Docs/Samples/P2pSample.md`](Docs/Samples/P2pSample.md) for the architecture walkthrough.
 
 **SdSample** — the ServerDriven sibling of P2pSample (same sumo game, dedicated-server topology): a Unity client + a minimal .NET 8 dedicated server. Located at [`Samples/SdSample/`](Samples/SdSample/) — see [`Samples/SdSample/README.md`](Samples/SdSample/README.md) (server + 2 clients quick start) or [`Docs/Samples/SdSample.md`](Docs/Samples/SdSample.md) (architecture + SD-specific gotchas).
+
+**LoggingMelConsole** — a .NET console sample at [`Samples/LoggingMelConsole/`](Samples/LoggingMelConsole/) that routes Klotho's `IKLogger` surface through a standard `Microsoft.Extensions.Logging` pipeline via `MelKLogger`, logging to both console and rolling files under `Logs/` with a ZLogger provider.
 
 Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this repo if you want to inspect or modify them.
 
@@ -309,14 +308,17 @@ void Start()
     });
     _flow.OnSessionCreated += s => _sessionDriver.Attach(s);
 
-    _session = _flow.StartHost(uSimulationConfig, uSessionConfig);
-    _session.HostGame("MyRoom", maxPlayers: 2);
+    // Single-call host bootstrap: StartHost + HostGame + Transport.Listen, with
+    // framework-side teardown if any step fails. MaxPlayers is read from uSessionConfig.
+    _session = _flow.StartHostAndListen(uSimulationConfig, uSessionConfig,
+                                        roomName: "MyRoom", address: "0.0.0.0", port: 9050);
 }
 ```
 
-`KlothoSessionFlow` exposes 6 entry points — pick one per game mode:
+`KlothoSessionFlow` exposes these entry points — pick one per game mode:
 
-- `StartHost(simCfg, sessionCfg)` — P2P host (synchronous).
+- `StartHostAndListen(simCfg, sessionCfg, roomName, address, port)` — P2P host (synchronous). Folds `StartHost` + `HostGame` + `Transport.Listen` into one call with framework-side teardown on failure; returns `null` on listen-bind failure (session already torn down), rethrows on other failures.
+- `StartHost(simCfg, sessionCfg)` — low-level P2P host (synchronous). Escape hatch for custom ordering / multi-transport / tests; the caller drives `HostGame` + `Transport.Listen`.
 - `JoinP2PAsync(transport, host, port, sessionCfg, ct)` — P2P guest join.
 - `JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)` — ServerDriven client join (with roomId).
 - `ReconnectAsync(transport, creds, sessionConfigSeed, ct)` — cold-start reconnect; `creds` is a `PersistedReconnectCredentials` (carries `RoomId`, host address, and the magic token). Mode is recovered from the credentials.

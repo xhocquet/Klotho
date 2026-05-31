@@ -1,6 +1,6 @@
 {
   "Mode": "ServerDriven",
-  "TickIntervalMs": 33,
+  "TickIntervalMs": 16,
   "InputDelayTicks": 2,
   "MaxRollbackTicks": 50,
   "SyncCheckInterval": 30,

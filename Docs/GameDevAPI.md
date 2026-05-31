@@ -287,7 +287,8 @@ For most games the preferred construction path is `KlothoSessionFlow` (it wraps 
 
 | Mode | Entry | Notes |
 |---|---|---|
-| P2P host | `flow.StartHost(simCfg, sessionCfg)` | synchronous |
+| P2P host | `flow.StartHostAndListen(simCfg, sessionCfg, roomName, address, port)` | synchronous — folds StartHost + HostGame + Transport.Listen with auto-teardown on failure. Returns the running session, or `null` on listen-bind failure (session already torn down); rethrows on other failures after teardown |
+| P2P host (low-level) | `flow.StartHost(simCfg, sessionCfg)` | synchronous — escape hatch for custom ordering / multi-transport / tests. Caller drives `HostGame` + `Transport.Listen` and rollback manually |
 | P2P guest | `flow.JoinP2PAsync(transport, host, port, sessionCfg, ct)` | guest receives `sessionCfg` from `GameStartMessage` — the passed value is a seed |
 | ServerDriven client | `flow.JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)` | extra `roomId` parameter (P2P does not use it) |
 | Reconnect | `flow.ReconnectAsync(transport, creds, sessionConfigSeed, ct)` | `creds` is `PersistedReconnectCredentials` — carries `RoomId`, host address, magic. Mode is recovered from the credentials |

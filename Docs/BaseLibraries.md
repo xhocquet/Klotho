@@ -52,6 +52,8 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 
 Opt-in package sample (UPM "Import Sample" → **MEL Logging Plugin**) that bridges `IKLogger` to `Microsoft.Extensions.Logging.ILogger`. Activating the adapter requires the consumer to provide `Microsoft.Extensions.Logging.Abstractions.dll` — consumer responsibility (the core package stays self-contained).
 
+A runnable end-to-end example lives at [`Samples/LoggingMelConsole/`](../Samples/LoggingMelConsole/) — a .NET console app that routes Klotho's `IKLogger` surface through a standard `Microsoft.Extensions.Logging` pipeline via `MelKLogger`, logging to both the console and rolling files under `Logs/` with a ZLogger provider.
+
 ---
 
 ## B. Cysharp Open-Source Libraries

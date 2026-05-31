@@ -353,7 +353,7 @@ Higher Priority is evaluated first. Evade / knockback take top priority.
 
 ### 10-3. Registration
 
-`BotFSMSystem` holds a root-FSM instance per entity with `BotComponent` and calls `Tick()` every PreUpdate.
+`BotHFSMRoot.Build()` assembles the graph with the fluent `HFSMBuilder` (`Default` / `State` / `OnEnter`·`OnUpdate` / `To` / `Build`), called once from `BrawlerSimulationCallbacks.RegisterSystems()` right after DataAssets load. `Build()` validates the graph at registration (duplicate / dangling / non-dense ids, default-not-set, reachability) and stably sorts each state's transitions by descending priority. `BotFSMSystem` then holds the registered root per entity with `BotComponent` and calls `Tick()` every PreUpdate. See [Brawler.D.BotHFSM.md](Brawler.D.BotHFSM.md) §D-2.
 
 ---
 

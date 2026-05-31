@@ -1,0 +1,29 @@
+<!--
+  LoggingMelConsole — sample console app for the MEL logging adapter.
+  Shows how to feed Klotho's IKLogger logging surface through a standard
+  Microsoft.Extensions.Logging ILogger using MelKLogger.
+
+  References the optional xpTURN.Klotho.Logging.Mel project (which in turn pulls
+  Microsoft.Extensions.Logging.Abstractions) and adds a concrete MEL provider
+  (Console) so there is an actual logger to bridge into.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>LoggingMelConsole</AssemblyName>
+    <RootNamespace>xpTURN.Klotho.Samples.LoggingMelConsole</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Klotho\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging.Mel\xpTURN.Klotho.Logging.Mel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageReference Include="ZLogger" Version="2.5.10" />
+  </ItemGroup>
+</Project>
