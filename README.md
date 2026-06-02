@@ -4,6 +4,9 @@
 
 **Deterministic Multiplayer Simulation Framework for Unity**
 
+> ⚠️ **Experimental Release**
+> This project is under active development and has not yet reached a stable stage. Public APIs, serialization formats, and network protocols may change without notice. Production use is not recommended.
+
 A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame Synchronization, Server-Driven mode, and Replay. By excluding floating-point and building the simulation solely on 32.32 fixed-point (`FP64`) and a deterministic RNG (Xorshift128+), it guarantees full reproducibility across platforms and compilers.
 
 > Klotho weaves the simulation, one frame at a time.
