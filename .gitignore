@@ -2,39 +2,24 @@
 **/.DS_Store
 **/.idea
 **/.vsconfig
+**/*.pem
+**/*.p12
 
 ## ignore folders
 **/.vscode/
 **/.vs/
+**/.config/
+**/.cursor/
+**/.claude/
 **/.vsconfig/
-
-## ignore
-
-*.pem
-*.p12
 
 **/Docs/IMP/
 **/Docs/REF/
 
-**/Klotho/Docs/
-**/Klotho/**/Replays/
-**/Klotho/**/*.g.cs
-**/Klotho/*.csproj
-**/Klotho/*.sln
-**/Klotho/*.slnx
-
-**/P2pSample/*.csproj
-**/P2pSample/*.sln
-**/P2pSample/*.slnx
-
-**/SdSample/*.csproj
-**/SdSample/*.sln
-**/SdSample/*.slnx
-
-Samples/P2pSample/Packages/packages-lock.json
-Samples/SdSample/Packages/packages-lock.json
-
-**/Tools/Generated
+**/Generated/
+**/Output/
+**/Replays/
+**/MemoryCaptures/
 
 /**/[Aa]ssets/[Pp]ackages/
 /**/Library/
@@ -51,4 +36,16 @@ Samples/SdSample/Packages/packages-lock.json
 **/*.app/
 **/*_BackUpThisFolder_*/
 **/*_BurstDebugInformation_*/
-**/MemoryCaptures/
+
+## ignore files
+**/.DS_Store**/Klotho/*.csproj
+**/Klotho/*.sln
+**/Klotho/*.slnx
+
+**/P2pSample/*.csproj
+**/P2pSample/*.sln
+**/P2pSample/*.slnx
+
+**/SdSample/*.csproj
+**/SdSample/*.sln
+**/SdSample/*.slnx
