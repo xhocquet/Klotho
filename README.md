@@ -11,6 +11,8 @@ A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame
 
 > Klotho weaves the simulation, one frame at a time.
 
+**How synchronization works, in one paragraph:** determinism is the keystone — given the same ordered inputs, every peer computes byte-identical state, so the network carries *inputs only* and verification reduces to comparing a hash. On that foundation each peer keeps two timelines over the same tick axis: a **Verified chain** (ticks where every player's real input is known — immutable) and a **Predicted chain** (ticks run ahead using *guessed* remote input — provisional). Like CPU branch prediction, the simulation advances immediately on predicted input instead of waiting; when a real input contradicts a guess, the engine restores a snapshot and re-simulates (**rollback**), which is cheap precisely because state is a pure function of inputs. Input delay and adaptive timing buffers minimize how often that happens, and when determinism genuinely breaks, a graded recovery ladder (hash check → rollback → full-state resync → corrective reset) restores agreement. The same machinery serves both **P2P lockstep** (peers hold equal authority) and **Server-Driven** (the server owns the verified chain). Full rationale: [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md).
+
 ---
 
 ## Key Features
@@ -357,6 +359,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | ---- | ---- |
 | [Docs/FEATURES.md](Docs/FEATURES.md) | Full feature list |
 | [Docs/Specification.md](Docs/Specification.md) | Engine specification (state machines · configuration · events · message protocol · formats) |
+| [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md) | Synchronization design direction (determinism · two-chain model · prediction/rollback · timing · authority models · recovery ladder) |
 | [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md) | Game-developer workflow (step-by-step) |
 | [Docs/GameDevAPI.md](Docs/GameDevAPI.md) | Game-developer API status |
 | [Docs/SimulationConfigGuide.md](Docs/SimulationConfigGuide.md) | SimulationConfig recommended-value guide (per genre / platform) |
