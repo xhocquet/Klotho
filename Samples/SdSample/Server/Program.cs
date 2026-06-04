@@ -52,21 +52,13 @@ if (!transport.Listen("0.0.0.0", port, maxRooms * maxPlayers))
 // RoomRouter consumes the RoomHandshakeMessage and routes peers to the room; RoomManager
 // wires EcsSimulation / ServerNetworkService / KlothoEngine / CommandFactory per room internally.
 var router = new RoomRouter(transport, logger);
-var roomManager = new RoomManager(transport, router, loggerFactory, new RoomManagerConfig
-{
-    MaxRooms = maxRooms,
-    MaxPlayersPerRoom = maxPlayers,
-    MaxSpectatorsPerRoom = 0,
-    SimulationFactory = () => new EcsSimulation(
-        maxEntities: simConfig.MaxEntities,
-        maxRollbackTicks: 1,
-        deltaTimeMs: tickIntervalMs,
-        logger: logger,
-        assetRegistry: sharedRegistry),
-    SimulationConfigFactory = () => simConfig,
-    SessionConfigFactory = () => sessionConfig,
-    CallbacksFactory = (roomLogger) => new SdServerCallbacks(roomLogger, maxPlayers),
-});
+var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new SdServerCallbacks(roomLogger, maxPlayers))
+    .WithRoomLimits(maxRooms, maxPlayers, maxSpectatorsPerRoom: 0)
+    .WithSimulationConfig(simConfig)
+    .WithSessionConfig(sessionConfig)
+    .WithDerivedSimulation(sharedRegistry)
+    .Build();
+var roomManager = new RoomManager(transport, router, loggerFactory, roomManagerConfig);
 
 logger.KInformation($"[SdServer] listening on port {port}, maxPlayers={maxPlayers}, tickInterval={tickIntervalMs}ms");
 

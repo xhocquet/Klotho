@@ -1,6 +1,6 @@
 # SdSample — Minimum ServerDriven Sample
 
-> Target framework: **xpTURN.Klotho v0.2.7**
+> Target framework: **xpTURN.Klotho v0.2.8**
 > Purpose: the smallest end-to-end **ServerDriven (SD)** sample — same sumo game as P2pSample, but with an authoritative dedicated server + thin predicting clients. Shows how to stand up a Klotho dedicated server and how the deterministic core is shared between the .NET server and the Unity client.
 > Audience: game devs consuming `com.xpturn.klotho` who want a minimal dedicated-server reference before the full Brawler server.
 > Source: [`<repo>/Samples/SdSample/`](../../Samples/SdSample/)
@@ -60,7 +60,7 @@ Server/  (dedicated .NET 8 console — NOT in Assets/)
 
 **Shared deterministic setup** — `SdSimSetup.RegisterSystems` / `InitializeWorld` live in the engine-free `Sim` assembly and are invoked by **both** the client (`SdSimulationCallbacks`) and the server (`SdServerCallbacks`), so the world is built identically on every peer. The server compiles the *same `Sim/*.cs` source files* (not a DLL) into the exe; since `CommandFactory` now lives in the referenced `xpTURN.Klotho.Runtime` assembly, KlothoGenerator emits cross-assembly registration (`[ModuleInitializer]`) for those `[KlothoSerializable]` types, and `KlothoServerBootstrap.Initialize(...)` (`Program.cs`) force-loads the split assemblies + runs warmups at startup so every registration completes before the first room.
 
-**Embedded framework package** — `com.xpturn.klotho` is **embedded** at `Samples/SdSample/Packages/com.xpturn.klotho/` (Unity `source: embedded`), not git-fetched. The server `.csproj` `<ProjectReference>`s the per-assembly server projects under `..\Packages\com.xpturn.klotho\Server~\` (`KlothoServer` + `xpTURN.Klotho.Runtime`/`Logging`/`Gameplay`/`LiteNetLib`) via this fixed in-project path; a git-fetched package would resolve to a hashed `Library/PackageCache/com.xpturn.klotho@<hash>/` path that an MSBuild project reference can't target reliably. (UniTask / Polyfill are still git-fetched via the manifest.)
+**Framework package reference** — there is a single top-level `com.xpturn.klotho/` package at the repo root; the sample does **not** embed a copy. The sample's `Packages/manifest.json` references it via `"com.xpturn.klotho": "file:../../../com.xpturn.klotho"`, so there's no per-version sync. The server `.csproj` `<ProjectReference>`s the per-assembly server projects under `..\..\..\com.xpturn.klotho\Server~\` (`KlothoServer` + `xpTURN.Klotho.Runtime`/`Logging`/`Gameplay`/`LiteNetLib`) via this fixed relative path; a git-fetched package would resolve to a hashed `Library/PackageCache/com.xpturn.klotho@<hash>/` path that an MSBuild project reference can't target reliably. (UniTask / Polyfill are still git-fetched via the manifest.)
 
 ---
 
@@ -74,7 +74,7 @@ transport.Listen("0.0.0.0", port, maxRooms * maxPlayers);
 var router      = new RoomRouter(transport, logger);
 var roomManager = new RoomManager(transport, router, loggerFactory, new RoomManagerConfig {
     MaxRooms = 1, MaxPlayersPerRoom = maxPlayers, MaxSpectatorsPerRoom = 0,
-    SimulationFactory       = () => new EcsSimulation(simConfig.MaxEntities, maxRollbackTicks:1, tickIntervalMs, logger, registry),
+    // EcsSimulation is derived from the simulation config (no SimulationFactory).
     SimulationConfigFactory = () => simConfig,
     SessionConfigFactory    = () => sessionConfig,
     CallbacksFactory        = roomLogger => new SdServerCallbacks(roomLogger, maxPlayers),

@@ -41,7 +41,6 @@ namespace xpTURN.Samples.P2pSample
         private KlothoSessionFlow _flow;
         private KlothoSession _session;
         private P2pViewCallbacks _viewCallbacks;
-        private CancellationTokenSource _connectCts;
         private bool _joining;
 
         private void Awake()
@@ -50,8 +49,6 @@ namespace xpTURN.Samples.P2pSample
             _logger?.KInformation($"P2pSample logger started.");
 
             _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
-            _sessionDriver.Stopping        += OnSessionDriverStopping;
-            _sessionDriver.IdlePoll        += OnIdlePoll;
         }
 
         private void Start()
@@ -62,27 +59,28 @@ namespace xpTURN.Samples.P2pSample
             _assetRegistry = builder.Build();
 
             _transport = new LiteNetLibTransport(_logger, levels: null, connectionKey: ConnectionKey);
-            _transport.OnDisconnected += OnTransportDisconnected;
 
             _input = new P2pInputCapture();
             _input.Enable();
 
-            _flow = new KlothoSessionFlow(new KlothoFlowSetup
-            {
-                Logger            = _logger,
-                Transport         = _transport,
-                AssetRegistry     = _assetRegistry,
-                AppVersion        = Application.version,
-                DeviceIdProvider  = new UnityDeviceIdProvider(),
-                LifecycleObserver = this,
-                CallbacksFactory  = (simCfg, sessCfg) =>
+            var setup = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
                 {
                     var simCallbacks = new P2pSimulationCallbacks(_input);
                     _viewCallbacks = new P2pViewCallbacks(_hud);
                     return new SessionCallbacks(simCallbacks, _viewCallbacks);
-                },
-            });
-            _flow.OnSessionCreated += OnFlowSessionCreated;
+                })
+                .WithLogger(_logger)
+                .WithTransport(_transport)
+                .WithAssetRegistry(_assetRegistry)
+                .WithLifecycleObserver(this)
+                .WithUnityDefaults()
+                .Build();
+
+            _flow = new KlothoSessionFlow(setup);
+            // Driver owns the main transport (idle pumping + idle-disconnect routing); bind before any
+            // session so the driver subscribes ahead of NetworkService.
+            _sessionDriver.BindTransport(_transport, this, _flow);
+            // Session creation observed via IKlothoSessionObserver.OnSessionCreated(session, kind).
 
             _menu.SetInitialHost(_hostAddress, _port);
             _menu.OnHostClicked  += OnBtnHost;
@@ -101,12 +99,8 @@ namespace xpTURN.Samples.P2pSample
             }
         }
 
-        private void OnIdlePoll()
-        {
-            _transport?.PollEvents();
-        }
-
-        private void OnSessionDriverStopping(KlothoSession session)
+        // Pre-stop hook — fires inside session.Stop() while Engine is alive (replaces Driver.Stopping).
+        public void OnSessionStopping()
         {
             _viewCallbacks?.Cleanup();
             _entityViewUpdater?.Cleanup();
@@ -115,16 +109,15 @@ namespace xpTURN.Samples.P2pSample
             _hud.SetLocalReady(false);
         }
 
-        private void OnFlowSessionCreated(KlothoSession session)
+        public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
         {
             // _session is sourced from the entry-method return value (OnBtnHost / JoinAsync);
             // this callback is wiring-only.
             _sessionDriver.Attach(session);
             _entityViewUpdater?.Initialize(session.Engine);
 
-            session.PhaseChanged += p => _hud.SetPhase(p);
-            // Push initial value — event may have fired before subscription.
-            _hud.SetPhase(session.NetworkService?.Phase ?? SessionPhase.None);
+            // Push initial value — OnPhaseChanged fires only on transition.
+            _hud.SetPhase(session.Phase);
 
             _menu.SetReadyEnabled(true);
             _menu.SetStopEnabled(true);
@@ -150,15 +143,17 @@ namespace xpTURN.Samples.P2pSample
 
         private async UniTaskVoid JoinAsync()
         {
-            _connectCts?.Dispose();
-            _connectCts = new CancellationTokenSource();
             try
             {
-                _session = await _flow.JoinP2PAsync(_transport, _hostAddress, _port, _sessionConfig, _connectCts.Token);
+                _session = await _flow.JoinP2PAsync(_transport, _hostAddress, _port, _sessionConfig, destroyCancellationToken);
             }
-            catch (System.Exception ex)
+            catch (JoinFailedException jfe)
             {
-                _logger?.KWarning($"JoinP2PAsync failed: {ex.Message}");
+                _logger?.KWarning($"JoinP2PAsync failed: {jfe.Reason.ToName()}");
+            }
+            catch (System.OperationCanceledException)
+            {
+                // User-initiated cancel (stop button / ct) — not a failure.
             }
             finally
             {
@@ -173,35 +168,25 @@ namespace xpTURN.Samples.P2pSample
             _session.SetReady(true);
         }
 
+        // Stop intent. DetachAndStop drives session.Stop() → OnSessionStopping (UI reset, engine alive)
+        // → OnSessionStopped (idempotent). Transport is intentionally NOT disconnected — it is reused
+        // across sessions for PollEvents / JoinP2PAsync. No re-entry guard: the framework owns idempotency.
         private void OnBtnStop()
         {
-            StopGame();
-        }
-
-        // Single teardown convergence point — driven by the stop button (path 1) and by
-        // session.Stop() via OnSessionStopped (path 2, e.g. StartHostAndListen self-teardown).
-        private void StopGame()
-        {
-            // Re-entry guard: when DetachAndStop is already in flight (path 1), OnSessionStopped
-            // re-enters here with IsStopping == true — skip the duplicate teardown.
-            if (_sessionDriver != null && _sessionDriver.IsStopping) return;
-
-            // DetachAndStop fires the Stopping hook (OnSessionDriverStopping → UI reset) then
-            // session.Stop() (idempotent). Transport is intentionally NOT disconnected — it is
-            // reused across sessions for PollEvents / JoinP2PAsync.
             _sessionDriver?.DetachAndStop();
-            _session = null;
         }
 
         // ── IKlothoSessionObserver — only OnSessionStopped is meaningful here; the rest are
         //    explicitly implemented (no reliance on default interface methods for IL2CPP). ──
 
-        public void OnSessionStopped() => StopGame();
+        // Terminal teardown — framework calls this once on both game-initiated (DetachAndStop) and
+        // framework-internal (StartHostAndListen self-teardown) stops. Only the reference null-out remains.
+        public void OnSessionStopped() => _session = null;
 
         public void OnPlayerDisconnected(IPlayerInfo player) { }
         public void OnPlayerReconnected(IPlayerInfo player) { }
         public void OnReconnecting() { }
-        public void OnReconnectFailed(byte reason) { }
+        public void OnReconnectFailed(ReconnectRejectReason reason) { }
         public void OnReconnected() { }
         public void OnCatchupComplete() { }
         public void OnResyncCompleted(int tick) { }
@@ -210,10 +195,10 @@ namespace xpTURN.Samples.P2pSample
         public void OnMatchEnded(int tick, IMatchEndEvent endEvt) { }
         public void OnMatchReset(ResetReason reason) { }
 
-        private void OnTransportDisconnected(DisconnectReason reason)
-        {
-            _logger?.KInformation($"Transport disconnected: {reason}");
-        }
+        public void OnPhaseChanged(SessionPhase p) => _hud.SetPhase(p);
+        public void OnStateChanged(KlothoState s) { }
+        public void OnPlayerCountChanged(int n) { }
+        public void OnAllPlayersReadyChanged(bool v) { }
 
         private void OnApplicationQuit()
         {
@@ -227,24 +212,14 @@ namespace xpTURN.Samples.P2pSample
 
         private void TeardownAll()
         {
-            _connectCts?.Cancel();
-            _connectCts?.Dispose();
-            _connectCts = null;
+            _flow?.DisposeConnect();
 
             if (_sessionDriver != null)
-            {
                 _sessionDriver.PreSessionUpdate -= OnPreSessionUpdate;
-                _sessionDriver.Stopping        -= OnSessionDriverStopping;
-                _sessionDriver.IdlePoll        -= OnIdlePoll;
-            }
 
             _input?.Disable();
             _input?.Dispose();
-
-            if (_transport != null)
-            {
-                _transport.OnDisconnected -= OnTransportDisconnected;
-            }
+            // Main transport is owned by the driver — disconnected/unsubscribed in its OnDestroy.
         }
     }
 }

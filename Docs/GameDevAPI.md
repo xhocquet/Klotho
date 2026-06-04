@@ -29,7 +29,7 @@ The source generator emits `Serialize` / `Deserialize` / `GetSerializedSize` / `
 | `CombatComponent` | `AttackDamage`, `AttackRange` | Combat |
 | `OwnerComponent` | `OwnerId` | Owner (player) |
 | `PhysicsBodyComponent` | — | Physics body |
-| `NavigationComponent` | — | Navigation agent |
+| `NavAgentComponent` | — | Navigation agent |
 | `RandomSeedComponent` | `Seed` (ulong) | **Singleton** (`[KlothoSingletonComponent]`). Engine-injected at session start (and restored via FullState on LateJoin / Reconnect / Spectator / Replay). Read via `frame.GetReadOnlySingleton<RandomSeedComponent>().Seed`; combine with `DeterministicRandom.FromSeed(seed, featureKey, frame.Tick)` to derive rollback-stable RNG streams |
 
 ### Singleton Components
@@ -207,6 +207,8 @@ var session = KlothoSession.Create(setup);
 
 Implement `IKlothoSessionObserver` and pass the instance through `KlothoSessionSetup.LifecycleObserver` to bulk-subscribe all session-level lifecycle callbacks at `KlothoSession.Create`. The framework unsubscribes them at `Stop()` and finally calls `OnSessionStopped()` so the game can finish its own teardown. This replaces the per-event `+=` wiring that was previously spread across `StartHost / JoinGame / Reconnect / StopGame` sites.
 
+The observer is the **single recommended surface** for session observation. Besides the NetworkService/Engine callbacks it also delivers: session **state transitions** (`OnStateChanged` / `OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged`), session **creation with role** (`OnSessionCreated(session, SessionEntryKind kind)`), a **pre-stop** hook (`OnSessionStopping()`, fired inside `Stop()` before `Engine.Stop` while the engine is still alive — for view/EVU cleanup), and an **idle-disconnect** hook (`OnIdleDisconnected(DisconnectReason reason)`, raised by the driver when the bound transport drops while no session is attached — for returning to the initial menu; see *Driving the Session*). (The observer is the only session-observation surface — the legacy `KlothoSession` instance state events and per-role `KlothoSessionFlow.On*SessionCreated` events have been removed.)
+
 ```csharp
 public class MyGameController : MonoBehaviour, IKlothoSessionObserver
 {
@@ -214,11 +216,10 @@ public class MyGameController : MonoBehaviour, IKlothoSessionObserver
     public void OnPlayerDisconnected(IPlayerInfo player) { /* host: gray out portrait */ }
     public void OnPlayerReconnected(IPlayerInfo player)  { /* host: clear gray */ }
     public void OnReconnecting() { /* guest UI */ }
-    public void OnReconnectFailed(byte reason)
+    public void OnReconnectFailed(ReconnectRejectReason reason)
     {
-        // reason is a ReconnectRejectReason byte
-        var name = ReconnectRejectReason.ToName(reason);
-        if (ReconnectRejectReason.RequiresUserChoice(reason))
+        var name = reason.ToName();
+        if (reason.RequiresUserChoice())
             ShowAlreadyConnectedDialog();
         else
             FallbackToInitial();
@@ -232,17 +233,33 @@ public class MyGameController : MonoBehaviour, IKlothoSessionObserver
     public void OnMatchAborted(AbortReason r)    { /* chain stall, divergence, … */ }
     public void OnMatchEnded(int tick, IMatchEndEvent endEvt) { /* normal end */ }
     public void OnMatchReset(ResetReason r)      { /* corrective reset, match continues */ }
-    public void OnSessionStopped()               { /* transport disconnect, null-out session */ }
+
+    // Session state callbacks (transitions only — no per-frame polling)
+    public void OnStateChanged(KlothoState s)        { /* menu.State = s */ }
+    public void OnPhaseChanged(SessionPhase p)       { /* menu.Phase = p */ }
+    public void OnPlayerCountChanged(int n)          { /* menu.Players = n */ }
+    public void OnAllPlayersReadyChanged(bool ready) { /* menu.IsAllReady = ready */ }
+
+    // Session lifecycle
+    public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
+    {
+        // attach driver, init view; branch on kind (Host/Guest/Replay/Spectator)
+    }
+    public void OnSessionStopping()              { /* engine-alive cleanup: view teardown (before Engine.Stop) */ }
+    public void OnSessionStopped()               { /* null-out session, return to initial UI — transport is driver-owned, not disconnected here */ }
+    public void OnIdleDisconnected(DisconnectReason reason) { /* transport dropped with no session attached — return to initial UI */ }
 }
 ```
 
-Default no-op implementations are provided on the interface, so the game only overrides the callbacks it needs. The `OnReconnectFailed(byte reason)` byte mirrors `KlothoNetworkService.OnReconnectFailed` (see Specification §9.5) — symbolic names via `ReconnectRejectReason.ToName(reason)`; `RequiresUserChoice(reason)` returns true for `AlreadyConnected`.
+Default no-op implementations are provided on the interface, so the game only overrides the callbacks it needs. `OnReconnectFailed(ReconnectRejectReason reason)` mirrors `KlothoNetworkService.OnReconnectFailed` (see Specification §9.5) — symbolic names via `reason.ToName()`; `reason.RequiresUserChoice()` returns true for `AlreadyConnected`. `ReconnectRejectReason` / `JoinFailReason` are `enum : byte`, so a `switch` over them is exhaustive and IntelliSense lists the cases.
 
-Cold-start reconnect (via `KlothoConnectionAsync.ReconnectAsync` / `KlothoConnection.Reconnect`) surfaces server reject through `ReconnectFailedException` — catch it and branch on `e.Reason` (same byte values as `OnReconnectFailed`).
+Cold-start reconnect (via `KlothoConnectionAsync.ReconnectAsync` / `KlothoConnection.Reconnect`) surfaces server reject through `ReconnectFailedException` — catch it and branch on `e.Reason` (`ReconnectRejectReason`, same values as `OnReconnectFailed`).
+
+Normal join (`JoinP2PAsync` / `JoinServerDrivenAsync`) surfaces failure through `JoinFailedException` — catch it and branch on `e.Reason` (`JoinFailReason`). Transport/handshake reasons: `TransportStartFailed` / `TimedOut` / `ConnectionLost` / `Rejected` / `HostClosed` / `Unknown`. Server application-level rejections: `RoomFull` / `RoomNotFound` / `RoomClosing` / `LateJoinDisabled` / `ServerFull`. Cancellation surfaces as `OperationCanceledException`, not `JoinFailedException`. Notes: `ConnectionLost` (transport `NetworkFailure`) is the dominant "can't reach host" case; `Rejected` is transport-level only (wrong connection key / protocol mismatch), distinct from the server's app-level `RoomFull` / `RoomClosing` / etc.
 
 ### Driving the Session in Unity
 
-Drive the session through `KlothoSessionDriver` — a MonoBehaviour that owns the `Update`/`Stop` loop and exposes hooks for pre/post-Update logic, Stop teardown, and idle (no-session) polling. Attach the driver as a `[SerializeField]` on the game controller prefab and wire hooks in `Awake`.
+Drive the session through `KlothoSessionDriver` — a MonoBehaviour that owns the `Update`/`Stop` loop and exposes `PreSessionUpdate` / `PostSessionUpdate` hooks (session teardown is observed through `IKlothoSessionObserver`, not a driver hook). The driver also owns the main transport: it pumps it while no session is attached (idle) and routes idle disconnects to `IKlothoSessionObserver.OnIdleDisconnected` — bind it once via `BindTransport`, before any session is created. Attach the driver as a `[SerializeField]` on the game controller prefab and wire hooks in `Awake`.
 
 ```csharp
 [SerializeField] private KlothoSessionDriver _sessionDriver;
@@ -250,8 +267,14 @@ Drive the session through `KlothoSessionDriver` — a MonoBehaviour that owns th
 void Awake()
 {
     _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
-    _sessionDriver.Stopping        += OnSessionDriverStopping;
-    _sessionDriver.IdlePoll        += () => _transport?.PollEvents();
+}
+
+void Start()
+{
+    // ... create _transport and _flow ...
+    // Hand the main transport to the driver: it pumps it while idle and raises OnIdleDisconnected
+    // on an idle drop. Bind before the first session so the driver subscribes ahead of NetworkService.
+    _sessionDriver.BindTransport(_transport, this, _flow);
 }
 
 void OnPreSessionUpdate(KlothoSession s, float dt)
@@ -260,24 +283,22 @@ void OnPreSessionUpdate(KlothoSession s, float dt)
     _input.CaptureInput();
 }
 
-void OnSessionDriverStopping(KlothoSession s)
-{
-    // Cleanup that requires Engine to be alive — fires before session.Stop.
-    _viewSync.Cleanup();
-    _entityViewUpdater?.Cleanup();
-}
+// Engine-alive cleanup (view / EVU teardown before Engine.Stop) goes in the observer's
+// OnSessionStopping() — see §3.1 — not on the driver's Stopping event.
 
 // Attach after the session is created (see §X Flow).
 _sessionDriver.Attach(_session);
 ```
 
-The driver guarantees: dt is computed from `DateTimeOffset.UtcNow` (time-scale invariant), `IdlePoll` fires only while `Session == null`, and `Stopping` runs exactly once before `session.Stop()` (re-entry guarded). Hook exception policy: steady-state hooks (`PreSessionUpdate` / `PostSessionUpdate` / `IdlePoll`) propagate naked; `Stopping` is `try { ... } finally { session.Stop(keepReconnectCredentials); }` so teardown is guaranteed even if a subscriber throws.
+The driver guarantees: dt is computed from `DateTimeOffset.UtcNow` (time-scale invariant) and the bound transport is pumped only while `Session == null`. **Transport ownership**: once bound, the driver owns the main transport's session-less lifetime — it pumps it while idle, routes an idle drop to `OnIdleDisconnected(reason)` and a pre-`Playing` session-present drop to a deferred session stop, and disconnects the socket only at process-exit (`OnDestroy`). The socket is retained across `Stop()` for reuse, so the game neither pumps the transport nor subscribes to `transport.OnDisconnected`. Hook exception policy: steady-state hooks (`PreSessionUpdate` / `PostSessionUpdate`) propagate naked. The driver also raises a `Stopping(KlothoSession)` event, but it is a **framework-internal diagnostic signal** (its sole consumer is `FaultInjectionRuntime` under `KLOTHO_FAULT_INJECTION`) — **not a game hook**. It fires once per stop, wrapped in `try { Stopping?.Invoke(s); } finally { /* session detached */ }` so a throwing subscriber can never strand the stopped session; on a game-triggered stop (`DetachAndStop`) it fires before `session.Stop()`, on a framework-internal stop (auto-shutdown / spectator-drop) it fires when the driver self-detaches just after `Engine.Stop`. Game code observes the session lifecycle through the observer (`OnSessionStopping()` / `OnSessionStopped()`), never by subscribing to `Stopping`.
 
-`KlothoSessionDriver` also exposes `IsStopping` as a read-only flag. Game code can short-circuit re-entrant teardown calls with `if (_sessionDriver != null && _sessionDriver.IsStopping) return;` — replaces the per-game `_isStopping` / `_teardownInvoked` duplicate flags that used to guard `StopGame` against the `Driver.DetachAndStop → Session.Stop → OnSessionStopped → game StopGame` re-entry path. Invariant: when `OnSessionStopped` fires, `driver.IsStopping == true` regardless of which entry path (Driver.DetachAndStop vs Session.Stop direct) initiated teardown.
+Session teardown is idempotent at the framework level (`KlothoSession.Stop` `_stopped` guard, `KlothoSessionDriver.DetachAndStop` `_stopping` guard), so game code needs no re-entry guard of its own. A session-stop converges on a single `OnSessionStopped` callback whether the game triggered it (`DetachAndStop`) or the framework did (auto-shutdown grace / spectator-drop) — the driver self-detaches when it observes the session stopped. Put terminal teardown in `OnSessionStopped`; do not re-drive the driver from it.
 
-**Reconnect-credentials policy on teardown**: `KlothoSessionDriver.DetachAndStop(bool keepReconnectCredentials = false)` and `KlothoSession.Stop(bool keepReconnectCredentials = false)` accept an optional flag forwarded to `IKlothoNetworkService.LeaveRoom`. Default `false` discards persisted cold-start credentials (user-intent leave / match-end shutdown / failed bootstrap). Pass `true` from process-exit entry points so persisted credentials survive into the next launch: `KlothoSessionDriver.OnDestroy` already does this internally, and game code should mirror it in its own `OnApplicationQuit` / `OnDestroy` body (e.g. `_sessionDriver?.DetachAndStop(keepReconnectCredentials: true);`). Explicit cancel / reject paths clear credentials directly via `IReconnectCredentialsStore.Clear()` — do not rely on the teardown flag for those.
+**Reconnect-credentials & replay policy on teardown**: `KlothoSessionDriver.DetachAndStop(bool keepReconnectCredentials = false, bool saveReplay = true)` and `KlothoSession.Stop(bool keepReconnectCredentials = false, bool saveReplay = true)` accept optional flags. `keepReconnectCredentials` is forwarded to `IKlothoNetworkService.LeaveRoom` — default `false` discards persisted cold-start credentials (user-intent leave / match-end shutdown / failed bootstrap); pass `true` from process-exit entry points so persisted credentials survive into the next launch (`KlothoSessionDriver.OnDestroy` does this internally; mirror it in game `OnApplicationQuit` / `OnDestroy`). `saveReplay` (default `true`) lets `Stop()` write the replay configured via `KlothoFlowSetupBuilder.WithReplaySave(path, dumpJson)` — KlothoSessionFlow stamps the path onto host / guest sessions, then `Stop()` saves after `Engine.Stop` (skipped in replay-playback mode); pass `false` from process-exit teardown to suppress it. For a dynamic per-match path the post-create escape hatch `KlothoSession.ConfigureReplaySave(path, dumpJson)` overrides the builder default (last-write-wins). Explicit cancel / reject paths clear credentials directly via `IReconnectCredentialsStore.Clear()` — do not rely on the teardown flag for those.
 
-`IKlothoSession` API: `Engine` (returns `IKlothoEngine`), `Simulation`, `LocalPlayerId`, `State`, `Update(float dt)`, `InputCommand(ICommand)`, `Stop(bool keepReconnectCredentials = false)`, `IsStopped`, `PlayerCount`, convenience methods `HostGame(name, maxPlayers)` / `JoinGame(name)` / `LeaveRoom()` / `SendPlayerConfig(PlayerConfigBase)` / `SetReady(bool)`, and state-change events `StateChanged(KlothoState)` / `PhaseChanged(SessionPhase)` / `PlayerCountChanged(int)` / `AllPlayersReadyChanged(bool)` (subscribe on `OnSessionCreated`; unsubscribed automatically on `Stop`). These events replace per-frame state polling — wire each event to the corresponding UI/audio reaction directly. Backed on the service side by `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` and `IKlothoEngine.OnStateChanged`; the session forwards both the network-service and the spectator-service `OnPlayerCountChanged` so the same subscriber works across host / guest / spectator. `PlayerCount` reads through the `NetworkService → SpectatorService → 0` fallback chain — call it from a one-shot poll if you missed the initial event.
+`IKlothoSession` API: `Engine` (returns `IKlothoEngine`), `Simulation`, `LocalPlayerId`, `State`, `PlayerCount`, `Phase`, `AllPlayersReady`, `Update(float dt)`, `InputCommand(ICommand)`, `Stop(bool keepReconnectCredentials = false, bool saveReplay = true)`, `IsStopped`, convenience methods `HostGame(name, maxPlayers)` / `JoinGame(name)` / `LeaveRoom()` / `SendPlayerConfig(PlayerConfigBase)` / `SetReady(bool)`. The four read properties `State` / `PlayerCount` / `Phase` / `AllPlayersReady` are mode-agnostic facade reads — the framework supplies null-safe defaults across the create/teardown window (`Phase → SessionPhase.None`, `AllPlayersReady → false`, `PlayerCount` through the `NetworkService → SpectatorService → 0` fallback chain), so the game never reaches into `NetworkService` for state. Call them from a one-shot poll if you missed the initial event.
+
+State observation is exclusively through `IKlothoSessionObserver` (§3.1: `OnStateChanged` / `OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged`) — backed by `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` and `KlothoEngine.OnStateChanged`, with network-service + spectator-service `OnPlayerCountChanged` forwarded so one observer works across host / guest / spectator. These four callbacks line up 1:1 with the four `IKlothoSession` read properties above — subscribe for transitions, read the property for the current value.
 
 Logger channel: prefer `engine.Logger` / `frame.Logger` for runtime logging. `KlothoLogger.CreateDefault` is an escape hatch — use it only when a separate category or rolling-file destination is needed.
 
@@ -285,36 +306,48 @@ Logger channel: prefer `engine.Logger` / `frame.Logger` for runtime logging. `Kl
 
 For most games the preferred construction path is `KlothoSessionFlow` (it wraps `KlothoSession.Create` and bundles common defaults). `KlothoFlowSetup` carries the long-lived dependencies; the entry methods take only the per-call parameters:
 
+**Assembling the setup.** The recommended way to build `KlothoFlowSetup` is `KlothoFlowSetupBuilder` — it makes `CallbacksFactory` a constructor argument (compile-time required), groups the optional dependencies into cohesive feature methods, and validates feature coherence at `Build()`:
+
+```csharp
+var setup = new KlothoFlowSetupBuilder(callbacksFactory)   // required dependency = ctor arg
+    .WithLogger(logger)
+    .WithTransport(transport)            // host / replay default transport
+    .WithAssetRegistry(assetRegistry)
+    .WithLifecycleObserver(this)         // IKlothoSessionObserver
+    .WithUnityDefaults()                 // AppVersion + UnityDeviceIdProvider (Runtime.Unity layer)
+    .WithReconnect(credentialsStore)     // optional — requires WithHandshake / WithUnityDefaults
+    .WithAutoPlayerConfig(() => new MyPlayerConfig { /* ... */ })  // optional
+    .WithSpectator(() => new LiteNetLibTransport(/* ... */))       // optional — no-transport SpectateAsync
+    .WithReplaySave(replayPath, dumpJson: true)                   // optional — framework saves on Stop (host/guest)
+    .Build();                            // Build(strict: true) promotes advisory warnings to throws
+var flow = new KlothoSessionFlow(setup);
+```
+
+`Build()` throws `FlowSetupValidationException` when `WithReconnect` is set without handshake identity (`WithHandshake` / `WithUnityDefaults`) — reconnect credentials are minted by a prior normal join, which needs that identity. Constructing `KlothoFlowSetup` directly via object initializer remains supported as a low-level escape hatch (custom validation bypass / tests).
+
 | Mode | Entry | Notes |
 |---|---|---|
 | P2P host | `flow.StartHostAndListen(simCfg, sessionCfg, roomName, address, port)` | synchronous — folds StartHost + HostGame + Transport.Listen with auto-teardown on failure. Returns the running session, or `null` on listen-bind failure (session already torn down); rethrows on other failures after teardown |
 | P2P host (low-level) | `flow.StartHost(simCfg, sessionCfg)` | synchronous — escape hatch for custom ordering / multi-transport / tests. Caller drives `HostGame` + `Transport.Listen` and rollback manually |
-| P2P guest | `flow.JoinP2PAsync(transport, host, port, sessionCfg, ct)` | guest receives `sessionCfg` from `GameStartMessage` — the passed value is a seed |
-| ServerDriven client | `flow.JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)` | extra `roomId` parameter (P2P does not use it) |
+| Guest (any mode) | `flow.JoinAsync(strategy, transport, host, port, roomId, sessionCfg, ct, connectTimeoutMs?)` | unified entry — the `strategy` (from `KlothoModeStrategy.Resolve(simCfg)`) supplies the pre-join handshake and roomId normalization, so multi-mode games join without branching on the mode. P2P ignores `roomId`. Recommended for games that support more than one mode |
+| P2P guest (convenience) | `flow.JoinP2PAsync(transport, host, port, sessionCfg, ct, connectTimeoutMs?)` | fixed-mode overload of `JoinAsync` — no `roomId`. guest receives `sessionCfg` from `GameStartMessage` (the passed value is a seed). `connectTimeoutMs` optional (default 15s, positive only); failure throws `JoinFailedException` (branch on `e.Reason`) |
+| ServerDriven client (convenience) | `flow.JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct, connectTimeoutMs?)` | fixed-mode overload of `JoinAsync` — extra `roomId` parameter (P2P does not use it) |
 | Reconnect | `flow.ReconnectAsync(transport, creds, sessionConfigSeed, ct)` | `creds` is `PersistedReconnectCredentials` — carries `RoomId`, host address, magic. Mode is recovered from the credentials |
 | Spectator | `flow.SpectateAsync(host, port, roomId, ct)` | no-transport overload — library calls `KlothoFlowSetup.SpectatorTransportFactory` |
 | Replay | `flow.StartReplayFromFile(path)` | throws `xpTURN.Klotho.Replay.ReplayLoadException` on load failure |
 
-Branch by mode using `KlothoModeStrategy.Resolve(simCfg)` rather than reading `simCfg.Mode` directly. The flow also dispatches per-mode session-created callbacks alongside the generic `OnSessionCreated`:
+Branch by mode using `KlothoModeStrategy.Resolve(simCfg)` rather than reading `simCfg.Mode` directly. For the effective local role, call `strategy.ResolveRole(isHostPreference)` once and branch on the returned `KlothoRole` (`P2PHost` / `P2PGuest` / `SdClient`) — it folds the mode-vs-host-preference combination into a single value (ServerDriven ignores the preference), with `role.IsLocalHost()` / `role.IsReconnectEligible()` helpers.
 
-```csharp
-_flow.OnSessionCreated         += s => _sessionDriver.Attach(s);    // mode-agnostic
-_flow.OnHostSessionCreated     += OnHostOrGuestSessionCreated;       // host only
-_flow.OnGuestSessionCreated    += OnHostOrGuestSessionCreated;       // guest / reconnect
-_flow.OnReplaySessionCreated   += OnReplayOrSpectatorSessionCreated; // replay only
-_flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated; // spectator only
-```
+For session-created handling, implement the single role-bearing observer callback `IKlothoSessionObserver.OnSessionCreated(session, SessionEntryKind kind)` (§3.1) and branch on `kind` — one method covers all modes (Host / Guest / Replay / Spectator). (The former per-mode `KlothoSessionFlow.On*SessionCreated` events have been removed.)
 
-`KlothoFlowSetup` also accepts two optional factories that absorb common boilerplate:
+`KlothoFlowSetup` also carries two optional factories that absorb common boilerplate (set them via the builder's `WithAutoPlayerConfig` / `WithSpectator`):
 
-- `InitialPlayerConfigFactory : Func<PlayerConfigBase>` — invoked automatically on guest / reconnect paths after the session is created; the framework calls `session.SendPlayerConfig(factory())`. Spectator / replay paths skip the call. The factory is invoked per-session so it always observes the latest user selection.
-- `SpectatorTransportFactory : Func<INetworkTransport>` — invoked from `SpectateAsync(host, port, roomId, ct)` so the library owns the transport instance. The escape-hatch overload `SpectateAsync(transport, host, port, roomId, ct)` is retained for custom transports.
-
-`KlothoSessionFlowAsync.JoinAsync(transport, host, port, preJoin, roomId, sessionCfg, ct)` is retained as an `[Obsolete]` forwarding shim — migrate new call sites to `JoinP2PAsync` / `JoinServerDrivenAsync`. Scheduled removal: 0.3.0.
+- `InitialPlayerConfigFactory : Func<PlayerConfigBase>` (`WithAutoPlayerConfig`) — invoked automatically on guest / reconnect paths after the session is created; the framework calls `session.SendPlayerConfig(factory())`. Spectator / replay paths skip the call. The factory is invoked per-session so it always observes the latest user selection.
+- `SpectatorTransportFactory : Func<INetworkTransport>` (`WithSpectator`) — invoked from `SpectateAsync(host, port, roomId, ct)` so the library owns the transport instance. The escape-hatch overload `SpectateAsync(transport, host, port, roomId, ct)` is retained for custom transports.
 
 ### 3.3 INetworkServiceReceiver — opt-in NetworkService handle
 
-`ISimulationCallbacks` implementations that need the `IKlothoNetworkService` handle on host/guest entry declare it via the `INetworkServiceReceiver` marker. `KlothoSessionFlow` dispatches `SetNetworkService` automatically right after `OnSessionCreated` — gated to Host/Guest kinds, non-null callbacks, and the `is INetworkServiceReceiver recv` pattern. Implementations that don't need the handle simply omit the interface and avoid empty-body methods.
+`ISimulationCallbacks` implementations that need the `IKlothoNetworkService` handle on host/guest entry declare it via the `INetworkServiceReceiver` marker. `KlothoSessionFlow` dispatches `SetNetworkService` automatically just before invoking the observer's `OnSessionCreated` callback — gated to Host/Guest kinds, non-null callbacks, and the `is INetworkServiceReceiver recv` pattern — so a receiver already holds the handle when `OnSessionCreated` runs. Implementations that don't need the handle simply omit the interface and avoid empty-body methods.
 
 ```csharp
 public class MySimulationCallbacks : ISimulationCallbacks, INetworkServiceReceiver
@@ -592,7 +625,8 @@ sim.AddSystem(events,                   SystemPhase.LateUpdate);
 ```csharp
 private void OnTickExecuted(int tick)
 {
-    var frame = _simulation.Frame;
+    var frame = _engine.PredictedFrame.Frame;    // FrameRef.Frame (typed, no cast)
+    if (frame == null) return;                   // out of ring-buffer range / uninitialized → skip one frame
 
     var filter = frame.Filter<TransformComponent>();
     while (filter.Next(out var entity))
@@ -602,6 +636,8 @@ private void OnTickExecuted(int tick)
     }
 }
 ```
+
+> A game's View should read frames via `engine.PredictedFrame.Frame` (`FrameRef.Frame`) — it accesses the frame type-safely without the `(EcsSimulation)engine.Simulation` downcast, and returns `null` outside the ring-buffer range, so the call site just adds a null guard. On engine-internal paths that hold the `Simulation` instance directly, `_simulation.Frame` is equivalent.
 
 ### Filter Coverage
 
@@ -750,20 +786,20 @@ The returned object is a regular `KlothoSession`: drive it through `KlothoSessio
 Notes:
 - `SpectatorSessionSetup` has no `CredentialsStore`, no `SessionConfig`, and no `MaxPlayers` field. Those values either do not apply to spectators or arrive over the wire.
 - The engine's error-correction path (`CapturePreRollback` / `ComputeErrorDeltas` / Predict-under-Predicted) is active in spectator mode so smoothing applies to spectator views as it does to regular clients.
-- **Spectator player list surface**: `ISpectatorService.PlayerCount` and `event OnPlayerCountChanged` mirror the network-service equivalents. The host (P2P) / server (SD) extends its `LateJoinNotificationMessage` (NetworkMessageType=75) broadcast to the `_spectators` set so spectators see existing players appear / late-joiners arrive without polling. Subscribe via `KlothoSession.PlayerCountChanged` — the session forwards both network-service and spectator-service `OnPlayerCountChanged` so the same subscriber works across all modes.
+- **Spectator player list surface**: `ISpectatorService.PlayerCount` and `event OnPlayerCountChanged` mirror the network-service equivalents. The host (P2P) / server (SD) extends its `LateJoinNotificationMessage` (NetworkMessageType=75) broadcast to the `_spectators` set so spectators see existing players appear / late-joiners arrive without polling. Subscribe via `IKlothoSessionObserver.OnPlayerCountChanged` — the session forwards both network-service and spectator-service `OnPlayerCountChanged` so the same subscriber works across all modes.
 
 ---
 
 ## 10. Dynamic InputDelay (client-reactive policy)
 
-Non-host sessions automatically attach a `DynamicInputDelayPolicy` (in `Packages/com.xpturn.klotho/Runtime/Core/Engine/`) that escalates `engine.RecommendedExtraDelay` when the server-driven push control falls behind:
+Non-host sessions automatically attach a `DynamicInputDelayPolicy` (in `com.xpturn.klotho/Runtime/Core/Engine/`) that escalates `engine.RecommendedExtraDelay` when the server-driven push control falls behind:
 
-- **Trigger A — PastTick reject sliding window**: non-spawn `CommandRejected(PastTick)` events accumulate within a tick-based window (`SessionConfig.ReactiveWindowTicks`); when the count crosses `ReactiveEscalateThreshold`, the policy calls `engine.EscalateExtraDelay(ReactiveStep, ReactiveMax)`.
-- **Trigger B — rollback burst**: rollback events accumulate within `SessionConfig.RollbackWindowTicks`; reaching `RollbackBurstCount` triggers the same escalation. Primary fallback for P2P guests (no `CommandRejectedMessage`).
+- **Trigger A — PastTick reject sliding window**: non-spawn `CommandRejected(PastTick)` events accumulate within a tick-based window (`SimulationConfig.ReactiveWindowTicks`); when the count crosses `ReactiveEscalateThreshold`, the policy calls `engine.EscalateExtraDelay(ReactiveStep, ReactiveMax)`.
+- **Trigger B — rollback burst**: rollback events accumulate within `SimulationConfig.RollbackWindowTicks`; reaching `RollbackBurstCount` triggers the same escalation. Primary fallback for P2P guests (no `CommandRejectedMessage`).
 - **Grace gate**: both triggers ignore events within `ServerPushGraceTicks` of the last server `RecommendedExtraDelayUpdate` push (refreshed via `OnExtraDelayChanged`). Prevents double-counting against the authoritative path.
 - **Cooldown**: rollback-triggered escalations require `ReactiveEscalateCooldownTicks` between firings.
 
-Thresholds live in `SessionConfig` and are server-authoritative. Games typically do not subscribe to `OnCommandRejected` or `OnRollbackExecuted` for delay control — only for game-specific responses (e.g. spawn-cmd retry shaping).
+Thresholds live in `SimulationConfig` and are server-authoritative. Games typically do not subscribe to `OnCommandRejected` or `OnRollbackExecuted` for delay control — only for game-specific responses (e.g. spawn-cmd retry shaping).
 
 ---
 
@@ -774,7 +810,7 @@ Klotho exposes three positional-int attributes that look syntactically similar b
 | Attribute | Plane | Range / convention |
 |---|---|---|
 | `[KlothoComponent(ComponentTypeId)]` | ECS Frame Heap component discriminator | `0..UserMinId-1` reserved for runtime; user range >= `KlothoComponentAttribute.UserMinId` (100). |
-| `[KlothoSerializable(TypeId)]` | Entity / Command / Message wire discriminator (per category) | Distinct sub-planes per base class — `EntityBase` / `CommandBase` / `NetworkMessageBase` do not share IDs. |
+| `[KlothoSerializable(TypeId)]` | Command / Event / Message wire discriminator (per category) | Distinct sub-planes per base class — `CommandBase` / `SimulationEvent` / `NetworkMessageBase` do not share IDs. (Entity prototypes are a separate plane — `IEntityPrototype` registered by id via `EntityPrototypeRegistry`, not `[KlothoSerializable]`.) |
 | `[KlothoDataAsset(TypeId, AssetId = ..., Key = ...)]` | DataAsset wire discriminator (`TypeId`) + runtime instance id (`AssetId`) + optional `Key` | `TypeId` is wire-stable. `AssetId` (named) is the runtime instance id used by `IDataAssetRegistry.Get<T>()`. `Key` (named) is an optional string handle for `GetByKey<T>(string)`. Generator auto-emits `AssetId` property + `ctor(int)` + (when `AssetId` is set) parameterless `ctor() : this(AssetIdFromAttribute)`. |
 
 These planes do not collide. `[KlothoComponent(100)]` and `[KlothoDataAsset(100)]` can coexist on different types without conflict.
@@ -804,4 +840,75 @@ are auto-handled by the generator. There is no need to manually override `Messag
 
 ---
 
-*Last updated: 2026-05-25*
+## 12. Dedicated Server Setup (RoomManager / RoomManagerConfigBuilder)
+
+§3 covers client / P2P-host construction (`KlothoSession` / `KlothoSessionFlow`). A **dedicated multi-room server** uses a different entry point: `RoomManager` owns one or more rooms, and each room internally wires its own `EcsSimulation` / `ServerNetworkService` / `KlothoEngine` from a shared `RoomManagerConfig`. The game supplies that config; `ServerLoop` drives the tick loop.
+
+```
+ServerLoop  ──drives──▶  RoomManager  ──per room──▶  EcsSimulation + ServerNetworkService + KlothoEngine
+                              ▲
+                              │ RoomManagerConfig (per-room factories + limits)
+```
+
+`RoomManagerConfig` is a plain data object with four per-room inputs plus the room limits:
+
+| Field | Role | Game-unique? |
+|---|---|---|
+| `CallbacksFactory : Func<IKLogger, ISimulationCallbacks>` | Builds each room's `ISimulationCallbacks` (RegisterSystems + game logic, see §3) from the room logger | **◯ — only the game can supply it** |
+| `SimulationConfigFactory : Func<SimulationConfig>` | Supplies each room's `SimulationConfig` | — |
+| `SessionConfigFactory : Func<SessionConfig>` | Supplies each room's `SessionConfig` | — |
+| `AssetRegistry` + `SimulationMaxRollbackTicks` | Inputs the room manager derives each room's `EcsSimulation` from (`maxEntities` / `deltaTimeMs` are read from the simulation config) | — |
+| `MaxRooms` / `MaxPlayersPerRoom` / `MaxSpectatorsPerRoom` | Room limits (defaults `4` / `4` / `0`) | — |
+
+### Recommended path — `RoomManagerConfigBuilder`
+
+The preferred way to assemble `RoomManagerConfig` is `RoomManagerConfigBuilder`. It mirrors the client-side `KlothoFlowSetupBuilder` (§3.2): the one game-unique dependency (`CallbacksFactory`) is a **constructor argument** (compile-time required), the rest are fluent `.With*()` methods, and `Build()` validates that every required input is present — turning a missing factory into a clear `RoomManagerConfigValidationException` at startup instead of a `NullReferenceException` at first room creation.
+
+```csharp
+// SdSample dedicated server — single concurrent match (maxRooms = 1)
+var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new SdServerCallbacks(roomLogger, maxPlayers))
+    .WithRoomLimits(maxRooms, maxPlayers, maxSpectatorsPerRoom: 0)
+    .WithSimulationConfig(simConfig)            // shared across rooms (value overload)
+    .WithSessionConfig(sessionConfig)           // shared across rooms (value overload)
+    .WithDerivedSimulation(sharedRegistry)      // derive each room's EcsSimulation from the sim config + registry
+    .Build();                                   // Build(strict: true) promotes the non-positive-limits warning to a throw
+
+var roomManager = new RoomManager(transport, router, loggerFactory, roomManagerConfig);
+var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
+loop.Run();
+```
+
+### Shared vs fresh-per-room config
+
+`WithSimulationConfig` / `WithSessionConfig` each have **two overloads** that make the per-room lifetime explicit:
+
+```csharp
+.WithSimulationConfig(simConfig)                              // value → one instance shared by every room
+.WithSimulationConfig(() => new SimulationConfig { /* ... */ })  // factory → a fresh instance per room
+```
+
+- **Value overload (shared)** — a single instance is reused across all rooms. Correct when the config is read-only per room (the standard dedicated-server case).
+- **Factory overload (fresh)** — a new instance is built for each room. Use this when rooms may mutate their config, or in `MaxRooms > 1` tests that must verify per-room isolation. The shared overload would otherwise let all rooms alias one instance and hide cross-room state bugs.
+
+### `WithDerivedSimulation` vs explicit `maxEntities`
+
+`WithDerivedSimulation(registry, maxRollbackTicks = 1)` derives each room's `EcsSimulation` from the simulation config: `maxEntities` ← `SimulationConfig.MaxEntities`, `deltaTimeMs` ← `SimulationConfig.TickIntervalMs`, plus the shared asset registry and the room logger. `maxRollbackTicks` defaults to `1` — the server-driven "no rollback" convention (distinct from `SimulationConfig.MaxRollbackTicks`, the netcode rollback depth). This collapses the repeated `new EcsSimulation(...)` boilerplate to one call. It reads the simulation config at room-create time, so it honors the fresh/shared choice above and **requires `WithSimulationConfig(...)`** (checked at `Build()`).
+
+### `Build()` validation
+
+| Check | Severity |
+|---|---|
+| `SimulationConfigFactory` not set (`WithSimulationConfig`) | Hard — always throws |
+| `SessionConfigFactory` not set (`WithSessionConfig`) | Hard — always throws |
+| `AssetRegistry` not set (`WithDerivedSimulation`) | Hard — always throws |
+| `MaxRooms <= 0` or `MaxPlayersPerRoom <= 0` | Advisory — throws only under `Build(strict: true)` |
+
+`CallbacksFactory` cannot be null (constructor-enforced). `WithRoomLimits` is optional — omitting it applies the `RoomManagerConfig` defaults (`MaxRooms = 4`, `MaxPlayersPerRoom = 4`, `MaxSpectatorsPerRoom = 0`).
+
+### Escape hatch
+
+Constructing `RoomManagerConfig` directly via object initializer (and passing it to `new RoomManager(...)`) remains supported for low-level setup / tests that bypass builder validation — the same escape-hatch philosophy as `KlothoFlowSetup` (§3.2). The builder path is recommended because it surfaces missing factories at `Build()` rather than as a `NullReferenceException` on first room creation.
+
+---
+
+*Last updated: 2026-06-01*

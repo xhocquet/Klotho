@@ -2,27 +2,27 @@
 
 Minimum P2P sample consuming the `com.xpturn.klotho` UPM package. Two cubes on a 10×10 platform — push each other off, fall-off costs 1 point, 60s match.
 
-> Target: `com.xpturn.klotho v0.2.7` · Unity 6.3 · URP
+> Target: `com.xpturn.klotho v0.2.8` · Unity 6.3 · URP
 
 ---
 
 ## 1. Requirements
 
 - Unity **6.3+**
-- The package fetches three Git dependencies via UPM (no manual install required) — see [`Packages/manifest.json`](Packages/manifest.json):
+- This sample consumes the in-repo top-level `com.xpturn.klotho` package via a `file:` reference; its other Git dependencies are fetched via UPM (no manual install required) — see [`Packages/manifest.json`](Packages/manifest.json):
 
   ```jsonc
   {
     "dependencies": {
       "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
       "com.xpturn.polyfill": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",
-      "com.xpturn.klotho":   "https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho#v0.2.7",
+      "com.xpturn.klotho":   "file:../../../com.xpturn.klotho",
       ...
     }
   }
   ```
 
-  To pin a different version, change the `#v0.2.7` tag suffix on `com.xpturn.klotho`.
+  The `file:` reference points at the top-level `com.xpturn.klotho/` package in this repo, so the sample always tracks the in-repo package — there is no version tag to pin. External consumers can instead use the UPM git URL `https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho#vX.Y.Z`, where version pinning applies via the `#vX.Y.Z` tag suffix.
 
 ---
 
@@ -81,7 +81,7 @@ Sample-side game code is ~795 LOC (15 files). All visuals use Unity built-in pri
 
 ## 6. Out of Scope
 
-This sample intentionally omits: ServerDriven mode, Dedicated Server, NavMesh / Pathfinding, HFSM bots, replay recording / playback, LateJoin, Reconnect, Spectator, and FaultInjection. See the **Brawler** sample (`<klotho repo>/Klotho/Assets/Brawler/`) for those features.
+This sample intentionally omits: ServerDriven mode, Dedicated Server, NavMesh / Pathfinding, HFSM bots, replay recording / playback, LateJoin, Reconnect, Spectator, and FaultInjection. See the **Brawler** sample (`<klotho repo>/Samples/Brawler/`) for those features.
 
 ---
 

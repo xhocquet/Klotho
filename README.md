@@ -110,10 +110,10 @@ Details: [Docs/BaseLibraries.md](Docs/BaseLibraries.md)
 ```text
 https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
 https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
-https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho
+https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho
 ```
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=Klotho/Packages/com.xpturn.klotho`).
+Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho`).
 
 Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
 
@@ -142,24 +142,24 @@ Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this r
 
 Klotho ships as Unity package source (not a binary NuGet), so a dedicated server builds the engine-agnostic assemblies from your vendored copy of the package. `Server~/` holds per-assembly server projects that mirror the client asmdef structure; your server csproj `<ProjectReference>`s them. Two install patterns:
 
-**A. git submodule (recommended)** — vendor this repo into your game project as a submodule under `<yourGame>/Packages/com.xpturn.klotho`, then reference the `Server~` projects at the correct relative depth:
+**A. git submodule (recommended)** — vendor this repo into your game project as a submodule (e.g. under `<yourGame>/External/Klotho`); the UPM package is its top-level `com.xpturn.klotho/` subfolder. Reference it from Unity via a `file:` entry in `Packages/manifest.json` (`"com.xpturn.klotho": "file:../External/Klotho/com.xpturn.klotho"`), and reference the `Server~` projects from your server csproj at the correct relative depth:
 
 ```xml
-<!-- Server csproj at <yourGame>/Tools/MyDedicatedServer/MyDedicatedServer.csproj (nested 2 levels) -->
+<!-- Server csproj at <yourGame>/Server/MyDedicatedServer.csproj; submodule at <yourGame>/External/Klotho -->
 <ItemGroup>
-  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
-  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
-  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
-  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
-  <ProjectReference Include="..\..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
 </ItemGroup>
 <!-- Source generator for your game's [KlothoSerializable]/[KlothoComponent] types compiled into the exe -->
 <ItemGroup>
-  <Analyzer Include="..\..\Packages\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  <Analyzer Include="..\External\Klotho\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
 </ItemGroup>
 ```
 
-Adjust the `..\` depth to match where your csproj sits. At startup call `KlothoServerBootstrap.Initialize("YourGamePrefix")` — it force-loads the split assemblies and runs warmups so the cross-assembly `[ModuleInitializer]` registrations (commands / messages / components) complete before the first room is built.
+Adjust the `..\` depth and submodule path to match where your csproj and submodule sit (the bundled `Samples/SdSample` references the in-repo package the same way — `..\..\..\com.xpturn.klotho\Server~\…`). At startup call `KlothoServerBootstrap.Initialize("YourGamePrefix")` — it force-loads the split assemblies and runs warmups so the cross-assembly `[ModuleInitializer]` registrations (commands / messages / components) complete before the first room is built.
 
 **B. UPM `Library/PackageCache` + `<KlothoServerRoot>`** — if you don't want a submodule, point a property at your resolved PackageCache `Server~` path. The `@<hash>` suffix changes on every pull, so this needs occasional refresh:
 
@@ -180,11 +180,12 @@ Full guide (with `Program.cs`, callbacks, config files, single-room/multi-room/t
 
 ## Repository Layout
 
-Klotho ships as an embedded Unity Package (`com.xpturn.klotho`) located at `Klotho/Packages/com.xpturn.klotho/`. The dev project under `Klotho/` is the source-of-truth host; consumers install via UPM (see [Installation](#installation)).
+Klotho ships as a Unity Package (`com.xpturn.klotho`) promoted to the repository top level at `com.xpturn.klotho/`. Consumers install via UPM (see [Installation](#installation)); the in-repo samples consume it through a `file:` manifest reference to the same top-level package.
 
 ```
-Klotho/                                        ← Unity dev project (this repo)
-├── Packages/com.xpturn.klotho/                ← ★ framework package (UPM)
+<repo root>/
+├── README.md  ·  CHANGELOG.md  ·  LICENSE
+├── com.xpturn.klotho/                         ← ★ framework package (UPM)
 │   ├── package.json
 │   ├── Runtime/
 │   │   ├── Core/              KlothoEngine · KlothoSession · ISimulationCallbacks · IViewCallbacks
@@ -194,7 +195,7 @@ Klotho/                                        ← Unity dev project (this repo)
 │   │   ├── Diagnostics/       FaultInjection · RttSpikeMetricsCollector
 │   │   ├── Input/             InputBuffer · SimpleInputPredictor
 │   │   ├── Network/           IKlothoNetworkService · ServerDriven · ServerNetwork · Spectator
-│   │   │                      · Reconnect/LateJoin · Messages
+│   │   │                      · Reconnect/LateJoin · Messages · ServerLoop
 │   │   ├── State/             RingSnapshotManager
 │   │   ├── Serialization/     SpanWriter/Reader · SerializationBuffer
 │   │   ├── Replay/            IReplaySystem · ReplayRecorder · ReplayPlayer · LZ4 compression
@@ -210,18 +211,18 @@ Klotho/                                        ← Unity dev project (this repo)
 │   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample")
 │   └── Server~/               dedicated-server build assets (per-assembly csproj mirroring client asmdefs + KlothoServerBootstrap + Config helpers)
 │
-├── Assets/                                    ← dev-only (not redistributed via UPM)
-│   ├── Brawler/               4-player fighting-game sample
-│   ├── NavMesh/               navmesh sample
-│   ├── Tests/                 unit / integration / determinism-verification tests
-│   ├── Benchmarks/            performance benchmarks
-│   └── Scenes/  Settings/  StreamingAssets/  ...
+├── Samples/                                   ← standalone Unity/​.NET sample projects (each consumes the package via `file:`)
+│   ├── Brawler/               4-player fighting-game sample (+ dedicated server, NavMesh, tests)
+│   ├── P2pSample/             minimal P2P sample (Unity)
+│   ├── SdSample/              minimal ServerDriven sample (Unity client + .NET 8 dedicated server)
+│   └── LoggingMelConsole/     .NET console sample routing IKLogger through Microsoft.Extensions.Logging
 │
+├── Docs/                                      ← documentation (this folder)
 └── Tools/                                     ← .NET tooling (not redistributed)
     ├── KlothoGenerator/       Roslyn source generator (`IIncrementalGenerator`) — built by gen.build.sh
-    ├── BrawlerDedicatedServer/  Brawler dedicated server (.NET console)
+    ├── KlothoGenerator.Tests/ generator unit tests
     ├── DeterminismVerification/ determinism verification (.NET console)
-    ├── Generated/             reference copies of generated `.g.cs` (not included in Unity builds)
+    ├── PhysicsDeterminismProbe/ cross-platform FP determinism probe
     └── gen.build.sh           generator build script
 ```
 
@@ -295,7 +296,6 @@ void Awake()
 {
     // Driver owns the Update / Stop lifecycle — no manual dt computation needed.
     _sessionDriver.PreSessionUpdate += (s, dt) => _input.CaptureInput();
-    _sessionDriver.IdlePoll        += () => transport.PollEvents();
 }
 
 void Start()
@@ -309,7 +309,10 @@ void Start()
         CallbacksFactory  = (simCfg, sessionCfg) =>
             new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),
     });
-    _flow.OnSessionCreated += s => _sessionDriver.Attach(s);
+    // Driver owns the main transport: it pumps it while idle and routes idle disconnects to
+    // IKlothoSessionObserver.OnIdleDisconnected. Bind once, before any session is created.
+    _sessionDriver.BindTransport(transport, this, _flow);
+    // Attach the created session to the driver from IKlothoSessionObserver.OnSessionCreated(session, kind).
 
     // Single-call host bootstrap: StartHost + HostGame + Transport.Listen, with
     // framework-side teardown if any step fails. MaxPlayers is read from uSessionConfig.
@@ -328,7 +331,7 @@ void Start()
 - `SpectateAsync(host, port, roomId, ct)` — spectator entry (transport is instantiated by `KlothoFlowSetup.SpectatorTransportFactory`).
 - `StartReplayFromFile(path)` — file-to-session replay (throws `ReplayLoadException` on load failure).
 
-If your game-side code needs to branch on the active mode, use `KlothoModeStrategy.Resolve(simCfg)` rather than inspecting `simCfg.Mode` directly. Per-mode session-created callbacks are also available (`OnHostSessionCreated` / `OnGuestSessionCreated` / `OnReplaySessionCreated` / `OnSpectatorSessionCreated`) alongside the generic `OnSessionCreated`. Stop teardown runs through the driver's `Stopping` hook; game code can read `KlothoSessionDriver.IsStopping` to short-circuit re-entrant teardown calls.
+If your game-side code needs to branch on the active mode, use `KlothoModeStrategy.Resolve(simCfg)` rather than inspecting `simCfg.Mode` directly. Session creation is observed through the single `IKlothoSessionObserver.OnSessionCreated(session, SessionEntryKind kind)` callback — branch on `kind` (`Host` / `Guest` / `Replay` / `Spectator`) instead of per-mode events. Stop teardown runs through the driver's `Stopping` hook.
 
 Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameDevAPI.md](Docs/GameDevAPI.md)
 
@@ -336,7 +339,7 @@ Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameD
 
 ## Sample
 
-[Klotho/Assets/Brawler](Klotho/Assets/Brawler) — a 4-player fighting-game sample (in the dev project of this repo)
+[Samples/Brawler](Samples/Brawler) — a 4-player fighting-game sample
 
 - ECS-based combat / movement / skills / cooldowns / knockback / items / traps
 - HFSM-based bot AI (`BotHFSMRoot` / `BotActions` / `BotDecisions`)

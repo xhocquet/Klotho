@@ -9,20 +9,20 @@
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
 
-  <!-- Klotho server framework assemblies (mirror the client asmdef structure).
+  <!-- Tier 1+2+3: server framework assemblies (mirrors the client asmdef structure).
        KlothoServer aggregates the helpers + transitively pulls in the rest at runtime;
        the engine-agnostic assemblies are referenced explicitly for compile-time visibility. -->
   <ItemGroup>
-    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
-    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
-    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
-    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
-    <ProjectReference Include="..\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
   </ItemGroup>
 
-  <!-- Source generator for the SdSample game-specific types compiled into this exe. -->
+  <!-- Source generator for the Tier 4 game-specific types compiled into this exe. -->
   <ItemGroup>
-    <Analyzer Include="..\Packages\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+    <Analyzer Include="..\..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -1,9 +1,9 @@
 # Brawler Appendix H — BrawlerDedicatedServer (Headless Dedicated Server)
 
 > Related: [Brawler.md](Brawler.md) §2, §11 (Klotho feature map · callbacks) · [Docs/Specification.md](../Specification.md) §9 (ServerDriven mode)
-> Target: `Tools/BrawlerDedicatedServer/` — a Brawler-specific server that runs as a .NET 8 console app with no Unity dependency
+> Target: `Samples/Brawler/Server/` — a Brawler-specific server that runs as a .NET 8 console app with no Unity dependency
 
-> ⚠️ This document describes the `Tools/BrawlerDedicatedServer/` implementation as it exists in the repository. Some code-block examples have been tidied (comments / whitespace) for readability — the actual source's line layout and log strings may not match exactly.
+> ⚠️ This document describes the `Samples/Brawler/Server/` implementation as it exists in the repository. Some code-block examples have been tidied (comments / whitespace) for readability — the actual source's line layout and log strings may not match exactly.
 
 ---
 
@@ -19,25 +19,25 @@ The headless server is **optional**. If your sample only uses P2P or host mode, 
 
 ### Using this document as a reference template
 
-This appendix describes `Tools/BrawlerDedicatedServer/` as it exists in this repo — concrete code, paths, and CLI for the Brawler sample. **If you are building your own game's dedicated server, copy this folder as a starting point** and adapt the Brawler-specific parts:
+This appendix describes `Samples/Brawler/Server/` as it exists in this repo — concrete code, paths, and CLI for the Brawler sample. **If you are building your own game's dedicated server, copy this folder as a starting point** and adapt the Brawler-specific parts:
 
 | What's Brawler-specific | Replace with |
 | ---- | ---- |
-| `Tools/BrawlerDedicatedServer/` folder location | Your game's server folder (e.g. `<yourGame>/Tools/MyDedicatedServer/` or anywhere with a `.csproj`) |
+| `Samples/Brawler/Server/` folder location | Your game's server folder (e.g. `<yourGame>/Tools/MyDedicatedServer/` or anywhere with a `.csproj`) |
 | `BrawlerServerCallbacks.cs` (extends `ISimulationCallbacks`) | Your `MyGameServerCallbacks.cs` — wire your game's systems via `RegisterSystems` |
 | Tier 4 `Compile Include` in csproj — `Assets/Brawler/Scripts/{DataAssets,ECS}/**` | Your game's deterministic code path (e.g. `Assets/MyGame/Scripts/{DataAssets,ECS}/**`) |
 | Tier 4 `Content Include` — `Assets/Brawler/Data/*.bytes` | Your game's exported `.bytes` (static colliders / navmesh / data assets) |
 | `simulationconfig.json` / `sessionconfig.json` values | Tuned for your game's tick rate, latency budget, max players, etc. |
 | `Program.cs` CLI flags (`--multi`, `--test`, etc.) | Your operational requirements |
 
-Tiers 1–3 (Runtime, LiteNetLib, Transport, Logging, Server utils, Gameplay) are the **engine-agnostic Klotho assemblies under [`Packages/com.xpturn.klotho/Server~/`](../../Klotho/Packages/com.xpturn.klotho/Server~/)** (mirroring the client asmdef structure) — your csproj `<ProjectReference>`s them and adds the `KlothoGenerator` analyzer for its own game types. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct reference depth for your csproj location.
+Tiers 1–3 (Runtime, LiteNetLib, Transport, Logging, Server utils, Gameplay) are the **engine-agnostic Klotho assemblies under [`com.xpturn.klotho/Server~/`](../../com.xpturn.klotho/Server~/)** (mirroring the client asmdef structure) — your csproj `<ProjectReference>`s them and adds the `KlothoGenerator` analyzer for its own game types. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct reference depth for your csproj location.
 
 ---
 
 ## H-2. File Layout
 
 ```
-Tools/BrawlerDedicatedServer/
+Samples/Brawler/Server/
 ├── BrawlerDedicatedServer.csproj   — net8.0 Exe; ProjectReferences the Server~ Klotho assemblies + includes Brawler game sources
 ├── BrawlerDedicatedServer.sln
 ├── Program.cs                      — CLI entry (single-room · multi-room · test branches)
@@ -70,7 +70,7 @@ The referenced / compiled tiers:
 | 3 Gameplay | `xpTURN.Klotho.Gameplay` | `<ProjectReference>` |
 | 4 Game | `Assets/Brawler/Scripts/DataAssets/**` + `.../ECS/**` | `<Compile Include>` into the exe |
 
-> Tiers 1–3 are the per-assembly projects under [`Packages/com.xpturn.klotho/Server~/`](../../Klotho/Packages/com.xpturn.klotho/Server~/); `BrawlerDedicatedServer.csproj` references them plus the `KlothoGenerator` analyzer (for the tier-4 types compiled into the exe). Tier-4 includes are specified directly in the csproj.
+> Tiers 1–3 are the per-assembly projects under [`com.xpturn.klotho/Server~/`](../../com.xpturn.klotho/Server~/); `BrawlerDedicatedServer.csproj` references them plus the `KlothoGenerator` analyzer (for the tier-4 types compiled into the exe). Tier-4 includes are specified directly in the csproj.
 
 ### H-2-2. Bundled Data Files
 
@@ -91,7 +91,7 @@ The three files Program.cs reads at runtime from `AppContext.BaseDirectory + "Da
 | `BrawlerScene.NavMeshData.bytes` | Unity Editor: `Tools > Klotho > Export NavMesh` | `FPNavMeshSerializer.Deserialize` → bot navmesh |
 | `BrawlerAssets.bytes` | Unity Editor: `Tools > Klotho > Convert > DataAsset JsonToBytes` | `DataAssetReader.LoadMixedCollectionFromBytes` → 9 DataAssets |
 
-> The server alone cannot generate these three. Running the sample requires **exporting once from the Unity Editor** before building `Tools/BrawlerDedicatedServer/`.
+> The server alone cannot generate these three. Running the sample requires **exporting once from the Unity Editor** before building `Samples/Brawler/Server/`.
 
 ---
 
@@ -129,7 +129,7 @@ The actual file, verbatim:
 
 Key choices:
 - `Mode = ServerDriven` — the server collects, orders, and redistributes input
-- `TickIntervalMs = 25` → 40 Hz. **The host (server) propagates this value to guests via `SimulationConfigMessage`**, so clients simulate at the same tick rate using the server's value regardless of their local `USimulationConfig` ([SimulationConfigMessage.cs](../../Klotho/Packages/com.xpturn.klotho/Runtime/Network/Messages/SimulationConfigMessage.cs); for spectators, `SimulationConfig` + `SessionConfig` ride along in [SpectatorAcceptMessage.cs](../../Klotho/Packages/com.xpturn.klotho/Runtime/Network/Messages/SpectatorAcceptMessage.cs) so spectators enter with the same simulation / session parameters).
+- `TickIntervalMs = 25` → 40 Hz. **The host (server) propagates this value to guests via `SimulationConfigMessage`**, so clients simulate at the same tick rate using the server's value regardless of their local `USimulationConfig` ([SimulationConfigMessage.cs](../../com.xpturn.klotho/Runtime/Network/Messages/SimulationConfigMessage.cs); for spectators, `SimulationConfig` + `SessionConfig` ride along in [SpectatorAcceptMessage.cs](../../com.xpturn.klotho/Runtime/Network/Messages/SpectatorAcceptMessage.cs) so spectators enter with the same simulation / session parameters).
 - `UsePrediction = false` — the server doesn't need prediction
 - `SDInputLeadTicks = 4` — server-relative lead ticks; the buffer that absorbs client input latency
 - `LateJoinDelaySafety = 2`, `RttSanityMaxMs = 240` — feed the server-side `RecommendedExtraDelayCalculator` (Sync / LateJoin / Reconnect seed + mid-match push). See Specification.md §2.2.
@@ -224,10 +224,10 @@ Key points:
 ./build.sh
 
 # Run (port=7777, botCount=0, logLevel=Warning)
-dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0
+dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0 Information
 
 # With RTT metrics (match-identification telemetry)
-dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0 --rtt-metrics
+dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0 Information --rtt-metrics
 ```
 
 Argument order: `<port> <botCount> [logLevel]`. Defaults when omitted: `7777 / 0 / Warning`.
@@ -273,12 +273,7 @@ var roomManager = new RoomManager(transport, router, loggerFactory, new RoomMana
     MaxRooms             = maxRooms,
     MaxPlayersPerRoom    = maxPlayersPerRoom,
     MaxSpectatorsPerRoom = maxSpectatorsPerRoom,
-    SimulationFactory    = () => new EcsSimulation(
-        maxEntities: simConfig.MaxEntities,
-        maxRollbackTicks: 1,
-        deltaTimeMs: simConfig.TickIntervalMs,
-        logger: logger,
-        assetRegistry: sharedRegistry),
+    // EcsSimulation is now derived from the simulation config (maxEntities) via RoomManagerConfigBuilder.WithDerivedSimulation — no SimulationFactory.
     SimulationConfigFactory = () => simConfig,
     SessionConfigFactory    = () => sessionConfig,
     CallbacksFactory        = (roomLogger) => new BrawlerServerCallbacks(
@@ -301,7 +296,7 @@ Notes:
 
 ### H-5-3. The Main Loop — `ServerLoop`
 
-Defined in `Packages/com.xpturn.klotho/Runtime/Core/Server/ServerLoop.cs`. Per iteration:
+Defined in `com.xpturn.klotho/Runtime/Network/ServerLoop.cs`. Per iteration:
 
 - `transport.PollEvents()` — socket receive (single port, all rooms)
 - `roomManager.Tick(dt)` — accumulate / execute ticks per room
@@ -317,10 +312,10 @@ The previous `DedicatedServerLoop` (single-engine variant) has been retired in f
 
 ```bash
 # Single port, maxRooms=4, 0 bots
-dotnet run --project BrawlerDedicatedServer.csproj -- --multi 7777 4 0
+dotnet run --project BrawlerDedicatedServer.csproj -- --multi 7777 4 0 Information
 
 # With RTT metrics
-dotnet run --project BrawlerDedicatedServer.csproj -- --multi 7777 4 0 --rtt-metrics
+dotnet run --project BrawlerDedicatedServer.csproj -- --multi 7777 4 0 Information --rtt-metrics
 ```
 
 Argument order: `--multi <port> <maxRooms> <botCount> [logLevel]`. The `--rtt-metrics` flag (position-independent) is the same toggle as in single-room mode.
@@ -353,12 +348,7 @@ var roomManager = new RoomManager(transport, router, loggerFactory, new RoomMana
     MaxRooms             = maxRooms,
     MaxPlayersPerRoom    = maxPlayersPerRoom,
     MaxSpectatorsPerRoom = maxSpectatorsPerRoom,
-    SimulationFactory    = () => new EcsSimulation(
-        maxEntities: simConfig.MaxEntities,
-        maxRollbackTicks: 1,
-        deltaTimeMs: simConfig.TickIntervalMs,
-        logger: logger,
-        assetRegistry: sharedRegistry),
+    // EcsSimulation is now derived from the simulation config (maxEntities) via RoomManagerConfigBuilder.WithDerivedSimulation — no SimulationFactory.
     SimulationConfigFactory = () => simConfig,
     SessionConfigFactory    = () => sessionConfig,
     CallbacksFactory        = (roomLogger) => new BrawlerServerCallbacks(
@@ -376,7 +366,7 @@ loop.Run();
 
 Key points:
 - **One Transport, N rooms** — a single port handles every room. `RoomRouter` reads the roomId from incoming packets and routes them to the corresponding room queue inside `RoomManager`.
-- **Factory injection** — `SimulationFactory` / `CallbacksFactory` are passed as delegates to construct per-room `EcsSimulation` / `BrawlerServerCallbacks` instances.
+- **Factory injection** — `CallbacksFactory` is passed as a delegate to construct per-room `BrawlerServerCallbacks` instances; `EcsSimulation` is derived from the simulation config via `RoomManagerConfigBuilder.WithDerivedSimulation` rather than an explicit `SimulationFactory`.
 - **DataAsset / StaticCollider shared, NavMesh deserialized per room** — NavMesh has internal state that mutates during queries, so it cannot be shared.
 - `ThreadPool.SetMinThreads` — secures workers proportional to the room count (avoids warmup latency).
 
@@ -421,7 +411,7 @@ The exit code is the sum of `failed` counts across both suites — CI can use th
 ### Development (Debug, local run)
 
 ```bash
-cd Tools/BrawlerDedicatedServer
+cd Samples/Brawler/Server
 ./build.sh                                 # = dotnet build -c Debug
 dotnet run --project . -- 7777 0
 ```
@@ -456,7 +446,7 @@ The core of determinism is **"do not configure the system set differently"**. Bo
 
 ## H-10. Caveats / Limitations
 
-- **Initial export requires the Unity Editor** — the three `Data/*.bytes` files cannot be generated without Unity. Each map change requires re-export → rebuild `Tools/BrawlerDedicatedServer/`.
+- **Initial export requires the Unity Editor** — the three `Data/*.bytes` files cannot be generated without Unity. Each map change requires re-export → rebuild `Samples/Brawler/Server/`.
 - **No view callbacks** — if the server needs `OnTickExecuted` / `OnGameStart`, those are not part of `ISimulationCallbacks`, so a separate subscription is required (the current Brawler server doesn't use them).
 - **Single shared port (multi-room)** — convenient from a firewall / NAT / port-scan perspective, but to isolate a particular room, running multiple single-room server processes is simpler.
 - **`MaxRollbackTicks = 1`** — the server is its own authority, so the rollback buffer is minimized. Increasing this only wastes memory.

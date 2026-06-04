@@ -18,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Klotho\Packages\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging.Mel\xpTURN.Klotho.Logging.Mel.csproj" />
+    <ProjectReference Include="..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging.Mel\xpTURN.Klotho.Logging.Mel.csproj" />
   </ItemGroup>
 
   <ItemGroup>

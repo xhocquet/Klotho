@@ -2,7 +2,7 @@
 
 Minimum **ServerDriven** sample consuming the `com.xpturn.klotho` UPM package. Same 2-cube sumo game as P2pSample, but the simulation authority lives in a separate **dedicated .NET server** — clients only `Join` (no local host) and predict against the server's verified state.
 
-> Target: `com.xpturn.klotho v0.2.7` · Unity 6.3 · URP · .NET 8 (server)
+> Target: `com.xpturn.klotho v0.2.8` · Unity 6.3 · URP · .NET 8 (server)
 
 > **P2pSample vs SdSample**: same game (`Sim` code is byte-identical bar the namespace), different netcode topology. P2P = peers self-host (1 Unity project). SD = **server console + Unity clients** (this sample). 한 매치 = 서버 1 + 클라 2.
 
@@ -12,7 +12,7 @@ Minimum **ServerDriven** sample consuming the `com.xpturn.klotho` UPM package. S
 
 - Unity **6.3+** (client)
 - **.NET 8 SDK** (`dotnet`) — the dedicated server is a console app under [`Server/`](Server/)
-- **`com.xpturn.klotho` is an *embedded* package** at [`Packages/com.xpturn.klotho/`](Packages/com.xpturn.klotho/) (a copied-in package, v0.2.7 — Unity resolves it `source: embedded`), **not** git-fetched. Reason: the dedicated server's `.csproj` `<Import>`s `Server~/KlothoServer.Core.props` and needs a **stable relative path** (`..\Packages\com.xpturn.klotho\Server~\…`); a git-fetched package lands in `Library/PackageCache/com.xpturn.klotho@<hash>/` with a per-resolve hashed path MSBuild can't reference reliably. Embedding points both the Unity client and the server at one in-project copy (§4).
+- **`com.xpturn.klotho` is the single top-level package** at the repo root (`com.xpturn.klotho/`), referenced from this sample's [`Packages/manifest.json`](Packages/manifest.json) via `file:../../../com.xpturn.klotho` — **not** copied in and **not** git-fetched. Reason: the dedicated server's `.csproj` `<ProjectReference>`s the per-assembly projects under `..\..\..\com.xpturn.klotho\Server~\` and needs a **stable relative path**; a git-fetched package lands in `Library/PackageCache/com.xpturn.klotho@<hash>/` with a per-resolve hashed path MSBuild can't reference reliably. The `file:` reference points both the Unity client and the server at one in-repo package (§4).
 - The remaining deps are git-fetched via UPM on first open — see [`Packages/manifest.json`](Packages/manifest.json):
 
   ```jsonc
@@ -20,13 +20,13 @@ Minimum **ServerDriven** sample consuming the `com.xpturn.klotho` UPM package. S
     "dependencies": {
       "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
       "com.xpturn.polyfill": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",
-      // com.xpturn.klotho — embedded under Packages/com.xpturn.klotho/ (not fetched here)
+      // com.xpturn.klotho — referenced via file:../../../com.xpturn.klotho (single top-level package)
       ...
     }
   }
   ```
 
-  To update the embedded framework, replace the `Packages/com.xpturn.klotho/` folder with the target version's contents (e.g. copy from `<klotho repo>/Klotho/Packages/com.xpturn.klotho/`).
+  There is no copy/sync step: the sample references the in-repo top-level `com.xpturn.klotho/` package directly, so both the Unity client and the server always use that single shared package.
 
 ---
 
@@ -78,10 +78,9 @@ SdSample/
 │   ├── Config/      — SimulationConfig.asset (Mode=ServerDriven) · SessionConfig.asset (MaxPlayers=2) · EntityViewFactory.asset
 │   └── Data/        — SdAssets.json (editable) / SdAssets.bytes (baked, loaded by both client & server)
 ├── Packages/
-│   ├── com.xpturn.klotho/     — ★ EMBEDDED framework package (Runtime / Editor / Server~ / …)
-│   └── manifest.json          — UPM manifest (git-fetches UniTask + Polyfill only)
+│   └── manifest.json          — references com.xpturn.klotho via file:../../../com.xpturn.klotho (+ git-fetches UniTask + Polyfill)
 └── Server/                    — dedicated .NET 8 console server
-    ├── SdSampleServer.csproj  — imports ..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props + links Sim/*.cs (source-shared)
+    ├── SdSampleServer.csproj  — ProjectReferences ..\..\..\com.xpturn.klotho\Server~\… + links Sim/*.cs (source-shared)
     ├── Program.cs             — RoomManager(MaxRooms=1) + RoomRouter + ServerLoop
     ├── SdServerCallbacks.cs   — ISimulationCallbacks (OnPollInput no-op; server takes no local input)
     ├── simulationconfig.json  — Mode=ServerDriven (authoritative tick/lead values)
@@ -92,17 +91,22 @@ Game-side code is ~916 LOC (Sim 292 / Client View 540 / Server 107). All visuals
 
 ### Why the server links Sim *sources* (not a DLL)
 
-`SdSampleServer.csproj` `<Compile Include>`-links the **same `Sim/*.cs`** the Unity client compiles, via the package's `Server~/KlothoServer.Core.props`. The KlothoGenerator emits `RegisterGeneratedTypes` as a *partial method* on `CommandFactory`/`MessageSerializer`, so every `[KlothoSerializable]` type (here `MoveCommand` / `GameOverEvent`) must live in one compilation unit — a ProjectReference (binary) would split the partial across assemblies and drop registration.
+`SdSampleServer.csproj` `<Compile Include>`-links the **same `Sim/*.cs`** the Unity client compiles, alongside `<ProjectReference>`s to the framework's per-assembly projects under `..\..\..\com.xpturn.klotho\Server~\`. The KlothoGenerator emits `RegisterGeneratedTypes` as a *partial method* on `CommandFactory`/`MessageSerializer`, so every `[KlothoSerializable]` type (here `MoveCommand` / `GameOverEvent`) must live in one compilation unit — referencing the framework's `Sim` types as a prebuilt binary would split the partial across assemblies and drop registration, hence the sample `Sim/*.cs` is source-shared into the server compilation.
 
-### Server source path (why the framework is embedded)
+### Server source path (why ProjectReference, not a git-fetched package)
 
-`SdSampleServer.csproj` imports the props from the **embedded** package via a stable in-project path:
+`SdSampleServer.csproj` `<ProjectReference>`s the framework's per-assembly projects via a stable in-repo path:
 
 ```xml
-<Import Project="..\Packages\com.xpturn.klotho\Server~\KlothoServer.Core.props" />
+<ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+<ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+<ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+<ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+<ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+<Analyzer Include="..\..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
 ```
 
-The dedicated server is an MSBuild project, so its `<Import>` needs a path that doesn't move. A git-fetched UPM package resolves to `Library/PackageCache/com.xpturn.klotho@<hash>/`, where `<hash>` changes per resolve — not referenceable from a checked-in `.csproj`. Embedding `com.xpturn.klotho` under the project's `Packages/` gives the server (and the Unity client) one fixed location, and the whole sample stays self-contained when copied elsewhere — no PackageCache juggling. (`Server~` is hidden from Unity import by the `~` suffix but is a normal folder on disk that MSBuild reads.)
+The dedicated server is an MSBuild project, so its `<ProjectReference>`s need paths that don't move. A git-fetched UPM package resolves to `Library/PackageCache/com.xpturn.klotho@<hash>/`, where `<hash>` changes per resolve — not referenceable from a checked-in `.csproj`. Pointing at the single top-level `com.xpturn.klotho/` package gives the server (and, via `file:`, the Unity client) one fixed location — no PackageCache juggling. (`Server~` is hidden from Unity import by the `~` suffix but is a normal folder on disk that MSBuild reads.)
 
 ---
 

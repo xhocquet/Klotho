@@ -35,7 +35,7 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 | Item | Contents |
 | ---- | ---- |
 | Purpose | In-house structured logging (no external logging dependency) |
-| Location | [`Packages/com.xpturn.klotho/Runtime/Logging/`](../Klotho/Packages/com.xpturn.klotho/Runtime/Logging/) (engine-agnostic) + `Runtime/Unity/Logging/` (Unity sink) |
+| Location | [`com.xpturn.klotho/Runtime/Logging/`](../com.xpturn.klotho/Runtime/Logging/) (engine-agnostic) + `Runtime/Unity/Logging/` (Unity sink) |
 | Assembly | `xpTURN.Klotho.Logging`, `xpTURN.Klotho.Logging.Unity` |
 | Dependencies | `xpTURN.Polyfill.Runtime` only (`noEngineReferences: true` for the core) |
 
@@ -48,7 +48,7 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 
 **Klotho usage**: Standard logging interface used framework-wide.
 
-**Optional MEL Interop adapter** ([`Plugins~/Logging.Mel/`](../Klotho/Packages/com.xpturn.klotho/Plugins~/Logging.Mel/)):
+**Optional MEL Interop adapter** ([`Plugins~/Logging.Mel/`](../com.xpturn.klotho/Plugins~/Logging.Mel/)):
 
 Opt-in package sample (UPM "Import Sample" → **MEL Logging Plugin**) that bridges `IKLogger` to `Microsoft.Extensions.Logging.ILogger`. Activating the adapter requires the consumer to provide `Microsoft.Extensions.Logging.Abstractions.dll` — consumer responsibility (the core package stays self-contained).
 
@@ -80,7 +80,7 @@ Cysharp-ecosystem libraries used across the xpTURN project.
 
 ## C. Vendored Third-Party Libraries
 
-Third-party libraries shipped as source under [`Packages/com.xpturn.klotho/Runtime/ThirdParty/`](../Klotho/Packages/com.xpturn.klotho/Runtime/ThirdParty/) with their original licenses preserved. **Vendoring policy**: vendored sources include `.cs` + `.meta` only — no `.csproj`/`.sln` (to prevent `bin`/`obj` pollution inside `Packages/`).
+Third-party libraries shipped as source under [`com.xpturn.klotho/Runtime/ThirdParty/`](../com.xpturn.klotho/Runtime/ThirdParty/) with their original licenses preserved. **Vendoring policy**: vendored sources include `.cs` + `.meta` only — no `.csproj`/`.sln` (to prevent `bin`/`obj` pollution inside `Packages/`).
 
 ### LiteNetLib
 
@@ -88,7 +88,7 @@ Third-party libraries shipped as source under [`Packages/com.xpturn.klotho/Runti
 | ---- | ---- |
 | Purpose | Lightweight UDP networking library |
 | GitHub | <https://github.com/RevenantX/LiteNetLib> |
-| Version | 2.1.4 (vendored as [`Runtime/ThirdParty/LiteNetLib.v2.1.4/`](../Klotho/Packages/com.xpturn.klotho/Runtime/ThirdParty/LiteNetLib.v2.1.4/)) |
+| Version | 2.1.4 (vendored as [`Runtime/ThirdParty/LiteNetLib.v2.1.4/`](../com.xpturn.klotho/Runtime/ThirdParty/LiteNetLib.v2.1.4/)) |
 | License | MIT |
 | Assembly | `LiteNetLib` |
 
@@ -118,7 +118,7 @@ Third-party libraries shipped as source under [`Packages/com.xpturn.klotho/Runti
 | ---- | ---- |
 | Purpose | High-speed LZ4 block / frame compression |
 | GitHub | <https://github.com/MiloszKrajewski/K4os.Compression.LZ4> |
-| Version | 1.3.8 (vendored as [`Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/`](../Klotho/Packages/com.xpturn.klotho/Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/)) |
+| Version | 1.3.8 (vendored as [`Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/`](../com.xpturn.klotho/Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/)) |
 | License | MIT |
 | Assembly | `K4os.Compression.LZ4` |
 
@@ -131,7 +131,7 @@ Third-party libraries shipped as source under [`Packages/com.xpturn.klotho/Runti
 | Item | Contents |
 | ---- | ---- |
 | Purpose | Unsafe-cast primitives for high-performance interop |
-| Version | 6.1.2 (vendored as [`Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/`](../Klotho/Packages/com.xpturn.klotho/Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/)) |
+| Version | 6.1.2 (vendored as [`Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/`](../com.xpturn.klotho/Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/)) |
 | Assembly | `System.Runtime.CompilerServices.Unsafe` |
 
 **Klotho usage**: Backing for `SpanWriter/Reader` ref-struct primitives and zero-copy component-storage reinterpretation.
@@ -140,7 +140,7 @@ Third-party libraries shipped as source under [`Packages/com.xpturn.klotho/Runti
 
 ## D. Standard Unity Packages
 
-Unity packages declared in [`Packages/com.xpturn.klotho/package.json`](../Klotho/Packages/com.xpturn.klotho/package.json) `dependencies` (auto-resolved from the Unity registry).
+Unity packages declared in [`com.xpturn.klotho/package.json`](../com.xpturn.klotho/package.json) `dependencies` (auto-resolved from the Unity registry).
 
 | Package | Version | Klotho Usage |
 | ---- | ---- | ---- |

@@ -1,8 +1,8 @@
 # SimulationConfig Recommended-Value Guide (per Genre / Platform)
 
-> This document is a starting-point guide for how to configure the key parameters of [`ISimulationConfig`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/ISimulationConfig.cs) / [`SimulationConfig`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs) by game genre and platform.
+> This document is a starting-point guide for how to configure the key parameters of [`ISimulationConfig`](../com.xpturn.klotho/Runtime/Core/ISimulationConfig.cs) / [`SimulationConfig`](../com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs) by game genre and platform.
 >
-> **Recommended values are only a starting point.** Tune them against measured RTT/jitter, content-driven input frequency, and concurrent entity counts. Default definitions live in [`SimulationConfig.cs`](../Klotho/Packages/com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs); field semantics are documented in [Specification.md §2.2](./Specification.md#22-default-configuration-values).
+> **Recommended values are only a starting point.** Tune them against measured RTT/jitter, content-driven input frequency, and concurrent entity counts. Default definitions live in [`SimulationConfig.cs`](../com.xpturn.klotho/Runtime/Core/Engine/SimulationConfig.cs); field semantics are documented in [Specification.md §2.2](./Specification.md#22-default-configuration-values).
 
 ---
 
@@ -95,7 +95,7 @@ Many entities · responsiveness matters · deterministic simulation (the Brawler
 | `InterpolationDelayTicks` | 2 | 3 | Higher on mobile to absorb jitter |
 | `MaxEntities` | 256 | 128 | Proportional to content scale |
 
-**The Brawler sample (`Tools/BrawlerDedicatedServer/simulationconfig.json`)** is a real-world PC example for this category.
+**The Brawler sample (`Samples/Brawler/Server/simulationconfig.json`)** is a real-world PC example for this category.
 
 **Tuning notes:**
 - For builds with many characters/projectiles, set `MaxEntities` to the measured peak + 25% headroom.
@@ -214,6 +214,6 @@ Each turn is discrete; simulation advances after input arrives. **Slow tick + no
 ## 7. References
 
 - Field semantics / defaults: [`Specification.md §2.2`](./Specification.md#22-default-configuration-values)
-- Real-world SD example: [`Tools/BrawlerDedicatedServer/simulationconfig.json`](../Klotho/Tools/BrawlerDedicatedServer/simulationconfig.json)
+- Real-world SD example: [`Samples/Brawler/Server/simulationconfig.json`](../Samples/Brawler/Server/simulationconfig.json)
 - Per-mode message flow: [`Specification.md §9`](./Specification.md)
 - Brawler sample bootstrap: [`Samples/Brawler.E.Bootstrap.md`](./Samples/Brawler.E.Bootstrap.md)

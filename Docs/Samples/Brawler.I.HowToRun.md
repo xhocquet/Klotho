@@ -129,7 +129,7 @@ A single headless server runs the simulation; clients only send input commands.
 ### I-3-1. Start the headless server
 
 ```bash
-cd Klotho/Tools/BrawlerDedicatedServer
+cd Samples/Brawler/Server
 ./build.sh                                         # dotnet build -c Debug
 
 # Run: <port> <botCount> [logLevel]
@@ -138,7 +138,7 @@ dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0 Information
 
 The server prints a banner with the bound endpoint once it is ready to accept clients. See [Brawler.H.DedicatedServer.md §H-5](Brawler.H.DedicatedServer.md#h-5-single-room-mode-phase-1) for bootstrap details.
 
-> The server does not need Unity at runtime, but the three `.bytes` files under `Tools/BrawlerDedicatedServer/Data/` must have been exported once from the editor (see §I-1-1).
+> The server does not need Unity at runtime, but the three `.bytes` files under `Samples/Brawler/Server/Data/` must have been exported once from the editor (see §I-1-1).
 
 ### I-3-2. Client (every player)
 
@@ -176,7 +176,7 @@ A single server process hosts up to `maxRooms` matches concurrently on one share
 ### I-4-1. Start the multi-room server
 
 ```bash
-cd Klotho/Tools/BrawlerDedicatedServer
+cd Samples/Brawler/Server
 
 # --multi <port> <maxRooms> <botCount> [logLevel]
 dotnet run --project BrawlerDedicatedServer.csproj -- --multi 7777 4 0 Information

@@ -119,8 +119,8 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 ### Directory Layout
 
 ```
-Klotho/                                ← Unity dev project (this repo)
-├── Packages/com.xpturn.klotho/        ← ★ framework package (UPM `?path=`)
+<repo root>/                            ← this repo
+├── com.xpturn.klotho/                 ← ★ framework package (UPM `?path=`)
 │   ├── package.json
 │   ├── Runtime/
 │   │   ├── Core/           KlothoEngine, KlothoSession, KlothoSessionSetup,
@@ -149,7 +149,7 @@ Klotho/                                ← Unity dev project (this repo)
 │   │   │                   (LZ4 compression — K4os.Compression.LZ4, vendored)
 │   │   ├── ECS/            Frame, EntityManager, ComponentStorage, ComponentStorageRegistry,
 │   │   │                   EntityPrototypeRegistry, IEntityPrototype, SystemRunner,
-│   │   │                   FrameRingBuffer, EcsStateSnapshot, EcsSimulation, FixedString32/64,
+│   │   │                   FrameRingBuffer, EcsSimulation, FixedString32/64,
 │   │   │                   ISystem/IInitSystem/ICommandSystem/ISyncEventSystem/ISignal family
 │   │   │                   DataAsset/ (IDataAsset, DataAssetRegistry, DataAssetRef,
 │   │   │                               DataAssetReader/Writer, [KlothoDataAsset(typeId)],
@@ -183,18 +183,18 @@ Klotho/                                ← Unity dev project (this repo)
 │                           asmdefs + KlothoServer/: KlothoServerBootstrap, ConfigPathResolver,
 │                           Session/SimulationConfigLoader)
 │
-├── Assets/                 ← dev-only (not redistributed via UPM)
-│   ├── Brawler/            4-player fighting-game sample
-│   ├── NavMesh/            navmesh sample
-│   ├── Tests/              unit / integration / determinism-verification tests
-│   ├── Benchmarks/         performance benchmarks
-│   └── Scenes/  Settings/  StreamingAssets/  ...
+├── Samples/                ← standalone sample projects (each consumes the package via `file:`)
+│   ├── Brawler/            4-player fighting-game sample (+ dedicated server, NavMesh, tests)
+│   ├── P2pSample/          minimal P2P sample (Unity)
+│   ├── SdSample/           minimal ServerDriven sample (Unity client + .NET 8 dedicated server)
+│   └── LoggingMelConsole/  .NET console sample (IKLogger → Microsoft.Extensions.Logging)
 │
+├── Docs/                   ← documentation
 └── Tools/                  ← .NET tooling (not redistributed)
     ├── KlothoGenerator/    Roslyn source generator project (built by gen.build.sh)
-    ├── BrawlerDedicatedServer/  Brawler dedicated server (.NET console)
+    ├── KlothoGenerator.Tests/  generator unit tests
     ├── DeterminismVerification/ determinism verification (.NET console)
-    ├── Generated/          reference copies of generated `.g.cs` (not included in Unity builds)
+    ├── PhysicsDeterminismProbe/ cross-platform FP determinism probe
     └── gen.build.sh        generator build script
 ```
 
@@ -322,7 +322,7 @@ Configuration is split into two layers.
 | OnDisconnectedInputNeeded | `Action<int>` | Empty-input request for a disconnected player (playerId) |
 | OnCatchupComplete | `Action` | Late-join catchup completed |
 | OnVerifiedInputBatchReady | `Action<int, int, byte[], int>` | Verified input batch ready for spectators (startTick, tickCount, data, length) |
-| OnStateChanged | `Action<KlothoState>` | `KlothoEngine.State` transitioned (`Initial → Ready → Running → Ending → Finished` / `Aborted`). The session-level `KlothoSession.StateChanged` mirrors this so game code does not poll the engine each frame |
+| OnStateChanged | `Action<KlothoState>` | `KlothoEngine.State` transitioned (`Initial → Ready → Running → Ending → Finished` / `Aborted`). Surfaced to the game as `IKlothoSessionObserver.OnStateChanged` so game code does not poll the engine each frame |
 
 **FrameState**:
 
@@ -420,13 +420,12 @@ KlothoSessionFlow (recommended construction layer)
   ReconnectAsync(transport, creds, sessionConfigSeed, ct)                    → cold-start reconnect (creds: PersistedReconnectCredentials)
   SpectateAsync(host, port, roomId, ct)                                      → spectator (factory transport)
   StartReplayFromFile(path)                                                  → file → KlothoSession (throws ReplayLoadException)
-  OnSessionCreated / OnHostSessionCreated / OnGuestSessionCreated /
-  OnReplaySessionCreated / OnSpectatorSessionCreated                         → mode-dispatched callbacks
+  (session creation is observed via IKlothoSessionObserver.OnSessionCreated(session, kind) — branch on kind)
 
 KlothoSessionDriver (MonoBehaviour adapter — Runtime.Unity)
-  PreSessionUpdate / PostSessionUpdate / Stopping / IdlePoll                 → lifecycle hooks
-  Attach(session) / DetachAndStop(keepReconnectCredentials = false)          → ownership transfer; OnDestroy passes keep=true
-  IsStopping                                                                 → in-flight teardown guard (replaces game-side _isStopping)
+  PreSessionUpdate / PostSessionUpdate / Stopping                            → lifecycle hooks
+  BindTransport(transport, observer, flow)                                   → driver owns idle transport pumping + idle-disconnect routing → IKlothoSessionObserver.OnIdleDisconnected
+  Attach(session) / DetachAndStop(keepReconnectCredentials = false)          → ownership transfer; OnDestroy passes keep=true; DetachAndStop is idempotent (internal re-entry guard)
 
 KlothoSessionSetup (Create input — direct path)
   Logger · SimulationCallbacks · ViewCallbacks
@@ -441,7 +440,7 @@ KlothoFlowSetup (Flow input — bundles long-lived dependencies)
   SpectatorTransportFactory  : Func<INetworkTransport>  ← invoked from SpectateAsync(host,port,roomId,ct)
 ```
 
-**Teardown invariant**: `IKlothoSessionObserver.OnSessionStopped` is invoked from both teardown entry paths (Driver.DetachAndStop → Session.Stop and direct Session.Stop). In both cases `driver.IsStopping == true` at the firing site, so game code uses a single guard `if (_sessionDriver.IsStopping) return;` at every re-entry candidate site (game-side stop button, OnApplicationQuit, OnDestroy). The library-level guards (`KlothoSession._stopped`, `KlothoSessionDriver._stopping`) ensure idempotency even if the game forgets the guard.
+**Teardown invariant**: `IKlothoSessionObserver.OnSessionStopped` is invoked from both teardown entry paths (Driver.DetachAndStop → Session.Stop and direct Session.Stop). Re-entry is made idempotent by library-level guards (`KlothoSession._stopped`, `KlothoSessionDriver._stopping`), so game code routes all teardown through `KlothoSessionDriver.DetachAndStop` — a re-entrant call is a no-op — rather than carrying its own `_isStopping` flag.
 
 **Reconnect-credentials teardown policy**: `KlothoSession.Stop` / `KlothoSessionDriver.DetachAndStop` / `IKlothoNetworkService.LeaveRoom` all accept `bool keepReconnectCredentials = false`. Default `false` matches a user-intent leave (graceful session end → persisted cold-start credentials are discarded). Process-exit paths (`KlothoSessionDriver.OnDestroy`, game-side `OnApplicationQuit` / `OnDestroy`) must pass `true` so the persisted credentials survive into the next launch — otherwise a normal app quit silently wipes them and the next cold start cannot Reconnect. Explicit cancel / reject paths still clear credentials directly via `IReconnectCredentialsStore.Clear()`.
 
@@ -1136,9 +1135,9 @@ Both host and guest peers run the watchdog locally — either can self-abort whe
 | OnReconnectFailed | `Action<byte>` | Reconnect failed (Guest). The byte is a `ReconnectRejectReason` value (`InvalidMagic`, `InvalidPlayer`, `TimedOut`, `AlreadyConnected`, `DeviceMismatch`, `TransportStartFailed`, `MaxRetries`, `Unknown`). Use `ReconnectRejectReason.ToName(reason)` for a symbolic name, `ReconnectRejectReason.RequiresUserChoice(reason)` to detect `AlreadyConnected`. Cold-start paths surface the same reason via `ReconnectFailedException.Reason` |
 | OnReconnected | `Action` | Reconnect completed (Guest) |
 | OnLateJoinPlayerAdded | `Action<int, int>` | Late-join player added (playerId, joinTick) |
-| OnPhaseChanged | `Action<SessionPhase>` | Session phase transitioned (`Lobby → Countdown → Running → Ended`). The session-level `KlothoSession.PhaseChanged` mirrors this so game code does not poll the service each frame |
-| OnPlayerCountChanged | `Action<int>` | Active player count changed (joins, leaves, late-joins). Forwarded to `KlothoSession.PlayerCountChanged`. `ISpectatorService.OnPlayerCountChanged` is the parallel surface for spectator sessions; `KlothoSession.SubscribeStateForwarders` raises the same session-level event from either source |
-| OnAllPlayersReadyChanged | `Action<bool>` | All-players-ready gate flipped (true when every active player has ready-signaled; false on subsequent join). Forwarded to `KlothoSession.AllPlayersReadyChanged` |
+| OnPhaseChanged | `Action<SessionPhase>` | Session phase transitioned (`Lobby → Countdown → Running → Ended`). Surfaced to the game as `IKlothoSessionObserver.OnPhaseChanged` so game code does not poll the service each frame |
+| OnPlayerCountChanged | `Action<int>` | Active player count changed (joins, leaves, late-joins). Surfaced to the game as `IKlothoSessionObserver.OnPlayerCountChanged`. `ISpectatorService.OnPlayerCountChanged` is the parallel surface for spectator sessions; the session forwards either source to the same observer callback |
+| OnAllPlayersReadyChanged | `Action<bool>` | All-players-ready gate flipped (true when every active player has ready-signaled; false on subsequent join). Surfaced to the game as `IKlothoSessionObserver.OnAllPlayersReadyChanged` |
 
 ### 9.6 Extended Network Subsystems
 

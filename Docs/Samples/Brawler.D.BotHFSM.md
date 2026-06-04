@@ -240,7 +240,7 @@ public bool Evaluate(ref Frame frame, EntityRef entity)
 
     // Per-difficulty extra delay
     var diff = _difficulties[(int)bot.Difficulty];
-    if (frame.Random.NextInt(100) < diff.SkillExtraDelay) return false;
+    if (new DeterministicRandom(frame.GetReadOnlySingleton<RandomSeedComponent>().Seed).NextInt(100) < diff.SkillExtraDelay) return false;
 
     // LOS check for ranged skills
     if (skill.Value.RequireLOS && !BotFSMHelper.HasLineOfSight(ref frame, entity, bot.Target, _behavior))

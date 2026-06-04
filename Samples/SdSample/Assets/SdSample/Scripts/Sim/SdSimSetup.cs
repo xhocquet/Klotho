@@ -44,8 +44,7 @@ namespace xpTURN.Samples.SdSample
 
         public static void InitializeWorld(IKlothoEngine engine, int maxPlayers)
         {
-            var simulation = (EcsSimulation)engine.Simulation;
-            var frame = simulation.Frame;
+            var frame = engine.InitFrame;
             var stats = frame.AssetRegistry.Get<PlayerStatsAsset>();
 
             for (int i = 0; i < maxPlayers; i++)

@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.2.8] - 2026-06-03
+
+### Packaging — flat layout (breaking)
+
+- The framework package is promoted to the repository top level (`com.xpturn.klotho/`); the nested dev-project wrapper is gone. Samples now consume the package through a `file:` manifest reference to that single top-level package (no embedded copy).
+- UPM install URL path changes to `?path=com.xpturn.klotho`. Dedicated-server csproj references the per-assembly projects under `com.xpturn.klotho/Server~/` directly.
+- LICENSE files added.
+
+### Session lifecycle — IKlothoSessionObserver is the only surface (breaking)
+
+- `IKlothoSessionObserver` is now the single session-observation surface. The deprecated per-event `KlothoSession` state events and the per-mode `KlothoSessionFlow.On*SessionCreated` events are removed — session creation is observed through one `OnSessionCreated(session, SessionEntryKind kind)` callback (branch on `kind`).
+- `Phase` / `AllPlayersReady` lifted onto the session facade; state transitions surface as `OnStateChanged` / `OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged`.
+- Session stop is idempotent through a single `OnSessionStopped` path; the driver's transient teardown guard is internal.
+
+### Flow / role — unified entry (breaking)
+
+- Guest join unified into a strategy-dispatched `JoinAsync(strategy, ...)`; `JoinP2PAsync` / `JoinServerDrivenAsync` are convenience overloads that delegate to it.
+- Mode and local role resolved into a single `KlothoRole` (`P2PHost` / `P2PGuest` / `SdClient`).
+- Join/reconnect reject reasons typed as enums (`JoinFailReason` / `JoinFailedException`, `ReconnectRejectReason`); guest join gains a `connectTimeoutMs`.
+- The driver owns the main transport: it pumps it while idle and routes idle disconnects to `OnIdleDisconnected` (`BindTransport`); connect-attempt cancellation ownership moved into the flow.
+
+### Builders & config
+
+- `KlothoFlowSetupBuilder` for flow setup, with `WithReplaySave(path, dumpJson)` to declare the replay output path at build time.
+- `RoomManagerConfigBuilder` for dedicated-server room config; `SimulationFactory` removed (the simulation is derived from the simulation config, e.g. `WithDerivedSimulation`). Per-room logging replaces the standalone simulation logger.
+- `IKlothoEngine.InitFrame` added; samples read frames via `Engine.PredictedFrame.Frame` instead of an `EcsSimulation` downcast.
+
+### Fixes
+
+- ServerDriven reconnect was mis-routed as a late-join — the stale connection is now disposed on a failed handshake.
+- ServerDriven client replay: the initial-state snapshot is persisted before recording starts.
+- Server join-reject reason surfaced to the client via the disconnect payload.
+
+### Docs
+
+- `README.md` and `Docs/**` refreshed end-to-end for the flat layout and the consolidated session/flow API surface.
+
 ## [0.2.7] - 2026-05-31
 
 ### ECS — HFSMBuilder (IMP49)

@@ -1,6 +1,6 @@
 # P2pSample — Minimum P2P Sample
 
-> Target framework: **xpTURN.Klotho v0.2.7**
+> Target framework: **xpTURN.Klotho v0.2.8**
 > Purpose: the smallest end-to-end P2P sample that exercises the deterministic ECS + LiteNetLib transport + view bootstrap surface — useful as a starting point for game devs picking up the package, and as a regression checkpoint for the package itself.
 > Audience: game developers consuming `com.xpturn.klotho` via UPM who want a 60-minute "hello world" before tackling the full Brawler sample.
 > Source: [`<repo>/Samples/P2pSample/`](../../Samples/P2pSample/)
@@ -203,7 +203,8 @@ The static collider is registered in code (not baked from `BoxCollider` via the 
 ### 5-1. Bootstrap (P2pGameController)
 
 ```
-Awake → CreateLogger + wire driver hooks (PreSessionUpdate / Stopping / IdlePoll)
+Awake → CreateLogger + wire driver hooks (PreSessionUpdate / Stopping)
+        (idle transport pumping is owned by the driver via BindTransport — no IdlePoll hook)
 Start → load DataAsset.bytes → registry build
         → transport + input + flow with CallbacksFactory
         → wire menu buttons + initial Host/Port
@@ -216,7 +217,7 @@ OnBtnReady → _hud.SetLocalReady(true); _session.SetReady(true)
 OnBtnStop  → _sessionDriver.DetachAndStop()
 ```
 
-After `OnFlowSessionCreated`, the controller subscribes only `session.PhaseChanged` — `StateChanged` is redundant (1:1 with phase) and `AllPlayersReadyChanged` is host-only (see §6 G7).
+Of the four `IKlothoSessionObserver` state callbacks the controller implements only `OnPhaseChanged` — `OnStateChanged` is redundant (1:1 with phase) and `OnAllPlayersReadyChanged` is host-only (see §6 G7).
 
 ### 5-2. Callbacks
 
@@ -246,7 +247,7 @@ These are framework-level behaviors that the initial design pass missed; they ar
 | G2 | Synced events are **not** dispatched via `OnEventConfirmed` | GameOverEvent never reaches view side | Subscribe `engine.OnSyncedEvent` for Synced; `OnEventConfirmed` is Regular-only |
 | G3 | `USimulationConfig.MaxRollbackTicks < SyncCheckInterval` | `Config validation failed` on Initialize | Keep defaults (50 / 30) or lower both together |
 | G4 | `[KlothoDataAsset]` fields without `[KlothoOrder(N)]` | Baked `.bytes` is only header + AssetId (e.g. 24 bytes); other fields read as zero (e.g. `mass=0` → DivideByZeroException) | Add `[KlothoOrder(N)]` to every field, re-run `Tools > Klotho > Convert > DataAsset JsonToBytes` |
-| G5 | `session.PhaseChanged` fires before `OnFlowSessionCreated` returns | HUD shows blank until the next phase change | Push `session.NetworkService?.Phase` once after subscribing |
+| G5 | `OnPhaseChanged` fires only on transition (not on entry) | HUD shows blank until the next phase change | Push `session.NetworkService?.Phase` once inside `OnSessionCreated` |
 | G6 | `flow.JoinP2PAsync` cancellation doesn't unregister the LiteNetLib peer | Second click → `Peer already registered id=0` | Block re-entry with a `_joining` flag; only one join in flight at a time |
 | G7 | `AllPlayersReadyChanged(true)` fires synchronously on host but not on guest | UI flag asymmetric between peers | Don't depend on it for shared UI; derive from `SessionPhase` (Countdown/Playing implies all ready) |
 

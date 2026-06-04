@@ -442,12 +442,22 @@ _flow = new KlothoSessionFlow(new KlothoFlowSetup
     SpectatorTransportFactory  = () => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY),
 });
 
-// Per-mode session-created callbacks alongside the generic OnSessionCreated.
-_flow.OnSessionCreated          += OnFlowSessionCreated;
-_flow.OnHostSessionCreated      += OnHostOrGuestSessionCreated;
-_flow.OnGuestSessionCreated     += OnHostOrGuestSessionCreated;
-_flow.OnReplaySessionCreated    += OnReplayOrSpectatorSessionCreated;
-_flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated;
+// Single observer callback; branch on kind and attach the driver.
+public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
+{
+    _sessionDriver.Attach(session);
+    switch (kind)
+    {
+        case SessionEntryKind.Host:
+        case SessionEntryKind.Guest:
+            OnHostOrGuestSessionCreated(session);
+            break;
+        case SessionEntryKind.Replay:
+        case SessionEntryKind.Spectator:
+            OnReplayOrSpectatorSessionCreated(session);
+            break;
+    }
+}
 
 // One of the 6 entry points (mode branching via KlothoModeStrategy.Resolve)
 _session = _flow.StartHost(_uSimulationConfig, _uSessionConfig);
@@ -461,19 +471,19 @@ _sessionDriver.Attach(_session);   // KlothoSessionDriver drives Update / Stop
 
 The Driver + Flow + Helpers combination shrinks the controller entry points and removes the per-controller mode-by-flag branching / Update-tick / teardown / PlayerConfig-send / Replay-load / spectator-transport-creation boilerplate. `KlothoSession.Create` direct calls and the transport-injection `SpectateAsync(transport, ...)` overload are reserved as escape hatches — for advanced users whose architecture does not fit the Flow pattern (see [Docs/GameDevAPI.md](../GameDevAPI.md) Escape Hatch section).
 
-State updates flow through events, not polling. `BrawlerGameController` subscribes once on `OnFlowSessionCreated`:
+State updates flow through events, not polling. `BrawlerGameController` subscribes once on `OnSessionCreated`:
 
 ```csharp
-private void OnFlowSessionCreated(KlothoSession session)
+public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
 {
-    session.StateChanged           += OnSessionStateChanged;
-    session.PhaseChanged           += OnSessionPhaseChanged;
-    session.PlayerCountChanged     += OnSessionPlayerCountChanged;
-    session.AllPlayersReadyChanged += OnSessionAllPlayersReadyChanged;
+    public void OnStateChanged(KlothoState s)        => OnSessionStateChanged(s);
+    public void OnPhaseChanged(SessionPhase p)       => OnSessionPhaseChanged(p);
+    public void OnPlayerCountChanged(int n)          => OnSessionPlayerCountChanged(n);
+    public void OnAllPlayersReadyChanged(bool r)     => OnSessionAllPlayersReadyChanged(r);
 }
 ```
 
-Re-entrant teardown is guarded centrally by `KlothoSessionDriver.IsStopping` — the controller no longer carries `_isStopping` / `_teardownInvoked` flags. `FaultInjection*` calls are made without `#if KLOTHO_FAULT_INJECTION` guards (the library surface is macro-agnostic; undefined builds return null stubs at zero runtime cost).
+Re-entrant teardown is handled by the idempotent `KlothoSessionDriver.DetachAndStop` (internal guard) — the controller no longer carries `_isStopping` / `_teardownInvoked` flags. `FaultInjection*` calls are made without `#if KLOTHO_FAULT_INJECTION` guards (the library surface is macro-agnostic; undefined builds return null stubs at zero runtime cost).
 
 ---
 
@@ -702,7 +712,7 @@ Phase 11 — Verify SyncTest · Desync · Replay · Spectator / Late Join
 | [Brawler.E.Bootstrap.md](Brawler.E.Bootstrap.md) | `BrawlerGameController` — full Awake → Start → HostGame / JoinGame / Replay flow |
 | [Brawler.F.SceneNumbers.md](Brawler.F.SceneNumbers.md) | Spawn coordinates · platform paths · physics constants · prefab checklist · Animator parameters |
 | [Brawler.G.InputCapture.md](Brawler.G.InputCapture.md) | Full `BrawlerInputCapture` code + key mapping + split-screen extension |
-| [Brawler.H.DedicatedServer.md](Brawler.H.DedicatedServer.md) | `Tools/BrawlerDedicatedServer` headless dedicated server — csproj layout · single-room / multi-room modes · config files · E2E tests |
+| [Brawler.H.DedicatedServer.md](Brawler.H.DedicatedServer.md) | `Samples/Brawler/Server` headless dedicated server — csproj layout · single-room / multi-room modes · config files · E2E tests |
 
 ### 16-2. Framework References
 

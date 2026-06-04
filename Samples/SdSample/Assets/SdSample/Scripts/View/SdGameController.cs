@@ -12,7 +12,7 @@ using xpTURN.Klotho.Unity;
 namespace xpTURN.Samples.SdSample
 {
     [DefaultExecutionOrder(-100)]
-    public class SdGameController : MonoBehaviour
+    public class SdGameController : MonoBehaviour, IKlothoSessionObserver
     {
         const string ConnectionKey = "xpTURN.SdSample";
 
@@ -41,7 +41,6 @@ namespace xpTURN.Samples.SdSample
         private KlothoSessionFlow _flow;
         private KlothoSession _session;
         private SdViewCallbacks _viewCallbacks;
-        private CancellationTokenSource _connectCts;
         private bool _joining;
 
         private void Awake()
@@ -50,8 +49,6 @@ namespace xpTURN.Samples.SdSample
             _logger?.KInformation($"SdSample logger started.");
 
             _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
-            _sessionDriver.Stopping        += OnSessionDriverStopping;
-            _sessionDriver.IdlePoll        += OnIdlePoll;
         }
 
         private void Start()
@@ -62,26 +59,28 @@ namespace xpTURN.Samples.SdSample
             _assetRegistry = builder.Build();
 
             _transport = new LiteNetLibTransport(_logger, levels: null, connectionKey: ConnectionKey);
-            _transport.OnDisconnected += OnTransportDisconnected;
 
             _input = new SdInputCapture();
             _input.Enable();
 
-            _flow = new KlothoSessionFlow(new KlothoFlowSetup
-            {
-                Logger           = _logger,
-                Transport        = _transport,
-                AssetRegistry    = _assetRegistry,
-                AppVersion       = Application.version,
-                DeviceIdProvider = new UnityDeviceIdProvider(),
-                CallbacksFactory = (simCfg, sessCfg) =>
+            var setup = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
                 {
                     var simCallbacks = new SdSimulationCallbacks(_input);
                     _viewCallbacks = new SdViewCallbacks(_hud);
                     return new SessionCallbacks(simCallbacks, _viewCallbacks);
-                },
-            });
-            _flow.OnSessionCreated += OnFlowSessionCreated;
+                })
+                .WithLogger(_logger)
+                .WithTransport(_transport)
+                .WithAssetRegistry(_assetRegistry)
+                .WithLifecycleObserver(this)
+                .WithUnityDefaults()
+                .Build();
+
+            _flow = new KlothoSessionFlow(setup);
+            // Driver owns the main transport (idle pumping + idle-disconnect routing); bind before any
+            // session so the driver subscribes ahead of NetworkService.
+            _sessionDriver.BindTransport(_transport, this, _flow);
+            // Session creation observed via IKlothoSessionObserver.OnSessionCreated(session, kind).
 
             _menu.SetInitialHost(_hostAddress, _port);
             _menu.OnJoinClicked  += OnBtnJoin;
@@ -99,12 +98,8 @@ namespace xpTURN.Samples.SdSample
             }
         }
 
-        private void OnIdlePoll()
-        {
-            _transport?.PollEvents();
-        }
-
-        private void OnSessionDriverStopping(KlothoSession session)
+        // Pre-stop hook — fires inside session.Stop() while Engine is alive (replaces Driver.Stopping).
+        public void OnSessionStopping()
         {
             _viewCallbacks?.Cleanup();
             _entityViewUpdater?.Cleanup();
@@ -113,15 +108,14 @@ namespace xpTURN.Samples.SdSample
             _hud.SetLocalReady(false);
         }
 
-        private void OnFlowSessionCreated(KlothoSession session)
+        public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
         {
             _session = session;
             _sessionDriver.Attach(session);
             _entityViewUpdater?.Initialize(session.Engine);
 
-            session.PhaseChanged += p => _hud.SetPhase(p);
-            // Push initial value — event may have fired before subscription.
-            _hud.SetPhase(session.NetworkService?.Phase ?? SessionPhase.None);
+            // Push initial value — OnPhaseChanged fires only on transition.
+            _hud.SetPhase(session.Phase);
 
             _menu.SetReadyEnabled(true);
             _menu.SetStopEnabled(true);
@@ -138,16 +132,18 @@ namespace xpTURN.Samples.SdSample
 
         private async UniTaskVoid JoinAsync()
         {
-            _connectCts?.Dispose();
-            _connectCts = new CancellationTokenSource();
             try
             {
                 // roomId 0 — single room. RoomManager rejects roomId < 0.
-                await _flow.JoinServerDrivenAsync(_transport, _hostAddress, _port, roomId: 0, _sessionConfig, _connectCts.Token);
+                await _flow.JoinServerDrivenAsync(_transport, _hostAddress, _port, roomId: 0, _sessionConfig, destroyCancellationToken);
             }
-            catch (System.Exception ex)
+            catch (JoinFailedException jfe)
             {
-                _logger?.KWarning($"JoinServerDrivenAsync failed: {ex.Message}");
+                _logger?.KWarning($"JoinServerDrivenAsync failed: {jfe.Reason.ToName()}");
+            }
+            catch (System.OperationCanceledException)
+            {
+                // User-initiated cancel (stop button / ct) — not a failure.
             }
             finally
             {
@@ -162,16 +158,37 @@ namespace xpTURN.Samples.SdSample
             _session.SetReady(true);
         }
 
+        // Stop intent. DetachAndStop drives session.Stop() → OnSessionStopping (UI reset, engine alive)
+        // → OnSessionStopped (idempotent). Transport is intentionally NOT disconnected — it is reused
+        // across sessions for PollEvents / JoinServerDrivenAsync. No re-entry guard: the framework owns idempotency.
         private void OnBtnStop()
         {
             _sessionDriver?.DetachAndStop();
-            _session = null;
         }
 
-        private void OnTransportDisconnected(DisconnectReason reason)
-        {
-            _logger?.KInformation($"Transport disconnected: {reason}");
-        }
+        // ── IKlothoSessionObserver — only OnSessionStopped is meaningful here; the rest are
+        //    explicitly implemented (no reliance on default interface methods for IL2CPP). ──
+
+        // Terminal teardown — framework calls this once on both game-initiated (DetachAndStop) and
+        // framework-internal (match-end auto-shutdown) stops. Only the reference null-out remains.
+        public void OnSessionStopped() => _session = null;
+
+        public void OnPlayerDisconnected(IPlayerInfo player) { }
+        public void OnPlayerReconnected(IPlayerInfo player) { }
+        public void OnReconnecting() { }
+        public void OnReconnectFailed(ReconnectRejectReason reason) { }
+        public void OnReconnected() { }
+        public void OnCatchupComplete() { }
+        public void OnResyncCompleted(int tick) { }
+        public void OnGameStart() { }
+        public void OnMatchAborted(AbortReason reason) { }
+        public void OnMatchEnded(int tick, IMatchEndEvent endEvt) { }
+        public void OnMatchReset(ResetReason reason) { }
+
+        public void OnPhaseChanged(SessionPhase p) => _hud.SetPhase(p);
+        public void OnStateChanged(KlothoState s) { }
+        public void OnPlayerCountChanged(int n) { }
+        public void OnAllPlayersReadyChanged(bool v) { }
 
         private void OnApplicationQuit()
         {
@@ -185,24 +202,14 @@ namespace xpTURN.Samples.SdSample
 
         private void TeardownAll()
         {
-            _connectCts?.Cancel();
-            _connectCts?.Dispose();
-            _connectCts = null;
+            _flow?.DisposeConnect();
 
             if (_sessionDriver != null)
-            {
                 _sessionDriver.PreSessionUpdate -= OnPreSessionUpdate;
-                _sessionDriver.Stopping        -= OnSessionDriverStopping;
-                _sessionDriver.IdlePoll        -= OnIdlePoll;
-            }
 
             _input?.Disable();
             _input?.Dispose();
-
-            if (_transport != null)
-            {
-                _transport.OnDisconnected -= OnTransportDisconnected;
-            }
+            // Main transport is owned by the driver — disconnected/unsubscribed in its OnDestroy.
         }
     }
 }

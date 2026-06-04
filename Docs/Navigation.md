@@ -22,7 +22,7 @@ A deterministic NavMesh navigation system based on FP64. All computation runs on
 ## File Layout
 
 ```text
-Packages/com.xpturn.klotho/Runtime/Deterministic/Navigation/
+com.xpturn.klotho/Runtime/Deterministic/Navigation/
 ├── FPNavMesh.cs              # NavMesh data (vertices, triangles, spatial grid)
 ├── FPNavMeshTriangle.cs      # Triangle struct (adjacency, portals, area, cost)
 ├── FPNavMeshQuery.cs         # Spatial queries (triangle lookup, height sampling)
@@ -35,7 +35,7 @@ Packages/com.xpturn.klotho/Runtime/Deterministic/Navigation/
 ├── FPNavAvoidance.cs         # ORCA collision avoidance
 └── NavCorridorHelper.cs      # Corridor helper utilities
 
-Packages/com.xpturn.klotho/Editor/NavMesh/
+com.xpturn.klotho/Editor/NavMesh/
 ├── FPNavMeshExporter.cs          # Unity NavMesh → FPNavMesh conversion tool
 ├── FPNavMeshVisualizerWindow.cs  # NavMesh visualization editor window
 ├── FPNavMeshVisualizerData.cs    # Visualization state

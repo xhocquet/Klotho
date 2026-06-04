@@ -22,7 +22,9 @@ namespace xpTURN.Samples.P2pSample
             var events = new EventSystem();
             simulation.AddSystem(new CommandSystem(),  SystemPhase.PreUpdate);
             simulation.AddSystem(new MovementSystem(), SystemPhase.PreUpdate);
-            simulation.AddSystem(new PhysicsSystem(64), SystemPhase.Update);
+            var physics = new PhysicsSystem(64);
+            physics.LoadStaticColliders("", new List<FPStaticCollider> { CreateGroundCollider() });
+            simulation.AddSystem(physics,              SystemPhase.Update);
             simulation.AddSystem(new RespawnSystem(),  SystemPhase.LateUpdate);
             simulation.AddSystem(new ScoreSystem(),    SystemPhase.LateUpdate);
             simulation.AddSystem(events,               SystemPhase.LateUpdate);
@@ -31,7 +33,7 @@ namespace xpTURN.Samples.P2pSample
         public void OnInitializeWorld(IKlothoEngine engine)
         {
             _engine = engine;
-            var frame = ((EcsSimulation)engine.Simulation).Frame;
+            var frame = engine.InitFrame;
             var stats = frame.AssetRegistry.Get<PlayerStatsAsset>();
             int maxPlayers = engine.SessionConfig.MaxPlayers;
 
@@ -65,29 +67,20 @@ namespace xpTURN.Samples.P2pSample
                     LastInputV = FP64.Zero,
                 });
             }
-
-            RegisterGroundCollider((EcsSimulation)engine.Simulation);
         }
 
         // Ground static collider — 10×0.2×10 box at Y=-0.1 (top face at Y=0).
         // Stage geometry is fixed for this sample, so values are hard-coded rather than data-driven.
-        static void RegisterGroundCollider(EcsSimulation simulation)
+        static FPStaticCollider CreateGroundCollider() => new FPStaticCollider
         {
-            var physics = simulation.GetSystem<PhysicsSystem>();
-            if (physics == null) return;
-
-            var ground = new FPStaticCollider
-            {
-                id = 1,
-                isTrigger = false,
-                restitution = FP64.Zero,
-                friction = FP64.FromFloat(0.5f),
-                collider = FPCollider.FromBox(new FPBoxShape(
-                    halfExtents: new FPVector3(FP64.FromInt(5), FP64.FromFloat(0.1f), FP64.FromInt(5)),
-                    position: new FPVector3(FP64.Zero, FP64.FromFloat(-0.1f), FP64.Zero))),
-            };
-            physics.LoadStaticColliders("", new List<FPStaticCollider> { ground });
-        }
+            id = 1,
+            isTrigger = false,
+            restitution = FP64.Zero,
+            friction = FP64.FromFloat(0.5f),
+            collider = FPCollider.FromBox(new FPBoxShape(
+                halfExtents: new FPVector3(FP64.FromInt(5), FP64.FromFloat(0.1f), FP64.FromInt(5)),
+                position: new FPVector3(FP64.Zero, FP64.FromFloat(-0.1f), FP64.Zero))),
+        };
 
         public void OnPollInput(int playerId, int tick, ICommandSender sender)
         {

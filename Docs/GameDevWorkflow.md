@@ -38,7 +38,7 @@ In xpTURN.Klotho, the area owned by the game developer is the **gameplay-logic l
 
 ## 2. Recommended Workflow
 
-> **Determinism guardrail (build-time)** — the `DeterminismAnalyzer` shipped in `KlothoGenerator.dll` flags determinism hazards while you author, before they surface as replay/rollback desync. Inside a deterministic-context type (one implementing a deterministic interface / inheriting a deterministic base, or a ref-`Frame` helper method) it warns on: `KLOTHO_DET002` float/double; `KLOTHO_DET003` non-deterministic API/type (`Mathf`, `Random`, `System.Math`, `DateTime`, float-backed `UnityEngine.Vector2/3/4`/`Quaternion`/`Matrix4x4`); `KLOTHO_DET004` `UnityEngine.Time`. Use `FP64` / `FPVector*` / `frame.Random` instead. The FP64 conversion boundary (`FromFloat` / `ToFloat` / …) is exempt, and test / tool assemblies are skipped.
+> **Determinism guardrail (build-time)** — the `DeterminismAnalyzer` shipped in `KlothoGenerator.dll` flags determinism hazards while you author, before they surface as replay/rollback desync. Inside a deterministic-context type (one implementing a deterministic interface / inheriting a deterministic base, or a ref-`Frame` helper method) it warns on: `KLOTHO_DET002` float/double; `KLOTHO_DET003` non-deterministic API/type (`Mathf`, `Random`, `System.Math`, `DateTime`, float-backed `UnityEngine.Vector2/3/4`/`Quaternion`/`Matrix4x4`); `KLOTHO_DET004` `UnityEngine.Time`. Use `FP64` / `FPVector*` / `DeterministicRandom` (seeded from the `RandomSeedComponent` singleton) instead. The FP64 conversion boundary (`FromFloat` / `ToFloat` / …) is exempt, and test / tool assemblies are skipped.
 
 ### Step 1: Define Components (use IDs ≥ 100)
 
@@ -158,22 +158,19 @@ _flow = new KlothoSessionFlow(new KlothoFlowSetup
     SpectatorTransportFactory  = () => new LiteNetLibTransport(logger, connectionKey: ConnectionKey),
 });
 
-// Wire per-mode session-created callbacks alongside the generic OnSessionCreated.
-// Mode dispatching is folded into the flow — game code does not branch on simCfg.Mode anymore.
-_flow.OnSessionCreated          += s => _sessionDriver.Attach(s);
-_flow.OnHostSessionCreated      += OnHostOrGuestSessionCreated;
-_flow.OnGuestSessionCreated     += OnHostOrGuestSessionCreated;
-_flow.OnReplaySessionCreated    += OnReplayOrSpectatorSessionCreated;
-_flow.OnSpectatorSessionCreated += OnReplayOrSpectatorSessionCreated;
-
-// Subscribe to session state-change events on the create callback (no per-frame polling).
-void OnAnyFlowSessionCreated(KlothoSession session)
+// Session creation + state changes arrive through IKlothoSessionObserver
+// (KlothoFlowSetup.LifecycleObserver = this) — one callback set for all modes, no per-frame polling.
+// Branch on `kind`, not simCfg.Mode:
+public void OnSessionCreated(KlothoSession session, SessionEntryKind kind)
 {
-    session.StateChanged           += s => UpdateStateUI(s);
-    session.PhaseChanged           += p => UpdatePhaseUI(p);
-    session.PlayerCountChanged     += n => UpdatePlayerCountUI(n);
-    session.AllPlayersReadyChanged += r => UpdateReadyUI(r);
+    _sessionDriver.Attach(session);
+    if (kind is SessionEntryKind.Host or SessionEntryKind.Guest) OnHostOrGuestSessionCreated(session);
+    else                                                         OnReplayOrSpectatorSessionCreated(session); // Replay / Spectator
 }
+public void OnStateChanged(KlothoState s)      => UpdateStateUI(s);
+public void OnPhaseChanged(SessionPhase p)     => UpdatePhaseUI(p);
+public void OnPlayerCountChanged(int n)        => UpdatePlayerCountUI(n);
+public void OnAllPlayersReadyChanged(bool r)   => UpdateReadyUI(r);
 
 // Entry points — pick one per game mode. Branch by KlothoModeStrategy.Resolve(simCfg),
 // not by inspecting simCfg.Mode directly.
@@ -188,14 +185,14 @@ _session = _flow.StartReplayFromFile(replayPath);                               
 // FaultInjection: macro-agnostic — call without #if KLOTHO_FAULT_INJECTION. Undefined builds
 // return a null stub (release cost stays at zero — library-internal readers retain their macro guards).
 FaultInjectionRuntime.AttachToSession(_session, transport, logger, /* roleLabel */ "host",
-    onReconnect: ct => ReconnectAsync(ct), _sessionDriver);
+    reconnectFn: ct => ReconnectAsync(ct), _sessionDriver);
 ```
 
 > **Escape hatch — `KlothoSession.Create(KlothoSessionSetup)`**: the direct factory is still available for games whose architecture does not fit the Flow pattern (custom retry orchestration, multi-session test harnesses, etc.). The Flow is a recommended thin wrapper, not a wall.
 
 #### NetworkService handle (opt-in)
 
-If your `ISimulationCallbacks` implementation needs the `IKlothoNetworkService` handle on host/guest entry (e.g. to issue room-level network operations alongside per-tick callbacks), implement the `INetworkServiceReceiver` marker interface — the Flow auto-dispatches `SetNetworkService` right after `OnSessionCreated` (kind-gated to Host/Guest). Most game callbacks don't need it; omit the interface and Flow skips dispatch entirely.
+If your `ISimulationCallbacks` implementation needs the `IKlothoNetworkService` handle on host/guest entry (e.g. to issue room-level network operations alongside per-tick callbacks), implement the `INetworkServiceReceiver` marker interface — the Flow auto-dispatches `SetNetworkService` just before invoking the observer's `OnSessionCreated` callback (kind-gated to Host/Guest), so the handle is ready when `OnSessionCreated` runs. Most game callbacks don't need it; omit the interface and Flow skips dispatch entirely.
 
 ```csharp
 public class MySimulationCallbacks : ISimulationCallbacks, INetworkServiceReceiver
@@ -224,7 +221,7 @@ private void SendSpawn(IKlothoEngine engine)
     _spawnHandle = engine.IssueOnce(_spawnBuilder);   // ReliabilityPolicy.Default
 }
 
-public void OnPollInput(IKlothoEngine engine, int playerId, int tick)
+public void OnPollInput(int playerId, int tick, ICommandSender sender)
 {
     if (_spawnHandle != null && _spawnHandle.WouldCollideAt(tick)) return;   // empty-move skip
     if (HasCharacterFor(playerId)) _spawnHandle?.Confirm();                  // state-driven ack
