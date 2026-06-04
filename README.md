@@ -89,7 +89,7 @@ Three-layer separation:
 
 ## Tech Stack
 
-- **Unity 2022.3+**
+- **Unity 2022.3+** — scripting backends: Mono / IL2CPP (AOT-safe; serialization via source generation, no runtime codegen/reflection)
 - **C# 8.0** (some assemblies opt into newer C# language features via the `xpTURN.Polyfill` package, which supplies the runtime-attribute shims required by C# 11)
 - **UniTask** — async (Cysharp)
 - **xpTURN.Klotho.Logging (IKLogger)** — in-house structured logging (no external logging dependency). Optional MEL interop via the `Plugins~/Logging.Mel` sample adapter (`Microsoft.Extensions.Logging.Abstractions` DLL is consumer-provided).
