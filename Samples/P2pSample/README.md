@@ -89,4 +89,3 @@ This sample intentionally omits: ServerDriven mode, Dedicated Server, NavMesh / 
 
 - [Klotho repo README](https://github.com/xpTURN/Klotho) — package install, dedicated-server build patterns.
 - [`../../Docs/Samples/P2pSample.md`](../../Docs/Samples/P2pSample.md) — extended walkthrough (deterministic component / system design, view bootstrap flow, framework gotchas).
-- [`../../Docs/IMP/IMP48/Plan-P2pSample.md`](../../Docs/IMP/IMP48/Plan-P2pSample.md) — implementation plan + design rationale.

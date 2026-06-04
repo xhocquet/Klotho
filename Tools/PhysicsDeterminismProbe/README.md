@@ -29,7 +29,7 @@ outside the physics step: the SD client never registered the static ground colli
 ## Run
 
 ```sh
-cd Klotho/Tools/PhysicsDeterminismProbe
+cd Tools/PhysicsDeterminismProbe
 dotnet build -f net8.0  -c Release
 dotnet build -f net472  -c Release   # needs System.Memory (restored automatically)
 

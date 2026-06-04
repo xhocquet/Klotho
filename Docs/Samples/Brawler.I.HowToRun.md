@@ -15,7 +15,7 @@ Steps that apply regardless of mode.
 
 ### I-1-1. Open the sample
 
-1. Open the `Klotho/` project in Unity 6.3
+1. Open the `Samples/Brawler/` project in Unity 6.3
 2. Open the scene: `Assets/Brawler/Scenes/BrawlerScene.unity`
 3. In the scene, confirm `BrawlerGameController` Inspector slots are bound:
    - **Simulation Config** — `Assets/Brawler/Config/SimulationConfig.asset`

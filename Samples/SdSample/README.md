@@ -132,5 +132,4 @@ This sample intentionally omits: P2P mode, multi-room (`RoomManager` runs `MaxRo
 
 - [Klotho repo README](https://github.com/xpTURN/Klotho) — package install, dedicated-server build patterns.
 - [`../../Docs/Samples/SdSample.md`](../../Docs/Samples/SdSample.md) — architecture walkthrough (server bootstrap, shared deterministic setup, SD-specific gotchas).
-- [`../../Docs/IMP/IMP48/Plan-SdSample.md`](../../Docs/IMP/IMP48/Plan-SdSample.md) — implementation plan + design rationale.
 - [`../P2pSample/`](../P2pSample/) — the P2P sibling (same game, peer topology).
