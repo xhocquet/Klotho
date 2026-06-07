@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://P2pPlayerView.cs" id="1_pv"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1"]
+
+[node name="Player" type="Node3D"]
+script = ExtResource("1_pv")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_1")

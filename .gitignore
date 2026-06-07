@@ -12,6 +12,7 @@
 **/.cursor/
 **/.claude/
 **/.vsconfig/
+**/.godot/
 
 **/Docs/IMP/
 **/Docs/REF/
@@ -49,3 +50,5 @@
 **/SdSample/*.csproj
 **/SdSample/*.sln
 **/SdSample/*.slnx
+
+**/export_presets.cfg

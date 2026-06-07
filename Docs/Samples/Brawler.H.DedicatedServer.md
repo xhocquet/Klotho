@@ -30,7 +30,7 @@ This appendix describes `Samples/Brawler/Server/` as it exists in this repo — 
 | `simulationconfig.json` / `sessionconfig.json` values | Tuned for your game's tick rate, latency budget, max players, etc. |
 | `Program.cs` CLI flags (`--multi`, `--test`, etc.) | Your operational requirements |
 
-Tiers 1–3 (Runtime, LiteNetLib, Transport, Logging, Server utils, Gameplay) are the **engine-agnostic Klotho assemblies under [`com.xpturn.klotho/Server~/`](../../com.xpturn.klotho/Server~/)** (mirroring the client asmdef structure) — your csproj `<ProjectReference>`s them and adds the `KlothoGenerator` analyzer for its own game types. See [README — Dedicated server](../../README.md#dedicated-server) for the install patterns (git submodule vs PackageCache) and the correct reference depth for your csproj location.
+Tiers 1–3 (Runtime, LiteNetLib, Transport, Logging, Server utils, Gameplay) are the **engine-agnostic Klotho assemblies under [`com.xpturn.klotho/Server~/`](../../com.xpturn.klotho/Server~/)** (mirroring the client asmdef structure) — your csproj `<ProjectReference>`s them and adds the `KlothoGenerator` analyzer for its own game types. See [Installation — Unity → Dedicated server](../Installation.Unity.md#2-dedicated-server-optional) for the install patterns (git submodule vs PackageCache) and the correct reference depth for your csproj location.
 
 ---
 

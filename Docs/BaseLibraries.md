@@ -35,15 +35,15 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 | Item | Contents |
 | ---- | ---- |
 | Purpose | In-house structured logging (no external logging dependency) |
-| Location | [`com.xpturn.klotho/Runtime/Logging/`](../com.xpturn.klotho/Runtime/Logging/) (engine-agnostic) + `Runtime/Unity/Logging/` (Unity sink) |
-| Assembly | `xpTURN.Klotho.Logging`, `xpTURN.Klotho.Logging.Unity` |
+| Location | [`com.xpturn.klotho/Runtime/Logging/`](../com.xpturn.klotho/Runtime/Logging/) (engine-agnostic core — `KLoggerFactory`, `KLogBuilder`, `RollingFileSink`) + per-engine console sinks: `Runtime/Unity/Logging/` (Unity) / `Godot~/Adapters/` (Godot) |
+| Assembly | `xpTURN.Klotho.Logging` (core) + `xpTURN.Klotho.Logging.Unity` (Unity sink). **Godot has no separate `Logging.Godot`** — `GodotDebugSink` / `GodotLogSink` / `GodotKLoggerFactory` live in the single adapter assembly `xpTURN.Klotho.Runtime.Godot` |
 | Dependencies | `xpTURN.Polyfill.Runtime` only (`noEngineReferences: true` for the core) |
 
 **Features**:
 
 - `IKLogger` / `KLoggerFactory` — zero external-deps logging interface
 - `KLogHandler{Trace,Debug,Information,Warning,Error,Critical}` ref-struct interpolated handlers + `KInformation`/`KDebug`/`KWarning`/`KError` extension methods — uses Polyfill's `InterpolatedStringHandlerAttribute` for GC-free formatting
-- Pluggable sinks — `UnityDebugSink`, Rolling-File sink (in `Runtime/Unity/Logging`)
+- Pluggable sinks — `RollingFileSink` is **engine-agnostic core** (`Runtime/Logging/`, composed via the core `KLogBuilder.AddRollingFile`); engine-specific **console** sinks are `UnityDebugSink` (Unity, `AddUnityDebug`) and `GodotDebugSink` / `GodotLogSink` (Godot, `GD.Print` / `GD.PushError`). Compose either with the core factory — e.g. Godot: `KLoggerFactory.Create(b => b.AddSink(new GodotLogSink()).AddRollingFile(...))` (see the Godot samples)
 - `RollingFileSink` flush policy — `KFlushMode.PerLine` (default; one flush per line, immediate visibility, ≤ 1 line crash window) or opt-in `KFlushMode.AsyncEvent` (background-thread flush — no per-line flush syscall on the hot path, natural batching of bursts, drains on `Dispose`/process-exit). Select via `AddRollingFile(o => o.FlushMode = KFlushMode.AsyncEvent)`. The dedicated server uses `AsyncEvent`.
 
 **Klotho usage**: Standard logging interface used framework-wide.
@@ -60,7 +60,7 @@ A runnable end-to-end example lives at [`Samples/LoggingMelConsole/`](../Samples
 
 Cysharp-ecosystem libraries used across the xpTURN project.
 
-### UniTask
+### UniTask *(Unity)*
 
 | Item | Contents |
 | ---- | ---- |
@@ -75,6 +75,8 @@ Cysharp-ecosystem libraries used across the xpTURN project.
 - `WhenAll`, `WhenAny` — parallel async
 
 **Klotho usage**: Asynchronous view creation in `EntityViewFactory.CreateAsync` (View layer), network connect/disconnect, replay file I/O. **UniTask is referenced only by the Unity-side adapter (`xpTURN.Klotho.Runtime.Unity`)** — the engine-agnostic core does not depend on it.
+
+> **Godot has no UniTask dependency.** The Godot adapter (`xpTURN.Klotho.Runtime.Godot`) uses the standard library `Task` instead — e.g. `GodotConnectionAsync.ConnectAsync` returns `Task<ConnectionResult>`, and `GodotSessionFlowAsync` returns `Task<KlothoSession>`. (Godot view creation is synchronous — `EntityViewFactory.Create`, no async wrapper.)
 
 ---
 
@@ -152,6 +154,21 @@ Unity packages declared in [`com.xpturn.klotho/package.json`](../com.xpturn.klot
 
 > Cinemachine / test-framework are dev-project dependencies (`Assets/`); the core package declares only `inputsystem`, `ai.navigation`, `newtonsoft-json` in `dependencies`.
 
+> These registry packages are **Unity-adapter-only** — the engine-agnostic core (`Runtime/**`) references none of them. `inputsystem` and `ai.navigation` have **no Godot counterpart**: Godot games capture input through the built-in `Input` API, and NavMesh baking is a Unity-Editor-only step (Godot just loads the resulting `.bytes`).
+
+### Godot dependencies (different axis)
+
+The Godot distribution wires its runtime dependencies as **NuGet `PackageReference`s** (via `addons/klotho/Klotho.props`), not Unity-registry packages:
+
+| Dependency | Version | Note |
+| ---- | ---- | ---- |
+| `Newtonsoft.Json` | 13.0.3 | DataAsset JSON (vs Unity's `com.unity.nuget.newtonsoft-json`) |
+| `K4os.Compression.LZ4` | 1.3.8 | Replay compression (vendored as source on Unity) |
+| `LiteNetLib` | 2.1.4 | UDP transport (vendored as source on Unity) |
+| `GodotSharp` | (project's) | Adapter compiles against the consumer's own GodotSharp (source-only) |
+
+> On Unity, `K4os.Compression.LZ4` / `LiteNetLib` ship as **vendored source** under `Runtime/ThirdParty/` (§C); on Godot the same three managed libraries arrive as NuGet packages. The Godot core DLL is built with the vendored LiteNetLib excluded so the NuGet `2.1.4` swaps in cleanly.
+
 ---
 
 ## E. Dependency Layering
@@ -159,10 +176,10 @@ Unity packages declared in [`com.xpturn.klotho/package.json`](../com.xpturn.klot
 ```
 xpTURN.Polyfill.Runtime              ← bottom (no dependencies)
 
-xpTURN.Klotho.Logging                ← + Polyfill (engine-agnostic, noEngineReferences)
-xpTURN.Klotho.Logging.Unity          ← + Klotho.Logging (UnityDebugSink, Rolling-File sink)
+xpTURN.Klotho.Logging                ← + Polyfill (engine-agnostic, noEngineReferences; KLoggerFactory, KLogBuilder, RollingFileSink)
+xpTURN.Klotho.Logging.Unity          ← + Klotho.Logging (UnityDebugSink — Unity console sink)
 
-UniTask                              ← Unity-side only
+UniTask                              ← Unity-side only (Godot uses standard Task — no equivalent dependency)
 
 LiteNetLib (vendored)                ← standalone (pure C#)
 K4os.Compression.LZ4 (vendored)      ← standalone (pure C#)
@@ -170,6 +187,8 @@ System.Runtime.CompilerServices.Unsafe (vendored)  ← standalone
 
 xpTURN.Klotho.Runtime                ← + Polyfill, Klotho.Logging (noEngineReferences)
 xpTURN.Klotho.Runtime.Unity          ← + Klotho.Runtime, Klotho.Logging.Unity, UniTask, InputSystem
+xpTURN.Klotho.Runtime.Godot          ← + Klotho.Runtime, GodotSharp (Godot~/Adapters/**, source-only, net8.0;
+                                         folds its console sink GodotDebugSink/GodotLogSink — no separate Logging.Godot)
 xpTURN.Klotho.Runtime (Replay path)  ← + K4os.Compression.LZ4 (ReplaySystem)
 xpTURN.Klotho.LiteNetLib             ← + LiteNetLib, Klotho.Runtime, Klotho.Logging (noEngineReferences)
 xpTURN.Klotho.DataAsset.Json         ← + Newtonsoft.Json, Klotho.Runtime
@@ -179,8 +198,8 @@ xpTURN.Klotho.Gameplay               ← + Klotho.Runtime, Polyfill
 xpTURN.Klotho.Logging.Mel (opt-in)   ← + Klotho.Logging + Microsoft.Extensions.Logging.Abstractions (consumer-provided DLL)
 ```
 
-> **Engine-agnostic core**: `Klotho.Runtime`, `Klotho.Logging`, `Klotho.Gameplay`, `Klotho.LiteNetLib` (transport) have `noEngineReferences: true` — they compile without UnityEngine and run on .NET dedicated server builds (see [Brawler.H.DedicatedServer.md](./Samples/Brawler.H.DedicatedServer.md)).
+> **Engine-agnostic core**: `Klotho.Runtime`, `Klotho.Logging`, `Klotho.Gameplay`, `Klotho.LiteNetLib` (transport) have `noEngineReferences: true` — they compile without UnityEngine and run on .NET dedicated server builds (see [Brawler.H.DedicatedServer.md](./Samples/Brawler.H.DedicatedServer.md)). The **Godot adapter** (`Runtime.Godot`) sits beside the Unity adapter on this same core (mirrors session driver / view / config / reconnect; see [GodotSdSample.md](./Samples/GodotSdSample.md) / [GodotP2pSample.md](./Samples/GodotP2pSample.md)).
 
 ---
 
-*Last updated: 2026-05-28 (IMP47 — IKLogger transition + UPM packaging)*
+*Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine: per-engine sinks, Godot NuGet deps, Godot adapter layering)*

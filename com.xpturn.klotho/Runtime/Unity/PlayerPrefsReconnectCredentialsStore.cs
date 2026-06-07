@@ -1,3 +1,4 @@
+using Newtonsoft.Json;
 using UnityEngine;
 using xpTURN.Klotho.Network;
 
@@ -5,7 +6,7 @@ namespace xpTURN.Klotho.Unity
 {
     /// <summary>
     /// PlayerPrefs-backed store for cold-start Reconnect credentials.
-    /// Single-key serialization via Unity JsonUtility.
+    /// Single-key serialization via Newtonsoft.Json.
     /// </summary>
     public class PlayerPrefsReconnectCredentialsStore : IReconnectCredentialsStore
     {
@@ -18,7 +19,7 @@ namespace xpTURN.Klotho.Unity
                 Clear();
                 return;
             }
-            string json = JsonUtility.ToJson(creds);
+            string json = JsonConvert.SerializeObject(creds);
             PlayerPrefs.SetString(KEY, json);
             PlayerPrefs.Save();
         }
@@ -32,7 +33,7 @@ namespace xpTURN.Klotho.Unity
                 return null;
             try
             {
-                return JsonUtility.FromJson<PersistedReconnectCredentials>(json);
+                return JsonConvert.DeserializeObject<PersistedReconnectCredentials>(json);
             }
             catch
             {

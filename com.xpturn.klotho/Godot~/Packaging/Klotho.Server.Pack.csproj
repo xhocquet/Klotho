@@ -1,0 +1,38 @@
+<!--
+  SP1 — Server helpers pack project (KlothoServer.dll).
+
+  The Server-Driven framework proper (RoomRouter / RoomManager / ServerLoop / ServerNetworkService) already
+  lives in the core (Runtime/Network/**) and ships in the addon core DLL. The only server-only pieces missing
+  from the addon are the four helpers under Server~/KlothoServer/ — engine-agnostic, depending on the core
+  (Runtime/Logging) + Newtonsoft only. This project compiles them into KlothoServer.dll against the same core
+  the addon ships (ProjectReference to Klotho.Core.Pack), so a dedicated server can be built from the addon
+  alone (no reference to the in-repo Server~).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>KlothoServer</AssemblyName>
+    <RootNamespace>xpTURN.Klotho.Core</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- Build against the same core the addon ships. -->
+  <ItemGroup>
+    <ProjectReference Include="Klotho.Core.Pack.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Server-only helpers: KlothoServerBootstrap / ConfigPathResolver / Simulation·SessionConfigLoader. -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../../Server~/KlothoServer/*.cs"
+             Link="Server/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

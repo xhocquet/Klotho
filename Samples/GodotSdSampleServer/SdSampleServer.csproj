@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>xpTURN.Samples.SdSample.Server</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <Import Project="../GodotSdSample/addons/klotho/Klotho.Server.props" />
+
+  <PropertyGroup>
+    <!-- Deterministic sim copied into GodotSdSample/Sim — same .cs the Godot client compiles,
+         built into this exe so server and client share an identical world. -->
+    <SdSimRoot>../GodotSdSample/Sim</SdSimRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The generator emits cross-assembly registration for these types
+         ([ModuleInitializer] + CommandRegistry/MessageRegistry), since CommandFactory
+         lives in the referenced xpTURN.Klotho.Runtime assembly. -->
+    <Compile Include="$(SdSimRoot)\**\*.cs" Link="Game\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DataAsset (.bytes) — the copy owned by GodotSdSample/Data, placed next to the executable
+         under Data/ so the server loads the same asset the client does. -->
+    <Content Include="..\GodotSdSample\Data\*.bytes">
+      <Link>Data\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="simulationconfig.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="sessionconfig.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

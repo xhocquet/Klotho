@@ -1,13 +1,14 @@
 # xpTURN.Klotho
 [![Unity 2022.3+](https://img.shields.io/badge/unity-2022.3%2B-blue.svg)](https://unity3d.com/get-unity/download)
+[![Godot 4.4+ (.NET)](https://img.shields.io/badge/godot-4.4%2B%20(.NET)-478cbf.svg)](https://godotengine.org/download)
 [![License: Apache License Version 2.0](https://img.shields.io/badge/License-Apache-brightgreen.svg)](https://github.com/xpTURN/Klotho/blob/main/LICENSE)
 
-**Deterministic Multiplayer Simulation Framework for Unity**
+**Deterministic Multiplayer Simulation Framework for Unity and Godot**
 
 > ⚠️ **Experimental Release**
 > This project is under active development and has not yet reached a stable stage. Public APIs, serialization formats, and network protocols may change without notice. Production use is not recommended.
 
-A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame Synchronization, Server-Driven mode, and Replay. By excluding floating-point and building the simulation solely on 32.32 fixed-point (`FP64`) and a deterministic RNG (Xorshift128+), it guarantees full reproducibility across platforms and compilers.
+A deterministic-simulation framework supporting Client-Side Prediction (CSP), Rollback, Frame Synchronization, Server-Driven mode, and Replay. The simulation core is engine-agnostic pure C# with **Unity** and **Godot (.NET)** adapters on top. By excluding floating-point and building the simulation solely on 32.32 fixed-point (`FP64`) and a deterministic RNG (Xorshift128+), it guarantees full reproducibility across platforms and compilers.
 
 > Klotho weaves the simulation, one frame at a time.
 
@@ -28,7 +29,8 @@ A Unity-based framework supporting Client-Side Prediction (CSP), Rollback, Frame
 | **Data Assets** | `IDataAsset` · `DataAssetRegistry` · `DataAssetRef` · JSON serialization (`xpTURN.Klotho.DataAsset.Json`) |
 | **Replay** | Record / playback / seek / variable speed · LZ4 compression (`K4os.Compression.LZ4`) |
 | **Verification Tools** | `SyncTestRunner` (GGPO-style determinism verification) · `DeterminismVerificationRunner` · benchmark suite |
-| **Unity Integration** | `USimulationConfig` · `USessionConfig` · View layer (`EntityViewFactory` / `EntityViewUpdater` / `EntityView`, `BindBehaviour` / `ViewFlags`, `VerifiedFrameInterpolator`) |
+| **Unity Integration** | `USimulationConfig` · `USessionConfig` · View layer (`EntityViewFactory` / `EntityViewUpdater` / `EntityView`, `BindBehaviour` / `ViewFlags`, `VerifiedFrameInterpolator`) · `KlothoSessionDriver` (MonoBehaviour) · `KlothoConnectionAsync` (UniTask) |
+| **Godot Integration** | `GodotSimulationConfig` · `GodotSessionConfig` (Resource) · View layer (`EntityViewFactory` / `EntityViewUpdaterNode` / `EntityViewNode`, `VerifiedFrameInterpolator`) · `GodotSessionDriver` (Node) · `GodotConnectionAsync` (`Task`) · `GodotDebugSink` / `GodotLogSink` |
 
 ---
 
@@ -83,7 +85,7 @@ Genres that benefit most from Klotho's deterministic simulation features.
 ```
 
 Three-layer separation:
-- **Klotho engine layer** — Pure C#, Unity-independent. The same binary also runs on the server side (.NET console / ASP.NET).
+- **Klotho engine layer** — Pure C#, engine-independent (no `UnityEngine` / Godot references). The same binary runs under the Unity and Godot (.NET) adapters and on the server side (.NET console / ASP.NET).
 - **Simulation transport layer** — UDP transport over the `INetworkTransport` abstraction (Input / InputAck / SyncCheck / Handshake). LiteNetLib is provided as the default reference implementation; replaceable with any other library.
 - **Game service layer** — Lobby / matchmaking / authentication (external gRPC, etc.; integrated outside this project).
 
@@ -92,12 +94,13 @@ Three-layer separation:
 ## Tech Stack
 
 - **Unity 2022.3+** — scripting backends: Mono / IL2CPP (AOT-safe; serialization via source generation, no runtime codegen/reflection)
-- **C# 8.0** (some assemblies opt into newer C# language features via the `xpTURN.Polyfill` package, which supplies the runtime-attribute shims required by C# 11)
-- **UniTask** — async (Cysharp)
+- **Godot 4.4+ (mono / .NET, net8.0)** — the Godot adapter ships as `addons/klotho/` (prebuilt core DLL + adapter source). See [Installation — Godot](Docs/Installation.Godot.md).
+- **C# language level** — Unity targets **C# 8.0** with the `xpTURN.Polyfill` package supplying the runtime-attribute shims required by C# 11; the Godot adapter is **net8.0 / `LangVersion latest`** and needs no polyfill (native `init` / `required`).
+- **UniTask** — async on Unity only (Cysharp). The **Godot adapter uses the standard library `Task`** — no UniTask dependency.
 - **xpTURN.Klotho.Logging (IKLogger)** — in-house structured logging (no external logging dependency). Optional MEL interop via the `Plugins~/Logging.Mel` sample adapter (`Microsoft.Extensions.Logging.Abstractions` DLL is consumer-provided).
-- **LiteNetLib** — default reference implementation for UDP transport (MIT, pure C#, vendored under `Runtime/ThirdParty/LiteNetLib.v2.1.4`). The network transport layer is abstracted via the `INetworkTransport` interface and can be replaced with any other library.
-- **Newtonsoft.Json** — DataAsset JSON serialization (`com.unity.nuget.newtonsoft-json`)
-- **K4os.Compression.LZ4** — replay compression (vendored under `Runtime/ThirdParty/`)
+- **LiteNetLib** — default reference implementation for UDP transport (MIT, pure C#). On Unity it is **vendored as source** under `Runtime/ThirdParty/LiteNetLib.v2.1.4`; on Godot it arrives as the **NuGet package `LiteNetLib 2.1.4`**. The transport layer is abstracted via `INetworkTransport` and is replaceable.
+- **Newtonsoft.Json** — DataAsset JSON serialization (Unity: `com.unity.nuget.newtonsoft-json` · Godot: NuGet `Newtonsoft.Json 13.0.3`)
+- **K4os.Compression.LZ4** — replay compression (Unity: vendored under `Runtime/ThirdParty/` · Godot: NuGet `K4os.Compression.LZ4 1.3.8`)
 
 Details: [Docs/BaseLibraries.md](Docs/BaseLibraries.md)
 
@@ -105,235 +108,73 @@ Details: [Docs/BaseLibraries.md](Docs/BaseLibraries.md)
 
 ## Installation
 
-1. Open **Window > Package Manager**
-2. Click **+** > **Add package from git URL...**
-3. Enter each URL in order (the first two are required git dependencies that UPM cannot auto-resolve):
+Klotho installs differently per engine — follow the matching guide. Each covers the **client** first, then the optional **dedicated server** (a plain .NET host on the shared engine-agnostic core):
 
-```text
-https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
-https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
-https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho
-```
+- **[Installation — Unity](Docs/Installation.Unity.md)** — UPM git URLs + Polyfill activation, then `Server~` project references for a dedicated server.
+- **[Installation — Godot (.NET)](Docs/Installation.Godot.md)** — the `addons/klotho/` folder + a one-line `Klotho.props` import, then the (engine-agnostic) dedicated server.
 
-Pin a specific Klotho version with `#vX.Y.Z` (e.g. `https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho`).
-
-Unity registry packages (`com.unity.inputsystem`, `com.unity.ai.navigation` for the NavMesh exporter, `com.unity.nuget.newtonsoft-json`) resolve automatically via the package's `dependencies` field.
-
-### Polyfill activation (C# 9–11 syntax)
-
-Klotho uses C# 11 features (`required`, `init`, custom interpolated string handlers, etc.) in some assemblies. After installing `xpTURN.Polyfill`, enable the language version once per project:
-
-1. Run **Edit > Polyfill > Player Settings > Apply Additional Compiler Arguments -langversion (All Installed Platforms)**.
-2. Settings are persisted to **ProjectSettings/xpTURN.Polyfill.Settings.json**.
-
-This adds `-langversion:preview` to Player Settings (Unity build), inserts `<LangVersion>preview</LangVersion>` into regenerated `.csproj` (IDE), and defines the `CSHARP_PREVIEW` scripting symbol. Without this step, Klotho assemblies that rely on C# 11 syntax may fail to compile. Details: [Polyfill README](https://github.com/xpTURN/Polyfill#project-settings-c-langversion).
-
-### Optional samples
-
-After install, open Unity Package Manager → select **xpTURN.Klotho** → **Samples** → "Import" to copy the **MEL Logging Plugin** adapter into your `Assets/Samples/`. Activating the adapter still requires you to supply `Microsoft.Extensions.Logging.Abstractions` (consumer-provided).
-
-**P2pSample** — a minimum P2P sample (2 cubes, 60s sumo match) consuming this package via the same UPM git URL. Located at [`Samples/P2pSample/`](Samples/P2pSample/) in this repo — open the folder directly in Unity Hub. See [`Samples/P2pSample/README.md`](Samples/P2pSample/README.md) for the 4-step quick start, or [`Docs/Samples/P2pSample.md`](Docs/Samples/P2pSample.md) for the architecture walkthrough.
-
-**SdSample** — the ServerDriven sibling of P2pSample (same sumo game, dedicated-server topology): a Unity client + a minimal .NET 8 dedicated server. Located at [`Samples/SdSample/`](Samples/SdSample/) — see [`Samples/SdSample/README.md`](Samples/SdSample/README.md) (server + 2 clients quick start) or [`Docs/Samples/SdSample.md`](Docs/Samples/SdSample.md) (architecture + SD-specific gotchas).
-
-**LoggingMelConsole** — a .NET console sample at [`Samples/LoggingMelConsole/`](Samples/LoggingMelConsole/) that routes Klotho's `IKLogger` surface through a standard `Microsoft.Extensions.Logging` pipeline via `MelKLogger`, logging to both console and rolling files under `Logs/` with a ZLogger provider.
-
-Heavier demos (Brawler, NavMesh) are not bundled in the package — clone this repo if you want to inspect or modify them.
-
-### Dedicated server
-
-Klotho ships as Unity package source (not a binary NuGet), so a dedicated server builds the engine-agnostic assemblies from your vendored copy of the package. `Server~/` holds per-assembly server projects that mirror the client asmdef structure; your server csproj `<ProjectReference>`s them. Two install patterns:
-
-**A. git submodule (recommended)** — vendor this repo into your game project as a submodule (e.g. under `<yourGame>/External/Klotho`); the UPM package is its top-level `com.xpturn.klotho/` subfolder. Reference it from Unity via a `file:` entry in `Packages/manifest.json` (`"com.xpturn.klotho": "file:../External/Klotho/com.xpturn.klotho"`), and reference the `Server~` projects from your server csproj at the correct relative depth:
-
-```xml
-<!-- Server csproj at <yourGame>/Server/MyDedicatedServer.csproj; submodule at <yourGame>/External/Klotho -->
-<ItemGroup>
-  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
-  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
-  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
-  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
-  <ProjectReference Include="..\External\Klotho\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
-</ItemGroup>
-<!-- Source generator for your game's [KlothoSerializable]/[KlothoComponent] types compiled into the exe -->
-<ItemGroup>
-  <Analyzer Include="..\External\Klotho\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
-</ItemGroup>
-```
-
-Adjust the `..\` depth and submodule path to match where your csproj and submodule sit (the bundled `Samples/SdSample` references the in-repo package the same way — `..\..\..\com.xpturn.klotho\Server~\…`). At startup call `KlothoServerBootstrap.Initialize("YourGamePrefix")` — it force-loads the split assemblies and runs warmups so the cross-assembly `[ModuleInitializer]` registrations (commands / messages / components) complete before the first room is built.
-
-**B. UPM `Library/PackageCache` + `<KlothoServerRoot>`** — if you don't want a submodule, point a property at your resolved PackageCache `Server~` path. The `@<hash>` suffix changes on every pull, so this needs occasional refresh:
-
-```xml
-<PropertyGroup>
-  <KlothoServerRoot>$(MSBuildProjectDirectory)\..\..\Library\PackageCache\com.xpturn.klotho@1a2b3c4d\Server~</KlothoServerRoot>
-</PropertyGroup>
-<ItemGroup>
-  <ProjectReference Include="$(KlothoServerRoot)\KlothoServer\KlothoServer.csproj" />
-  <ProjectReference Include="$(KlothoServerRoot)\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
-  <!-- + Logging / Gameplay / LiteNetLib as above -->
-</ItemGroup>
-```
-
-Full guide (with `Program.cs`, callbacks, config files, single-room/multi-room/test CLI): [Docs/Samples/Brawler.H.DedicatedServer.md](Docs/Samples/Brawler.H.DedicatedServer.md) — a Brawler-specific reference you can copy and adapt to your game.
+The in-repo projects under [`Samples/`](Samples/) double as install references — see the [Documentation Map](#documentation-map) for per-sample walkthroughs.
 
 ---
 
 ## Repository Layout
 
-Klotho ships as a Unity Package (`com.xpturn.klotho`) promoted to the repository top level at `com.xpturn.klotho/`. Consumers install via UPM (see [Installation](#installation)); the in-repo samples consume it through a `file:` manifest reference to the same top-level package.
+Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consumers install the package via UPM; Godot consumers use the `Godot~/` adapter packaged as an `addons/klotho/` folder (see [Installation](#installation)). The in-repo Unity samples consume the package through a `file:` manifest reference to the same top-level package.
 
 ```
 <repo root>/
 ├── README.md  ·  CHANGELOG.md  ·  LICENSE
-├── com.xpturn.klotho/                         ← ★ framework package (UPM)
+├── com.xpturn.klotho/             ← ★ framework package
 │   ├── package.json
-│   ├── Runtime/
-│   │   ├── Core/              KlothoEngine · KlothoSession · ISimulationCallbacks · IViewCallbacks
-│   │   │                      · ISimulationConfig · ISessionConfig · Command/Event/Pool families
-│   │   ├── Logging/           xpTURN.Klotho.Logging (IKLogger — in-house structured logging)
-│   │   ├── Gameplay/          built-in component / system reference implementations
-│   │   ├── Diagnostics/       FaultInjection · RttSpikeMetricsCollector
-│   │   ├── Input/             InputBuffer · SimpleInputPredictor
-│   │   ├── Network/           IKlothoNetworkService · ServerDriven · ServerNetwork · Spectator
-│   │   │                      · Reconnect/LateJoin · Messages · ServerLoop
-│   │   ├── State/             RingSnapshotManager
-│   │   ├── Serialization/     SpanWriter/Reader · SerializationBuffer
-│   │   ├── Replay/            IReplaySystem · ReplayRecorder · ReplayPlayer · LZ4 compression
-│   │   ├── ECS/               Frame · EntityManager · ComponentStorage<T> · SystemRunner
-│   │   │                      · DataAsset/ (IDataAsset · Registry · Json)
-│   │   ├── Deterministic/     FP64 · FPVector* · Physics · Navigation · Random
-│   │   ├── Unity/             USimulationConfig · USessionConfig · View/ · UnityDebugSink
-│   │   ├── LiteNetLib/        LiteNetLibTransport (INetworkTransport implementation)
-│   │   └── ThirdParty/        vendored: LiteNetLib.v2.1.4, K4os.Compression.LZ4.v1.3.8, ...
-│   ├── Editor/                NavMesh · Physics · ECS · FSM · DataAsset tooling
-│   ├── Plugins/Analyzers/     KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
-│   ├── Prefabs/               debug/visualization prefabs (EcsDebugBridge · FPPhysics*Visualizer)
-│   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample")
-│   └── Server~/               dedicated-server build assets (per-assembly csproj mirroring client asmdefs + KlothoServerBootstrap + Config helpers)
+│   ├── Runtime/                   engine-agnostic core + Unity adapter
+│   │   ├── Core/                  engine · session · network
+│   │   ├── Logging/               IKLogger (in-house)
+│   │   ├── Gameplay/              built-in components / systems
+│   │   ├── Diagnostics/           fault injection · metrics
+│   │   ├── Input/                 input buffer / predictor
+│   │   ├── Network/               transport · server · spectator
+│   │   ├── State/                 snapshot manager
+│   │   ├── Serialization/         SpanWriter/Reader
+│   │   ├── Replay/                record / playback (LZ4)
+│   │   ├── ECS/                   Frame · components · systems
+│   │   ├── Deterministic/         FP64 · physics · navigation
+│   │   ├── Unity/                 Unity adapter
+│   │   ├── LiteNetLib/            UDP transport
+│   │   └── ThirdParty/            vendored deps
+│   ├── Godot~/                    Godot (.NET) adapter
+│   ├── Editor/                    Unity-only editor tools
+│   ├── Plugins/Analyzers/         source generator
+│   ├── Prefabs/                   debug prefabs (Unity)
+│   ├── Plugins~/Logging.Mel/      MEL interop sample
+│   └── Server~/                   dedicated-server projects
 │
-├── Samples/                                   ← standalone Unity/​.NET sample projects (each consumes the package via `file:`)
-│   ├── Brawler/               4-player fighting-game sample (+ dedicated server, NavMesh, tests)
-│   ├── P2pSample/             minimal P2P sample (Unity)
-│   ├── SdSample/              minimal ServerDriven sample (Unity client + .NET 8 dedicated server)
-│   └── LoggingMelConsole/     .NET console sample routing IKLogger through Microsoft.Extensions.Logging
+├── Samples/                       ← standalone samples
+│   ├── Brawler/                   4-player fighter (Unity)
+│   ├── P2pSample/                 minimal P2P (Unity)
+│   ├── SdSample/                  minimal Server-Driven (Unity)
+│   ├── GodotP2pSample/            minimal P2P (Godot)
+│   ├── GodotSdSample/             minimal Server-Driven (Godot)
+│   └── LoggingMelConsole/         .NET logging sample
 │
-├── Docs/                                      ← documentation (this folder)
-└── Tools/                                     ← .NET tooling (not redistributed)
-    ├── KlothoGenerator/       Roslyn source generator (`IIncrementalGenerator`) — built by gen.build.sh
-    ├── KlothoGenerator.Tests/ generator unit tests
-    ├── DeterminismVerification/ determinism verification (.NET console)
-    ├── PhysicsDeterminismProbe/ cross-platform FP determinism probe
-    └── gen.build.sh           generator build script
+├── Docs/                          ← documentation
+└── Tools/                         ← .NET tooling (internal)
+    ├── KlothoGenerator/           source generator
+    ├── KlothoGenerator.Tests/     generator tests
+    ├── DeterminismVerification/   determinism verifier
+    ├── PhysicsDeterminismProbe/   FP determinism probe
+    └── gen.build.sh               generator build script
 ```
 
 ---
 
 ## Quick Start
 
-### 1) Define a Component
+The four-step path — define a component → implement a system → wire callbacks → create & drive a session — is the same shape on both engines, but the session-driving and view layers are engine-specific. Pick the matching walkthrough (each is self-contained, with full code):
 
-```csharp
-[KlothoComponent(100)]  // 1–99: framework, 100+: game
-public partial struct HeroComponent : IComponent
-{
-    public int Level;
-    public int Experience;
-}
-```
+- **[Quick Start — Unity](Docs/QuickStart.Unity.md)** — `MonoBehaviour` controller, `KlothoSessionDriver`, `ScriptableObject` configs, UniTask joins, `EntityViewFactory` / `EntityViewUpdater` / `EntityView`.
+- **[Quick Start — Godot (.NET)](Docs/QuickStart.Godot.md)** — `Node` controller, `GodotSessionDriver` (`_Process`), `Resource` configs, standard `Task` joins, `EntityViewNode` / `EntityViewUpdaterNode` (`.tscn`).
 
-### 2) Implement a System
-
-```csharp
-public class HeroSystem : ISystem
-{
-    public void Update(ref Frame frame)
-    {
-        var filter = frame.Filter<HeroComponent, HealthComponent>();
-        while (filter.Next(out var entity))
-        {
-            ref var hero = ref frame.Get<HeroComponent>(entity);
-            // hero logic
-        }
-    }
-}
-```
-
-### 3) Implement Callbacks (determinism / view separation)
-
-```csharp
-public class MySimulationCallbacks : ISimulationCallbacks
-{
-    public void RegisterSystems(EcsSimulation sim) 
-    {
-         /* AddSystem registrations */
-    }
-    public void OnInitializeWorld(IKlothoEngine engine)
-    {
-        /* spawn initial world */
-    }
-    public void OnPollInput(int playerId, int tick, ICommandSender sender)
-    {
-        /* send commands */
-    }
-}
-
-public class MyViewCallbacks : IViewCallbacks
-{
-    public void OnGameStart(IKlothoEngine engine) { }
-    public void OnTickExecuted(int tick) { }
-    public void OnLateJoinActivated(IKlothoEngine engine) { }
-}
-```
-
-### 4) Create a Session via `KlothoSessionFlow`
-
-```csharp
-[SerializeField] private KlothoSessionDriver _sessionDriver;
-private KlothoSession _session;
-private KlothoSessionFlow _flow;
-
-void Awake()
-{
-    // Driver owns the Update / Stop lifecycle — no manual dt computation needed.
-    _sessionDriver.PreSessionUpdate += (s, dt) => _input.CaptureInput();
-}
-
-void Start()
-{
-    _flow = new KlothoSessionFlow(new KlothoFlowSetup
-    {
-        Logger            = logger,
-        Transport         = transport,
-        AssetRegistry     = dataAssetRegistry,
-        LifecycleObserver = this,
-        CallbacksFactory  = (simCfg, sessionCfg) =>
-            new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),
-    });
-    // Driver owns the main transport: it pumps it while idle and routes idle disconnects to
-    // IKlothoSessionObserver.OnIdleDisconnected. Bind once, before any session is created.
-    _sessionDriver.BindTransport(transport, this, _flow);
-    // Attach the created session to the driver from IKlothoSessionObserver.OnSessionCreated(session, kind).
-
-    // Single-call host bootstrap: StartHost + HostGame + Transport.Listen, with
-    // framework-side teardown if any step fails. MaxPlayers is read from uSessionConfig.
-    _session = _flow.StartHostAndListen(uSimulationConfig, uSessionConfig,
-                                        roomName: "MyRoom", address: "0.0.0.0", port: 9050);
-}
-```
-
-`KlothoSessionFlow` exposes these entry points — pick one per game mode:
-
-- `StartHostAndListen(simCfg, sessionCfg, roomName, address, port)` — P2P host (synchronous). Folds `StartHost` + `HostGame` + `Transport.Listen` into one call with framework-side teardown on failure; returns `null` on listen-bind failure (session already torn down), rethrows on other failures.
-- `StartHost(simCfg, sessionCfg)` — low-level P2P host (synchronous). Escape hatch for custom ordering / multi-transport / tests; the caller drives `HostGame` + `Transport.Listen`.
-- `JoinP2PAsync(transport, host, port, sessionCfg, ct)` — P2P guest join.
-- `JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, ct)` — ServerDriven client join (with roomId).
-- `ReconnectAsync(transport, creds, sessionConfigSeed, ct)` — cold-start reconnect; `creds` is a `PersistedReconnectCredentials` (carries `RoomId`, host address, and the magic token). Mode is recovered from the credentials.
-- `SpectateAsync(host, port, roomId, ct)` — spectator entry (transport is instantiated by `KlothoFlowSetup.SpectatorTransportFactory`).
-- `StartReplayFromFile(path)` — file-to-session replay (throws `ReplayLoadException` on load failure).
-
-If your game-side code needs to branch on the active mode, use `KlothoModeStrategy.Resolve(simCfg)` rather than inspecting `simCfg.Mode` directly. Session creation is observed through the single `IKlothoSessionObserver.OnSessionCreated(session, SessionEntryKind kind)` callback — branch on `kind` (`Host` / `Guest` / `Replay` / `Spectator`) instead of per-mode events. Stop teardown runs through the driver's `Stopping` hook.
+Steps 1–3 (component / system / callbacks) are engine-agnostic core; `KlothoSessionFlow` exposes the same entry points (`StartHostAndListen` / `JoinP2PAsync` / `JoinServerDrivenAsync` / `ReconnectAsync` / `SpectateAsync` / `StartReplayFromFile`) on both — Unity wraps the async ones in UniTask, Godot in standard `Task`. Session creation is observed through the single `IKlothoSessionObserver.OnSessionCreated(session, SessionEntryKind kind)` — branch on `kind`, not `simCfg.Mode`.
 
 Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameDevAPI.md](Docs/GameDevAPI.md)
 
@@ -357,6 +198,8 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 
 | Document | Contents |
 | ---- | ---- |
+| [Docs/Installation.Unity.md](Docs/Installation.Unity.md) · [Docs/Installation.Godot.md](Docs/Installation.Godot.md) | Engine-specific install (client + dedicated server) |
+| [Docs/QuickStart.Unity.md](Docs/QuickStart.Unity.md) · [Docs/QuickStart.Godot.md](Docs/QuickStart.Godot.md) | Engine-specific 5-step quick starts (component → system → callbacks → session → view) |
 | [Docs/FEATURES.md](Docs/FEATURES.md) | Full feature list |
 | [Docs/Specification.md](Docs/Specification.md) | Engine specification (state machines · configuration · events · message protocol · formats) |
 | [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md) | Synchronization design direction (determinism · two-chain model · prediction/rollback · timing · authority models · recovery ladder) |
@@ -365,7 +208,8 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/SimulationConfigGuide.md](Docs/SimulationConfigGuide.md) | SimulationConfig recommended-value guide (per genre / platform) |
 | [Docs/BaseLibraries.md](Docs/BaseLibraries.md) | List of base libraries used |
 | [Docs/Navigation.md](Docs/Navigation.md) | Deterministic navigation (FPNavMesh · A* · Funnel · ORCA) |
-| [Docs/Samples/](Docs/Samples/) | Detailed Brawler sample documentation |
+| [Docs/Samples/](Docs/Samples/) | Sample walkthroughs — Brawler, P2pSample, SdSample |
+| [Docs/Samples/GodotSdSample.md](Docs/Samples/GodotSdSample.md) · [Docs/Samples/GodotP2pSample.md](Docs/Samples/GodotP2pSample.md) | Godot (.NET) sample walkthroughs (architecture + Godot-specific gotchas) |
 
 ---
 
@@ -373,6 +217,6 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 
 - **Determinism first** — no float; all simulation state is FP64 / integer / bool
 - **Zero-GC oriented** — ref struct, object pools, cached fields, no LINQ
-- **Engine independence** — the core is pure C# (no `UnityEngine` references); Unity integration lives in an adapter layer
+- **Engine independence** — the core is pure C# (no `UnityEngine` / `Godot` references); engine integration (Unity / Godot) lives in adapter layers on top of the shared core
 - **Minimal bandwidth** — only inputs (commands) are sent; no state synchronization (only hash verification)
 - **Layer separation** — strict separation between simulation callbacks (deterministic) and view callbacks (non-deterministic)

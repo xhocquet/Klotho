@@ -1,6 +1,6 @@
 # Klotho Framework Feature List
 
-A deterministic multiplayer simulation framework for Unity.
+A deterministic multiplayer simulation framework for Unity and Godot (.NET).
 Supports client-side prediction, rollback, and frame synchronization.
 
 ---
@@ -77,7 +77,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **FPHash** — FNV-1a deterministic hashing
 - **FPAnimationCurve** — deterministic animation curves based on baked keyframes
 - **DeterministicRandom** — seeded RNG
-- **Unity conversions** — extension methods such as FPVector3 ↔ Vector3
+- **Engine conversions** — extension methods such as `FPVector3 ↔ Vector3` (same method names `ToVector3()` / `ToFPVector3()` on both engines; `FP*.Unity.cs` → `UnityEngine.Vector3`, `FP*.Godot.cs` → `Godot.Vector3`)
 
 ## Deterministic Physics
 
@@ -102,7 +102,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 ## Deterministic Navigation
 
-- **FPNavMesh** — deterministic navmesh (baked from Unity NavMesh)
+- **FPNavMesh** — deterministic navmesh (engine-agnostic runtime; the `.bytes` data is baked from a Unity NavMesh via the Editor exporter, then loaded on either engine)
   - Vertex / triangle arrays, adjacency, grid acceleration
 - **FPNavMeshSerializer** — navmesh-data serialization / deserialization
 - **NavAgentComponent / FPNavAgentSystem** — ECS agent component (speed, radius, stopping distance, status) + per-tick update system
@@ -237,7 +237,9 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **File format** — `RPLY` magic (uncompressed) / LZ4-compressed stream (K4os.Compression.LZ4)
 - **Implementations** — ReplayRecorder, ReplayPlayer, ReplaySystem, ReplayData
 
-## Editor
+## Editor *(Unity-only)*
+
+> These are Unity Editor tools (`com.xpturn.klotho/Editor/`). Godot has no equivalent editor tooling; the artifacts they produce (`.bytes` navmesh / collider data) are loaded on either engine at runtime.
 
 - **FPNavMeshExporter** — Unity NavMesh → FPNavMesh conversion (triangle baking + grid build)
 - **NavMesh Visualizer** — editor visualization tool
@@ -251,11 +253,13 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 ## Unity Integration
 
+> Most of the View / session-driving surface below mirrors 1:1 on Godot — see **[Godot Integration](#godot-integration)**. Items with no Godot counterpart are marked *(Unity-only)*.
+
 - **USimulationConfig** — ScriptableObject SimulationConfig (inspector-editable, implements `ISimulationConfig`)
 - **USessionConfig** — ScriptableObject SessionConfig (inspector-editable, implements `ISessionConfig`). All 16 session-level fields (MaxPlayers/MinPlayers/MaxSpectators, late-join/reconnect policy, chain-stall watchdog, countdown, match-end grace) author in one asset; `KlothoSessionSetup.SessionConfig` replaces the previous mirror-field set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/…)
-- **EcsDebugBridge** — editor debug bridge
+- **EcsDebugBridge** — editor debug bridge *(Unity-only)*
 - **View layer**
-  - **EntityView / EntityViewComponent** — entity-view base class and view-component interface
+  - **EntityView / EntityViewComponent** — entity-view base class and view-component interface (`EntityViewComponent` is *Unity-only*; Godot's counterpart is `EntityViewNode`)
     - **Standard transform pipeline** — `EntityView` performs lerp + `ApplyTransform` + `UpdatePositionParameter` populate in `InternalLateUpdateView` (fused with `_errorVisual.Tick`), so tick-rate < frame-rate environments reflect every per-frame `PredictedAlpha` change in the transform without stale-lerp stutter. `UpdatePositionParameter` zeros `ErrorVisualVector` / `ErrorVisualQuaternion` when `EnableSnapshotInterpolation` is set (verified-frame interpolation path no longer double-corrects the rollback delta). Games override `OnUpdateView` / `OnLateUpdateView` for game-data cache + visual feedback; the transform pipeline itself is base-delegated
     - **EngineEventOneShot.Subscribe\<TEvent\>(engine, filter, onPlay, onCancel, lateGuard) → EngineEventSubscription** — sealed `IDisposable` helper that wraps `OnEventPredicted` + `OnEventConfirmed` + `OnEventCanceled` 3-channel subscription with a late-dispatch guard. Predicted+Confirmed dispatch `onPlay` when `filter` + `lateGuard` pass; Canceled dispatches `onCancel` when `filter` passes. `Dispose()` unsubscribes from all three channels and nullifies handlers (multi-dispose safe). Scope is limited to Predicted/Confirmed/Canceled — verified-time fallback events (e.g. `ActionCompletedEvent`) keep using the `OnSyncedEvent` channel
   - **EntityViewFactory / IEntityViewPool / DefaultEntityViewPool** — view creation / pooling. The base `EntityViewFactory` resolves `BindBehaviour` / `ViewFlags` from a 5-flag decision (rolls up `RequiresBindBehaviour`, `HasViewComponentInterpolation`, `RequiresErrorCorrection`, `RequiresSnapshotInterpolation`, `RequiresViewComponentBinding`) — games override only when a sample-specific override is required
@@ -264,10 +268,25 @@ Supports client-side prediction, rollback, and frame synchronization.
   - **KlothoSessionDriver** — MonoBehaviour adapter that drives `KlothoSession.Update` / `Stop` through Unity's Update loop; exposes `PreSessionUpdate` / `PostSessionUpdate` / `Stopping` hooks for game-side input capture and cleanup, plus `BindTransport` to own the main transport's idle pumping + disconnect routing (`IKlothoSessionObserver.OnIdleDisconnected`)
   - **KlothoAutoReconnect / KlothoLogger** — cold-start credentials gate + IKLogger + Rolling File sink (Runtime.Unity helpers)
   - **VerifiedFrameInterpolator** — interpolation based on verified frames
-  - **BindBehaviour** — component-binding MonoBehaviour
-  - **UpdatePositionParameter / ViewFlags / ErrorVisualState** — auxiliary types
-- **FPStaticColliderOverride** — MonoBehaviour for overriding static-collider parameters
-- **FPStaticColliderVisualizer** — MonoBehaviour for scene visualization of static colliders
+  - **BindBehaviour / ViewFlags** — view-binding enums (Verified / NonVerified; snapshot-interpolation flags). Present on both engines (Godot defines them in `ViewEnums.cs`)
+  - **UpdatePositionParameter / ErrorVisualState** — auxiliary types (`UpdatePositionParameter` is *Unity-only*; `ErrorVisualState` exists on both)
+- **FPStaticColliderOverride** — MonoBehaviour for overriding static-collider parameters *(Unity-only)*
+- **FPStaticColliderVisualizer** — MonoBehaviour for scene visualization of static colliders *(Unity-only — Physics visualization has no Godot equivalent)*
+
+## Godot Integration
+
+The Godot (.NET) adapter (`com.xpturn.klotho/Godot~/Adapters/`) mirrors the Unity adapter on the same engine-agnostic core. It compiles as a single assembly `xpTURN.Klotho.Runtime.Godot` against the consumer's GodotSharp (no UniTask; standard `Task`).
+
+- **GodotSimulationConfig / GodotSessionConfig** — `Resource` configs (`[GlobalClass]` + `[Export]` fields, author as `.tres`), implement `ISimulationConfig` / `ISessionConfig`
+- **View layer**
+  - **EntityViewNode** — entity-view base (`Node3D`); same lifecycle callbacks as Unity's `EntityView` (`OnInitialize` / `OnActivate` / `OnUpdateView` / `OnLateUpdateView` / `OnDeactivate`)
+  - **EntityViewUpdaterNode** — simulation state → view sync (`Node`, `_Process` with `ProcessPriority = 1000`); owns **GodotPlayerViewRegistry\<EntityViewNode\>**
+  - **EntityViewFactory** — abstract factory (`ResolvePrefab → PackedScene`, `ShouldRender`, **synchronous** `Create` — no async wrapper); same `TryGetBindBehaviour` / `GetViewFlags` decision API as Unity
+  - **DefaultGodotEntityViewPool / VerifiedFrameInterpolator / EngineEventOneShot / ErrorVisualState / ViewEnums** — pooling, interpolation, one-shot event subscription, error-visual smoothing, `BindBehaviour`/`ViewFlags` enums
+- **GodotSessionDriver** — `Node` adapter that drives `KlothoSession.Update` / `Stop` through `_Process`; same `BindTransport` / idle-pump / `OnIdleDisconnected` semantics as `KlothoSessionDriver`
+- **GodotConnectionAsync / GodotSessionFlowAsync** — `Task`-based connect / join helpers (`JoinP2PAsync` / `JoinServerDrivenAsync` / `ReconnectAsync`); host start uses the core `KlothoSessionFlow.StartHostAndListen`
+- **GodotAutoReconnect / GodotReconnectCredentialsStore / GodotDeviceIdProvider** — cold-start reconnect (`user://` credential store, `OS.GetUniqueId()`)
+- **GodotDebugSink / GodotLogSink / GodotKLoggerFactory** — console sinks (`GD.Print` / `GD.PushError`); compose with the core `KLoggerFactory` + `AddRollingFile`
 
 ## Samples
 

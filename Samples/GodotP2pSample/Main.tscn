@@ -1,0 +1,114 @@
+[gd_scene format=3 uid="uid://bn31lqtqkw7qo"]
+
+[ext_resource type="Script" uid="uid://dudjox80xqp6y" path="res://P2pGameNode.cs" id="1_game"]
+[ext_resource type="Script" uid="uid://c15xq0kwp7xpl" path="res://GodotP2pMenu.cs" id="2_menu"]
+[ext_resource type="Script" uid="uid://dku1yh5uofl5o" path="res://GodotP2pHud.cs" id="3_hud"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(10, 10)
+
+[node name="Main" type="Node" unique_id=1398016829]
+script = ExtResource("1_game")
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=72809181]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 12, 0)
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=916969496]
+transform = Transform3D(1, 0, 0, 0, 0.707, -0.707, 0, 0.707, 0.707, 0, 6, 0)
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="." unique_id=143364500]
+mesh = SubResource("PlaneMesh_ground")
+
+[node name="UILayer" type="CanvasLayer" parent="." unique_id=292412634]
+
+[node name="Menu" type="Control" parent="UILayer" unique_id=311352211]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("2_menu")
+
+[node name="VBox" type="VBoxContainer" parent="UILayer/Menu" unique_id=1532782671]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 216.0
+offset_bottom = 240.0
+
+[node name="HostButton" type="Button" parent="UILayer/Menu/VBox" unique_id=2074901446]
+layout_mode = 2
+text = "Host"
+
+[node name="JoinButton" type="Button" parent="UILayer/Menu/VBox" unique_id=1424111546]
+layout_mode = 2
+text = "Join"
+
+[node name="ReadyButton" type="Button" parent="UILayer/Menu/VBox" unique_id=661458748]
+layout_mode = 2
+text = "Ready"
+
+[node name="StopButton" type="Button" parent="UILayer/Menu/VBox" unique_id=1938576507]
+layout_mode = 2
+text = "Stop"
+
+[node name="IpField" type="LineEdit" parent="UILayer/Menu/VBox" unique_id=901576841]
+layout_mode = 2
+text = "localhost"
+placeholder_text = "IP"
+
+[node name="PortField" type="LineEdit" parent="UILayer/Menu/VBox" unique_id=728170997]
+layout_mode = 2
+text = "777"
+placeholder_text = "Port"
+
+[node name="Hud" type="Control" parent="UILayer" unique_id=1473577042]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("3_hud")
+
+[node name="StateLabel" type="Label" parent="UILayer/Hud" unique_id=2018073406]
+layout_mode = 0
+offset_left = 300.0
+offset_top = 16.0
+offset_right = 600.0
+offset_bottom = 40.0
+text = "None"
+
+[node name="Score0Label" type="Label" parent="UILayer/Hud" unique_id=1182585222]
+layout_mode = 0
+offset_left = 300.0
+offset_top = 44.0
+offset_right = 600.0
+offset_bottom = 68.0
+text = "P1: 0"
+
+[node name="Score1Label" type="Label" parent="UILayer/Hud" unique_id=1393622769]
+layout_mode = 0
+offset_left = 300.0
+offset_top = 72.0
+offset_right = 600.0
+offset_bottom = 96.0
+text = "P2: 0"
+
+[node name="TimerLabel" type="Label" parent="UILayer/Hud" unique_id=351990539]
+layout_mode = 0
+offset_left = 300.0
+offset_top = 100.0
+offset_right = 600.0
+offset_bottom = 124.0
+text = "0s"
+
+[node name="ResultPanel" type="Panel" parent="UILayer/Hud" unique_id=1913952042]
+layout_mode = 0
+offset_left = 300.0
+offset_top = 140.0
+offset_right = 460.0
+offset_bottom = 200.0
+
+[node name="ResultLabel" type="Label" parent="UILayer/Hud/ResultPanel" unique_id=975199656]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 152.0
+offset_bottom = 52.0
+text = "RESULT"

@@ -1,0 +1,18 @@
+<!--
+  GodotP2pSample — standalone Godot 3D port of P2pSample (P2pSample-equivalent: UI, menu Host/Join,
+  one instance = one peer). Self-contained: the ECS sim (Sim/), the simulation callbacks (Game/) and
+  the data asset (Data/P2pAssets.bytes) are copied in, with no reference to the P2pSample project.
+  Godot.NET.Sdk game project; ProjectReferences the Godot adapter library (core transitively).
+  KlothoGenerator emits the [KlothoOrder]/[KlothoDataAsset] partials.
+-->
+<Project Sdk="Godot.NET.Sdk/4.6.3">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <Import Project="addons/klotho/Klotho.props" />
+</Project>

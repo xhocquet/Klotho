@@ -8,6 +8,7 @@ namespace xpTURN.Klotho.ECS.Json
     public sealed class DataAssetSerializationBinder : ISerializationBinder
     {
         private readonly Dictionary<string, Type> _typeCache = new Dictionary<string, Type>();
+        private readonly Dictionary<string, Type> _typeNameCache = new Dictionary<string, Type>();
         private bool _scanned;
 
         public Type BindToType(string assemblyName, string typeName)
@@ -19,6 +20,10 @@ namespace xpTURN.Klotho.ECS.Json
             EnsureScanned();
 
             if (_typeCache.TryGetValue(key, out cached))
+                return cached;
+
+            // Fallback: match by type name only — assembly name may differ across projects.
+            if (_typeNameCache.TryGetValue(typeName, out cached))
                 return cached;
 
             throw new JsonSerializationException(
@@ -50,8 +55,8 @@ namespace xpTURN.Klotho.ECS.Json
                     {
                         if (!type.IsAbstract && !type.IsInterface && iDataAsset.IsAssignableFrom(type))
                         {
-                            var key = $"{type.FullName}, {asmName}";
-                            _typeCache[key] = type;
+                            _typeCache[$"{type.FullName}, {asmName}"] = type;
+                            _typeNameCache.TryAdd(type.FullName, type);
                         }
                     }
                 }

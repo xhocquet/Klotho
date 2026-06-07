@@ -45,8 +45,8 @@ Strategies applied: object pooling (`DictionaryPoolHelper`, `ListPoolHelper`, `P
 
 ### Engine Independence
 
-The Klotho engine layer is designed to be **fully independent of the Unity engine**.
-Direct dependencies on the Unity API (`MonoBehaviour`, `UnityEngine.*`) are excluded, so that the same simulation core can be **executed unchanged on the server side (.NET console / ASP.NET)**.
+The Klotho engine layer is designed to be **fully engine-independent** (no Unity or Godot API).
+Direct dependencies on any engine API (`MonoBehaviour` / `UnityEngine.*`, `Node` / `Godot.*`) are excluded, so that the same simulation core can be **executed unchanged under the Unity and Godot (.NET) adapters and on the server side (.NET console / ASP.NET)**.
 
 | Use Case | Description |
 | ---- | ---- |
@@ -58,7 +58,7 @@ Direct dependencies on the Unity API (`MonoBehaviour`, `UnityEngine.*`) are excl
 **Implementation Principles**:
 
 - The engine core (`KlothoEngine`, `ISimulation`, `InputBuffer`, `FP64`, `Frame`, etc.) is pure C# — references to the `UnityEngine` namespace are forbidden
-- Unity integration (rendering, input collection, MonoBehaviour lifecycle) is handled in a separate **adapter/bridge layer**
+- Engine integration (rendering, input collection, MonoBehaviour / Node lifecycle) is handled in separate **adapter/bridge layers** — `Runtime/Unity/` for Unity, `Godot~/Adapters/` for Godot
 - External dependencies such as `INetworkTransport` and `ILogger` are isolated behind interface abstractions
 
 ### Network Layer Separation
@@ -74,7 +74,7 @@ Direct dependencies on the Unity API (`MonoBehaviour`, `UnityEngine.*`) are excl
 │  Input · InputAck · SyncCheck · Handshake │     low latency, per-channel delivery
 ├───────────────────────────────────────────┤
 │         Klotho Engine Layer               │  ← xpTURN.Klotho (pure C#)
-│  Prediction · Rollback · Snapshots · Det. │     Unity-independent, server-shared
+│  Prediction · Rollback · Snapshots · Det. │     engine-independent, server-shared
 └───────────────────────────────────────────┘
 ```
 
@@ -158,7 +158,7 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │   │                   FPStaticCollider, FPStaticBVH, FPStaticColliderSerializer,
 │   │   │                   FPNavMesh, FPNavMeshSerializer, NavAgentComponent, FPNavAgentSystem,
 │   │   │                   DeterministicRandom, FPAnimationCurve, etc.
-│   │   ├── Unity/          USimulationConfig, USessionConfig, EcsDebugBridge,
+│   │   ├── Unity/          Unity adapter — USimulationConfig, USessionConfig, EcsDebugBridge,
 │   │   │                   View/ (EntityView, EntityViewComponent, EntityViewFactory,
 │   │   │                          EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
 │   │   │                          BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
@@ -170,6 +170,10 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │   └── ThirdParty/     vendored: LiteNetLib.v2.1.4 (UDP networking),
 │   │                       K4os.Compression.LZ4.v1.3.8 (replay compression),
 │   │                       System.Runtime.CompilerServices.Unsafe.v6.1.2 (Span primitives)
+│   ├── Godot~/             Godot (.NET) adapter — Adapters/ (EntityViewNode, EntityViewUpdaterNode,
+│   │                       GodotSessionDriver, GodotConnectionAsync, GodotSessionFlowAsync,
+│   │                       GodotSimulationConfig/GodotSessionConfig (Resource), GodotDebugSink/GodotLogSink,
+│   │                       GodotDeviceIdProvider, GodotReconnectCredentialsStore) · Packaging/ · plugin.cfg/plugin.gd
 │   ├── Editor/             NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
 │   │                       Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
 │   │                       ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)
@@ -187,6 +191,8 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   ├── Brawler/            4-player fighting-game sample (+ dedicated server, NavMesh, tests)
 │   ├── P2pSample/          minimal P2P sample (Unity)
 │   ├── SdSample/           minimal ServerDriven sample (Unity client + .NET 8 dedicated server)
+│   ├── GodotP2pSample/     minimal P2P sample (Godot .NET)
+│   ├── GodotSdSample/      minimal ServerDriven sample (Godot client + .NET 8 dedicated server)
 │   └── LoggingMelConsole/  .NET console sample (IKLogger → Microsoft.Extensions.Logging)
 │
 ├── Docs/                   ← documentation
@@ -244,8 +250,8 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 ### 2.2 Default Configuration Values
 
 Configuration is split into two layers.
-- **`SimulationConfig` / `ISimulationConfig`** — Simulation parameters (affect determinism, identical across all peers). Injected via `KlothoSessionSetup.SimulationConfig`. Inspector-editable via `USimulationConfig` ScriptableObject.
-- **`SessionConfig` / `ISessionConfig`** — Session operation parameters (decided by the host, propagated via GameStart / LateJoinAccept / SpectatorAccept messages). Injected via `KlothoSessionSetup.SessionConfig` — replaces the previous per-field mirror set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/LateJoinDelayTicks/ReconnectTimeoutMs/ReconnectMaxRetries/LateJoinDelaySafety/RttSanityMaxMs/MinStallAbortTicks/CountdownDurationMs). Inspector-editable via `USessionConfig` ScriptableObject; `Create()` copies the values into the engine-owned `SessionConfig` (assets are never mutated).
+- **`SimulationConfig` / `ISimulationConfig`** — Simulation parameters (affect determinism, identical across all peers). Injected via `KlothoSessionSetup.SimulationConfig`. Editor-authorable via `USimulationConfig` ScriptableObject (Unity) or `GodotSimulationConfig` Resource (Godot, `[Export]` fields) — both implement `ISimulationConfig`.
+- **`SessionConfig` / `ISessionConfig`** — Session operation parameters (decided by the host, propagated via GameStart / LateJoinAccept / SpectatorAccept messages). Injected via `KlothoSessionSetup.SessionConfig` — replaces the previous per-field mirror set (RandomSeed/MaxPlayers/MinPlayers/AllowLateJoin/LateJoinDelayTicks/ReconnectTimeoutMs/ReconnectMaxRetries/LateJoinDelaySafety/RttSanityMaxMs/MinStallAbortTicks/CountdownDurationMs). Editor-authorable via `USessionConfig` ScriptableObject (Unity) or `GodotSessionConfig` Resource (Godot); `Create()` copies the values into the engine-owned `SessionConfig` (assets are never mutated).
 
 #### SimulationConfig Defaults
 
@@ -269,8 +275,10 @@ Configuration is split into two layers.
 | RttSanityMaxMs | 240 | ms | Upper bound for accepting avgRtt as a sane measurement. Samples exceeding this fall back to `LateJoinDelaySafety` only |
 | QuorumMissDropTicks | 20 | ticks | (P2P) Quorum-miss watchdog threshold. If a remote peer's input is missing at `_lastVerifiedTick + 1` for at least this many ticks, the peer is presumed-dropped and reactive empty-fill activates before the transport-level DisconnectTimeout. 0 disables. Safe range 10~80 |
 | MinStallAbortTicks | 600 | ticks | (P2P) Chain-stall watchdog threshold (peer-local). Aborts the match via `AbortMatch(AbortReason.ChainStallTimeout)` when `CurrentTick - LastVerifiedTick` exceeds `max(SessionConfig.ReconnectTimeoutMs / TickIntervalMs + 100, MinStallAbortTicks)`. Default 600 = 30s @ 50ms TickInterval. Guards against `ReconnectTimeoutMs` misconfiguration shorter than recovery floor |
-| EventDispatchWarnMs | 5 | ms | Warning threshold for OnEvent* handler execution time (DEVELOPMENT_BUILD / UNITY_EDITOR only). 0 or less = disabled |
+| EventDispatchWarnMs | 5 | ms | Warning threshold for OnEvent* handler execution time (dev-diagnostic — see note below). 0 or less = disabled |
 | TickDriftWarnMultiplier | 2 | × | Tick-loop drift warning multiplier (warns if actual interval > TickIntervalMs × multiplier). 0 or less = disabled |
+
+> **Dev-diagnostic build symbols (cross-engine note)**: the core gates many diagnostics — including the `EventDispatchWarnMs` warning — behind `#if DEVELOPMENT_BUILD || UNITY_EDITOR`. Both are **Unity-defined** symbols. On Unity they are active in the Editor / development builds automatically. On **Godot (.NET) and the .NET dedicated server** neither symbol is defined by default, so these diagnostics are **compiled out** — define `DEVELOPMENT_BUILD` in your game `.csproj` (`<DefineConstants>`) to enable them.
 
 #### SessionConfig Defaults
 
@@ -404,7 +412,7 @@ KlothoSession.Create(KlothoSessionSetup) → KlothoSession
   LeaveRoom()
   SendPlayerConfig(PlayerConfigBase)
   SetReady(bool)
-  Update(float dt)                              ← called from the game's MonoBehaviour.Update
+  Update(float dt)                              ← pumped by the driver: Unity MonoBehaviour.Update / Godot Node._Process
   Stop(keepReconnectCredentials = false)        ← keep=true on process-exit paths to preserve cold-start credentials
   IsStopped                                     ← teardown completed
   PlayerCount        ← unified getter: NetworkService → SpectatorService → 0 fallback
@@ -422,10 +430,11 @@ KlothoSessionFlow (recommended construction layer)
   StartReplayFromFile(path)                                                  → file → KlothoSession (throws ReplayLoadException)
   (session creation is observed via IKlothoSessionObserver.OnSessionCreated(session, kind) — branch on kind)
 
-KlothoSessionDriver (MonoBehaviour adapter — Runtime.Unity)
+KlothoSessionDriver (MonoBehaviour adapter — Runtime.Unity) / GodotSessionDriver (Node adapter — Godot~/Adapters)
   PreSessionUpdate / PostSessionUpdate / Stopping                            → lifecycle hooks
   BindTransport(transport, observer, flow)                                   → driver owns idle transport pumping + idle-disconnect routing → IKlothoSessionObserver.OnIdleDisconnected
   Attach(session) / DetachAndStop(keepReconnectCredentials = false)          → ownership transfer; OnDestroy passes keep=true; DetachAndStop is idempotent (internal re-entry guard)
+  (Unity drives via MonoBehaviour.Update; Godot drives via Node._Process — same Session.Update underneath)
 
 KlothoSessionSetup (Create input — direct path)
   Logger · SimulationCallbacks · ViewCallbacks

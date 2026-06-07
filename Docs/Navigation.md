@@ -2,6 +2,8 @@
 
 A deterministic NavMesh navigation system based on FP64. All computation runs on fixed-point arithmetic, guaranteeing synchronization across clients.
 
+> **Engine scope**: the navigation **runtime** (`FPNavMesh`, `FPNavMeshQuery`, `FPNavMeshPathfinder`, `FPNavAgentSystem`, …) is engine-agnostic core — it runs unchanged on Unity, Godot, and the .NET server. Only the **baking pipeline** (`FPNavMeshExporter` + the Editor visualizer) is **Unity-Editor-only**: it converts a Unity NavMesh to a `.bytes` asset, which either engine then loads at runtime (Unity via `TextAsset.bytes`, Godot via `Godot.FileAccess.GetFileAsBytes`).
+
 ## Components
 
 | Class | Role |
@@ -35,7 +37,7 @@ com.xpturn.klotho/Runtime/Deterministic/Navigation/
 ├── FPNavAvoidance.cs         # ORCA collision avoidance
 └── NavCorridorHelper.cs      # Corridor helper utilities
 
-com.xpturn.klotho/Editor/NavMesh/
+com.xpturn.klotho/Editor/NavMesh/   # Unity-Editor-only (baking + visualization; no Godot equivalent)
 ├── FPNavMeshExporter.cs          # Unity NavMesh → FPNavMesh conversion tool
 ├── FPNavMeshVisualizerWindow.cs  # NavMesh visualization editor window
 ├── FPNavMeshVisualizerData.cs    # Visualization state
@@ -48,8 +50,8 @@ com.xpturn.klotho/Editor/NavMesh/
 ## NavMesh Pipeline
 
 ```text
-Unity NavMesh ──[FPNavMeshExporter]──▸ .bytes file
-                                         │
+Unity NavMesh ──[FPNavMeshExporter]──▸ .bytes file      ← bake: Unity Editor only
+                                         │              ← load: any engine (Unity TextAsset / Godot FileAccess)
                             FPNavMeshSerializer.Deserialize()
                                          │
                                          ▼
@@ -143,8 +145,9 @@ Inside an ECS system, batch-process entities holding `NavAgentComponent` via `FP
 
 ```csharp
 // Bootstrap — load NavMesh and wire up the system (e.g., in a RegisterSystems hook)
-byte[] data = navMeshAsset.bytes;
-FPNavMesh navMesh = FPNavMeshSerializer.Deserialize(data);
+byte[] data = navMeshAsset.bytes;                                   // Unity (TextAsset)
+// Godot: byte[] data = Godot.FileAccess.GetFileAsBytes("res://Data/NavMesh.bytes");
+FPNavMesh navMesh = FPNavMeshSerializer.Deserialize(data);          // same binary format on both engines
 
 var query      = new FPNavMeshQuery(navMesh);
 var pathfinder = new FPNavMeshPathfinder(navMesh, query);
@@ -166,9 +169,9 @@ nav.HasNavDestination = true;
 navSystem.Update(ref frame, entities, entityCount, currentTick, dt);
 ```
 
-## NavMesh Export
+## NavMesh Export *(Unity-only — Editor)*
 
-Use the Unity Editor menu `Tools > Klotho > Export NavMesh` to export the current scene's Unity NavMesh to a `.bytes` file. Visualization is at `Tools > Klotho > Visualizer > NavMesh`.
+Use the Unity Editor menu `Tools > Klotho > Export NavMesh` to export the current scene's Unity NavMesh to a `.bytes` file. Visualization is at `Tools > Klotho > Visualizer > NavMesh`. (Godot has no equivalent baking tool — produce the `.bytes` from a Unity project, then ship it to your Godot project and load it via `FileAccess`.)
 
 - Vertex welding (WELD_EPSILON = 0.001)
 - Degenerate-triangle removal
@@ -188,4 +191,4 @@ Use the Unity Editor menu `Tools > Klotho > Export NavMesh` to export the curren
 
 ---
 
-*Last updated: 2026-04-24*
+*Last updated: 2026-06-07 (IMP53 — runtime engine-agnostic / baking Unity-Editor-only; Godot `.bytes` loading via FileAccess)*

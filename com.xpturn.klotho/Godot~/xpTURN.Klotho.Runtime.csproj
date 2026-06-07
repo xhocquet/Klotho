@@ -1,0 +1,49 @@
+<!--
+  xpTURN.Klotho.Runtime — Godot (.NET) build of the engine-agnostic core.
+
+  Same assembly name as the Unity and dedicated-server core (xpTURN.Klotho.Runtime);
+  this is the core "main", the Godot adapter (xpTURN.Klotho.Runtime.Godot) sits on top.
+
+  Single unified compilation of the engine-agnostic core for a Godot net8 host.
+  Mirrors the dedicated-server source-linking pattern, with two differences:
+    - Excludes only Unity/** (Json/** is included — the Godot client uses DataAsset JSON serialization).
+    - EnableDynamicLoading=true (assembly is loaded on Godot editor hot-reload / export).
+
+  Core sources are source-linked from ..\Runtime only (single source of truth, no forked copies).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>xpTURN.Klotho.Runtime</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- Match the Godot.NET.Sdk game/adapter configurations so solution/Export builds resolve this library. -->
+    <Configurations>Debug;Release;ExportDebug;ExportRelease</Configurations>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <KlothoRuntimeRoot>$(MSBuildThisFileDirectory)..\Runtime</KlothoRuntimeRoot>
+  </PropertyGroup>
+
+  <!-- Source Generator (prebuilt DLL shipped in package; rebuild via Tools/gen.build.sh in dev) -->
+  <ItemGroup>
+    <Analyzer Include="$(MSBuildThisFileDirectory)..\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <!-- NuGet -->
+  <ItemGroup>
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Runtime tree (engine-agnostic core + Logging + Gameplay + LiteNetLib transport + ThirdParty + DataAsset.Json).
+       Excludes: Unity/** (engine-coupled). Json/** is INCLUDED (client-side DataAsset JSON). -->
+  <ItemGroup>
+    <Compile Include="$(KlothoRuntimeRoot)\**\*.cs"
+             Exclude="$(KlothoRuntimeRoot)\Unity\**\*.cs"
+             Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

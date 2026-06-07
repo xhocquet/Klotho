@@ -144,8 +144,8 @@ _flow = new KlothoSessionFlow(new KlothoFlowSetup
     Transport         = transport,
     AssetRegistry     = dataAssetRegistry,
     CredentialsStore  = credentialsStore,         // optional — warm-reconnect ticket persistence
-    AppVersion        = Application.version,
-    DeviceIdProvider  = new UnityDeviceIdProvider(),
+    AppVersion        = Application.version,        // Godot: ProjectSettings.GetSetting("application/config/version") or a literal
+    DeviceIdProvider  = new UnityDeviceIdProvider(), // Godot: new GodotDeviceIdProvider()  (OS.GetUniqueId())
     LifecycleObserver = this,                     // bulk-subscribed IKlothoSessionObserver
     CallbacksFactory  = (simCfg, sessionCfg) =>
         new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),
@@ -308,9 +308,20 @@ public override void OnDeactivate()
 
 Scope is limited to the Predicted+Confirmed+Canceled triple. Verified-time fallback events (e.g. `ActionCompletedEvent`) keep using the `OnSyncedEvent` channel — `EngineEventOneShot` doesn't replace them.
 
-### Step 7: View Sync — EntityViewFactory / EntityViewUpdater (Unity)
+### Step 7: View Sync — EntityViewFactory / EntityViewUpdater
 
-The View layer combines **`EntityViewFactory` (ScriptableObject)** + **`EntityViewUpdater` (single MonoBehaviour in the scene)** + **`EntityView` (prefab MonoBehaviour)**. The Factory decides per-entity `BindBehaviour` (Verified / NonVerified) and `ViewFlags` (e.g., SnapshotInterpolation), and the Updater runs Reconcile on every `OnTickExecuted` to spawn/destroy automatically.
+The View layer is three pieces on both engines: a **Factory** (decides per-entity `BindBehaviour` (Verified / NonVerified) + `ViewFlags`, and creates the view), a single-scene **Updater** that runs Reconcile on every `OnTickExecuted` to spawn/destroy automatically, and the per-entity **View** itself. The engines differ only in the host types and how the view is instantiated:
+
+| Piece | Unity | Godot |
+| ---- | ---- | ---- |
+| Factory | `EntityViewFactory` (ScriptableObject; `ResolvePrefab → GameObject`) | `EntityViewFactory` (abstract class; `ResolvePrefab → PackedScene`) |
+| View creation | `async UniTask<EntityView> CreateAsync` | **synchronous** `EntityViewNode Create` |
+| Updater | `EntityViewUpdater` (MonoBehaviour, `Update`) | `EntityViewUpdaterNode` (`Node`, `_Process`, `ProcessPriority = 1000`) |
+| View | `EntityView` (prefab MonoBehaviour) | `EntityViewNode` (`Node3D` in a `.tscn`) |
+
+The decision API (`TryGetBindBehaviour` / `GetViewFlags`) and the view lifecycle callbacks (`OnInitialize` / `OnActivate` / `OnUpdateView` / `OnLateUpdateView` / `OnDeactivate`) are **identical** on both.
+
+**Unity:**
 
 ```csharp
 // 1. Factory subclass — author as a ScriptableObject and assign to the scene's EntityViewUpdater
@@ -403,6 +414,44 @@ evu.Cleanup();
 - **Factory init constraint** — do not query `Engine.LocalPlayerId` / `IsServer` from the constructor or `OnEnable`. Those values are only guaranteed inside `TryGetBindBehaviour` / `GetViewFlags` / `CreateAsync`.
 - **Pool** — wiring `DefaultEntityViewPool` to the `EntityViewUpdater._pool` field enables prefab reuse via `Rent` / `Return` (optional).
 
+**Godot:**
+
+The same three pieces, with `Node`-based hosts. The factory is a plain abstract class injected with a `PackedScene`, and `Create` is **synchronous** (instancing a `PackedScene` does not need `await`):
+
+```csharp
+// 1. Factory subclass — instantiated in code with the player scene (no ScriptableObject asset).
+public class HeroViewFactory : EntityViewFactory
+{
+    private readonly PackedScene _heroScene;
+    public HeroViewFactory(PackedScene heroScene) => _heroScene = heroScene;
+
+    protected override bool ShouldRender(Frame frame, EntityRef entity)
+        => frame.Has<HeroComponent>(entity);
+
+    protected override PackedScene ResolvePrefab(Frame frame, EntityRef entity)
+        => _heroScene;
+
+    // TryGetBindBehaviour / GetViewFlags: same signatures + semantics as Unity (override as needed).
+    // Create() is provided by the base (instantiates ResolvePrefab's PackedScene, root = EntityViewNode);
+    // override only for custom instancing.
+}
+
+// 2. View — subclass EntityViewNode (root of the .tscn). Same lifecycle callbacks as Unity's EntityView.
+public partial class HeroView : EntityViewNode
+{
+    public override void OnActivate(FrameRef frame) { base.OnActivate(frame); /* cache owner, etc. */ }
+    public override void OnUpdateView()            { base.OnUpdateView();     /* per-tick game data */ }
+    // OnInitialize / OnLateUpdateView / OnDeactivate / OwnerMatches — same contract as Unity.
+}
+
+// 3. Scene wiring — add an EntityViewUpdaterNode to the scene, assign the factory, Initialize on bootstrap.
+//    The node self-drives Reconcile via _Process (ProcessPriority = 1000, runs after the session driver).
+evu.Factory = new HeroViewFactory(heroScene);
+evu.Initialize(session.Engine);
+```
+
+The transform pipeline, Reconcile timing, hybrid dedup, and pooling (`DefaultGodotEntityViewPool`) behave the same as Unity — only the host types (`Node3D` / `.tscn` vs MonoBehaviour / prefab) and the synchronous `Create` differ.
+
 ---
 
-Last updated: 2026-05-31
+Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine View Sync)

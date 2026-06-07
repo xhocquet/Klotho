@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.9] - 2026-06-07
+
+### Godot (.NET) support
+
+- Godot view-layer adapter (`GodotEntityView`, `GodotEntityViewUpdater`, etc.) — opt-in view pooling, self-driven interpolation via `GodotSessionDriver`, `GodotSessionFlowAsync` join helpers, `GodotPlayerViewRegistry` (EVU auto-population), reconnect support, `EngineEventOneShot` port, `ErrorVisualState` desync blending, and Resource-based editor config assets.
+- **GodotP2pSample** — standalone Godot 4 P2P sample (top-down 3D, file + console logging, export-safe asset loading).
+- **GodotSdSample** — standalone Godot 4 ServerDriven sample; dedicated server moved to a sibling project `GodotSdSampleServer`.
+- Klotho Godot addon (`addons/klotho/`) — stable script UIDs, no-op `EditorPlugin` (enable-able), DataAsset JSON→bytes editor tool, and `KlothoServer.dll` bundled for server builds.
+
+### Fix
+
+- Added fallback for `IDataAsset` `$type` mismatch across engine assembly names.
+- `PlayerPrefsReconnectCredentialsStore`: switched JSON serializer from `JsonUtility` to Newtonsoft.Json.
+
+### Docs
+
+- Install guide split per engine (Unity / Godot) with server `.csproj` guidance.
+- Official docs fully revised to reflect dual-engine support.
+
 ## [0.2.8] - 2026-06-03
 
 ### Packaging — flat layout (breaking)

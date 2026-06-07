@@ -62,6 +62,68 @@ Server/  (dedicated .NET 8 console — NOT in Assets/)
 
 **Framework package reference** — there is a single top-level `com.xpturn.klotho/` package at the repo root; the sample does **not** embed a copy. The sample's `Packages/manifest.json` references it via `"com.xpturn.klotho": "file:../../../com.xpturn.klotho"`, so there's no per-version sync. The server `.csproj` `<ProjectReference>`s the per-assembly server projects under `..\..\..\com.xpturn.klotho\Server~\` (`KlothoServer` + `xpTURN.Klotho.Runtime`/`Logging`/`Gameplay`/`LiteNetLib`) via this fixed relative path; a git-fetched package would resolve to a hashed `Library/PackageCache/com.xpturn.klotho@<hash>/` path that an MSBuild project reference can't target reliably. (UniTask / Polyfill are still git-fetched via the manifest.)
 
+### 3.1 Server project file (`Server/SdSampleServer.csproj`)
+
+The server is a plain `net8.0` console `.csproj` living **outside** `Assets/` (Unity must not compile it). It assembles four things: (1) the framework via `Server~` project references, (2) the source generator, (3) the shared `Sim/*.cs` compiled straight into the exe, (4) the data asset + config JSON copied next to the output. The complete file, annotated:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>          <!-- ECS uses unsafe / fixed buffers -->
+    <Nullable>disable</Nullable>
+    <ServerGarbageCollection>true</ServerGarbageCollection> <!-- throughput GC for the tick loop -->
+  </PropertyGroup>
+
+  <!-- (1) Framework — the Server~ mirror assemblies (same split as the client asmdefs).
+       KlothoServer aggregates the bootstrap/config helpers and transitively pulls the rest at
+       runtime; Runtime/Logging/Gameplay/LiteNetLib are listed explicitly for compile-time visibility. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\KlothoServer\KlothoServer.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Gameplay\xpTURN.Klotho.Gameplay.csproj" />
+    <ProjectReference Include="..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+  </ItemGroup>
+
+  <!-- (2) Source generator — emits serialization + [ModuleInitializer] registration for the
+       game's [KlothoComponent] / [KlothoSerializable] types compiled below. Required, not optional. -->
+  <ItemGroup>
+    <Analyzer Include="..\..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <!-- (3) Shared deterministic sim — the SAME .cs the Unity client compiles, built into this exe.
+       Link= keeps them under a virtual Game/ folder in the IDE. This is what makes the server and
+       client build a byte-identical world. -->
+  <PropertyGroup>
+    <SdSimRoot>..\Assets\SdSample\Scripts\Sim</SdSimRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(SdSimRoot)\**\*.cs" Link="Game\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- (4) Runtime data next to the exe — the baked .bytes (run Tools > Klotho > JsonToBytes before the
+       first build) + the authoritative config JSON. The server reads these from its output directory. -->
+  <ItemGroup>
+    <Content Include="..\Assets\SdSample\Data\*.bytes">
+      <Link>Data\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="simulationconfig.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="sessionconfig.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+  </ItemGroup>
+</Project>
+```
+
+Key points when adapting this to your own game:
+
+- **Why `<ProjectReference>` and not a prebuilt DLL.** `CommandFactory` lives in `xpTURN.Klotho.Runtime`, so KlothoGenerator must emit **cross-assembly** `[ModuleInitializer]` registration for your sim types — that only works when the framework is a referenced *project* the generator can see, not an opaque DLL. At startup, `KlothoServerBootstrap.Initialize("SdSample", "xpTURN.Samples")` force-loads the split assemblies and runs warmups so every registration completes **before the first room**.
+- **The relative path.** `..\..\..\` reaches the repo-root `com.xpturn.klotho/` because this in-repo sample uses a `file:` manifest. In a consumer game, vendor the package as a **git submodule** and point the references at it with a fixed path; a UPM-fetched package resolves to `Library/PackageCache/com.xpturn.klotho@<hash>/Server~` whose hash changes every pull and can't be referenced reliably. Both patterns (submodule / `<KlothoServerRoot>` property) are in [Installation — Unity → Dedicated server](../Installation.Unity.md#2-dedicated-server-optional).
+- **Compile the sim, don't DLL it.** The `Compile Include` globs the *client's* `Sim/*.cs` into the server exe so both peers run identical deterministic code from one source. Keep the namespace identical (`xpTURN.Samples.SdSample`) so the AssetId-based `.bytes` loads unchanged on both sides.
+- **Build / run.** `dotnet build Server/SdSampleServer.csproj` then `dotnet run --project Server -- 7777` (port optional, default 7777).
+
 ---
 
 ## 4. Server bootstrap (single-room)

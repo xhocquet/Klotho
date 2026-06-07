@@ -1,0 +1,37 @@
+<!--
+  GodotDeterminismCheck — headless cross-build determinism check.
+
+  Runs the same determinism harness as the net8 console tool (Tools/DeterminismVerification),
+  but inside a Godot (.NET) process, and dumps per-tick state hashes. Comparing the output
+  against the net8 baseline proves the engine swap does not break determinism.
+
+  Shares the exact harness sources with the console tool (Brawler test harness), and the
+  same engine-agnostic core via ProjectReference. Only difference from the console tool is
+  the host: Godot.NET.Sdk + a Node entry point instead of a console Main.
+-->
+<Project Sdk="Godot.NET.Sdk/4.6.3">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <!-- Engine-agnostic core (Godot build) + KlothoGenerator for the harness-local types. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\com.xpturn.klotho\Godot~\xpTURN.Klotho.Runtime.csproj" />
+    <Analyzer Include="..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <!-- Same determinism harness the net8 console tool source-links (Unity MonoBehaviour runners excluded). -->
+  <PropertyGroup>
+    <VerificationRoot>..\..\Samples\Brawler\Assets\Tests\DeterminismVerification</VerificationRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(VerificationRoot)\Components\*.cs" Link="Verification\Components\%(Filename)%(Extension)" />
+    <Compile Include="$(VerificationRoot)\Systems\*.cs" Link="Verification\Systems\%(Filename)%(Extension)" />
+    <Compile Include="$(VerificationRoot)\Commands\*.cs" Link="Verification\Commands\%(Filename)%(Extension)" />
+    <Compile Include="$(VerificationRoot)\HashDumpWriter.cs" Link="Verification\HashDumpWriter.cs" />
+  </ItemGroup>
+</Project>

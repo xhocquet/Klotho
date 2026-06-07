@@ -1,0 +1,46 @@
+<!--
+  NP2 — Adapter source-only NuGet pack project (xpTURN.Klotho.Runtime.Godot).
+
+  Ships the Godot adapter as SOURCE (no DLL): the adapter references Godot (GodotSharp), so compiling it
+  in the consumer's project against the consumer's own GodotSharp avoids any version coupling. The package
+  carries Adapters/**/*.cs under src/ and a buildTransitive props that adds them as Compile items + sets
+  AllowUnsafeBlocks. Depends on the core package (xpTURN.Klotho.Runtime), which transitively brings the
+  generator analyzer and the Newtonsoft/K4os/LiteNetLib runtime deps.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <SuppressDependenciesWhenPacking>false</SuppressDependenciesWhenPacking>
+    <!-- NU5128: package has dependencies but no lib/ (expected for a source-only package). -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>xpTURN.Klotho.Runtime.Godot</PackageId>
+    <Version>0.2.9</Version>
+    <Authors>xpTURN</Authors>
+    <Description>Godot (.NET) adapter for the Klotho deterministic lockstep core — shipped as source so it compiles against the consumer's GodotSharp.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageTags>godot;deterministic;lockstep;netcode;ecs</PackageTags>
+  </PropertyGroup>
+
+  <!-- Core package dependency. PrivateAssets=none so the core's analyzer (KlothoGenerator) and runtime
+       deps flow transitively — a consumer that references only the adapter still gets the generator. -->
+  <ItemGroup>
+    <PackageReference Include="xpTURN.Klotho.Runtime" Version="0.2.9" PrivateAssets="none" />
+  </ItemGroup>
+
+  <!-- Ship adapter sources + the buildTransitive props that compiles them in the consumer. -->
+  <ItemGroup>
+    <None Include="..\Adapters\**\*.cs"
+          Pack="true"
+          PackagePath="src\Adapters\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="build\xpTURN.Klotho.Runtime.Godot.props"
+          Pack="true"
+          PackagePath="buildTransitive\xpTURN.Klotho.Runtime.Godot.props" />
+  </ItemGroup>
+
+</Project>

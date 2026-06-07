@@ -56,7 +56,7 @@ The design payoff of treating this as an *invariant* rather than a *best-effort*
 
 - **State is reconstructible from inputs alone.** This is what makes rollback cheap (Section 6) and what lets the network carry inputs only (Section 8).
 - **Verification reduces to equality of a hash.** If two peers ran the same inputs and got different hashes, the *only* possible cause is a determinism violation — there is no "acceptable drift." That sharpens desync into a binary, debuggable signal (Section 9).
-- **The same binary runs on client and server.** The engine core is pure C# with no `UnityEngine` dependency, so the authoritative server and the client run *the identical simulation* — there is no second implementation to keep in sync. This is a synchronization decision disguised as an architecture decision: it removes an entire class of client/server divergence by construction.
+- **The same binary runs on client and server.** The engine core is pure C# with no `UnityEngine` / Godot dependency, so the authoritative server and the client run *the identical simulation* — there is no second implementation to keep in sync. This is a synchronization decision disguised as an architecture decision: it removes an entire class of client/server divergence by construction.
 
 Because determinism is load-bearing, the engine ships a **determinism validator** ([SyncTestRunner.cs](com.xpturn.klotho/Runtime/Core/Sync/SyncTestRunner.cs)) that, every few ticks, rolls back and re-simulates the same inputs and asserts the hash is unchanged. This catches non-determinism in development *before* it reaches the network as a desync (Section 9.5).
 

@@ -1,0 +1,7 @@
+{
+  "MaxPlayers": 2,
+  "MinPlayers": 2,
+  "AllowLateJoin": false,
+  "MaxSpectators": 0,
+  "CountdownDurationMs": 3000
+}

@@ -1,0 +1,13 @@
+; Godot 4 project — GodotDeterminismCheck (headless cross-build determinism check).
+
+config_version=5
+
+[application]
+
+config/name="GodotDeterminismCheck"
+config/features=PackedStringArray("4.4", "C#", "Forward Plus")
+run/main_scene="res://Main.tscn"
+
+[dotnet]
+
+project/assembly_name="GodotDeterminismCheck"

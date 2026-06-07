@@ -1,0 +1,32 @@
+<!--
+  xpTURN.Klotho.Runtime.Godot — Godot adapter library (mirror of xpTURN.Klotho.Runtime.Unity).
+
+  Godot counterparts of the Unity adapter layer (Runtime/Unity/**) live here:
+  GodotSessionDriver (Node._Process -> Tick) / EntityViewNode (Node3D) / GodotDebugSink (IKLogger) /
+  Deterministic/*.Godot.cs (FP64 <-> Godot.Vector3), etc.
+
+  Uses Godot.NET.Sdk (same as the game projects) so GodotSharp is provided consistently — a plain
+  Microsoft.NET.Sdk + GodotSharp PackageReference gets its GodotSharp dropped from the shared obj on a
+  game's transitive/csproj-direct restore (-> CS0400). EnableDefaultCompileItems is disabled and only
+  Adapters/** is compiled, so the SDK's generated obj/.godot sources are not double-included (CS0579).
+  EnableDynamicLoading=true so the assembly is loaded on Godot editor hot-reload / export.
+-->
+<Project Sdk="Godot.NET.Sdk/4.6.3">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>xpTURN.Klotho.Runtime.Godot</AssemblyName>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Adapters\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="xpTURN.Klotho.Runtime.csproj" />
+  </ItemGroup>
+</Project>

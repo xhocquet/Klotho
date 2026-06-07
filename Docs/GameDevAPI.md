@@ -194,8 +194,8 @@ var setup = new KlothoSessionSetup
     SessionConfig       = uSessionConfig,    // ScriptableObject or any ISessionConfig (host only — guest ignored, populated by GameStartMessage / LateJoinAcceptMessage / ReconnectAcceptMessage)
     AssetRegistry       = dataAssetRegistry, // optional: externally built registry
     CredentialsStore    = credentialsStore,  // optional: warm-reconnect save/clear (guest)
-    AppVersion          = Application.version,
-    DeviceIdProvider    = new UnityDeviceIdProvider(),
+    AppVersion          = Application.version,        // Godot: ProjectSettings.GetSetting("application/config/version") or a literal
+    DeviceIdProvider    = new UnityDeviceIdProvider(), // Godot: new GodotDeviceIdProvider()  (OS.GetUniqueId())
     LifecycleObserver   = this,              // implements IKlothoSessionObserver (see §3.1)
 };
 var session = KlothoSession.Create(setup);
@@ -257,9 +257,14 @@ Cold-start reconnect (via `KlothoConnectionAsync.ReconnectAsync` / `KlothoConnec
 
 Normal join (`JoinP2PAsync` / `JoinServerDrivenAsync`) surfaces failure through `JoinFailedException` — catch it and branch on `e.Reason` (`JoinFailReason`). Transport/handshake reasons: `TransportStartFailed` / `TimedOut` / `ConnectionLost` / `Rejected` / `HostClosed` / `Unknown`. Server application-level rejections: `RoomFull` / `RoomNotFound` / `RoomClosing` / `LateJoinDisabled` / `ServerFull`. Cancellation surfaces as `OperationCanceledException`, not `JoinFailedException`. Notes: `ConnectionLost` (transport `NetworkFailure`) is the dominant "can't reach host" case; `Rejected` is transport-level only (wrong connection key / protocol mismatch), distinct from the server's app-level `RoomFull` / `RoomClosing` / etc.
 
-### Driving the Session in Unity
+### Driving the Session
 
-Drive the session through `KlothoSessionDriver` — a MonoBehaviour that owns the `Update`/`Stop` loop and exposes `PreSessionUpdate` / `PostSessionUpdate` hooks (session teardown is observed through `IKlothoSessionObserver`, not a driver hook). The driver also owns the main transport: it pumps it while no session is attached (idle) and routes idle disconnects to `IKlothoSessionObserver.OnIdleDisconnected` — bind it once via `BindTransport`, before any session is created. Attach the driver as a `[SerializeField]` on the game controller prefab and wire hooks in `Awake`.
+Drive the session through a **session driver** — an engine adapter node that owns the `Update`/`Stop` loop and exposes `PreSessionUpdate` / `PostSessionUpdate` hooks (session teardown is observed through `IKlothoSessionObserver`, not a driver hook). The driver also owns the main transport: it pumps it while no session is attached (idle) and routes idle disconnects to `IKlothoSessionObserver.OnIdleDisconnected` — bind it once via `BindTransport`, before any session is created.
+
+- **Unity** — `KlothoSessionDriver` (MonoBehaviour, drives via `Update`). Attach as a `[SerializeField]` on the game controller prefab and wire hooks in `Awake`.
+- **Godot** — `GodotSessionDriver` (`Node`, drives via `_Process`). Add it to the scene tree and wire hooks in `_Ready`. Same `BindTransport` / `Attach` / `DetachAndStop` API and idle-pump / `OnIdleDisconnected` semantics.
+
+The Unity example below shows the pattern; the Godot equivalent swaps the host type and `Awake`→`_Ready` (see [GodotP2pSample.md](Samples/GodotP2pSample.md)).
 
 ```csharp
 [SerializeField] private KlothoSessionDriver _sessionDriver;
@@ -314,7 +319,7 @@ var setup = new KlothoFlowSetupBuilder(callbacksFactory)   // required dependenc
     .WithTransport(transport)            // host / replay default transport
     .WithAssetRegistry(assetRegistry)
     .WithLifecycleObserver(this)         // IKlothoSessionObserver
-    .WithUnityDefaults()                 // AppVersion + UnityDeviceIdProvider (Runtime.Unity layer)
+    .WithUnityDefaults()                 // AppVersion + UnityDeviceIdProvider (Runtime.Unity layer). Godot: .WithHandshake(appVersion, new GodotDeviceIdProvider())
     .WithReconnect(credentialsStore)     // optional — requires WithHandshake / WithUnityDefaults
     .WithAutoPlayerConfig(() => new MyPlayerConfig { /* ... */ })  // optional
     .WithSpectator(() => new LiteNetLibTransport(/* ... */))       // optional — no-transport SpectateAsync
@@ -324,6 +329,8 @@ var flow = new KlothoSessionFlow(setup);
 ```
 
 `Build()` throws `FlowSetupValidationException` when `WithReconnect` is set without handshake identity (`WithHandshake` / `WithUnityDefaults`) — reconnect credentials are minted by a prior normal join, which needs that identity. Constructing `KlothoFlowSetup` directly via object initializer remains supported as a low-level escape hatch (custom validation bypass / tests).
+
+> **Godot**: there is no `WithGodotDefaults` — `WithUnityDefaults()` is just a Unity-layer shortcut for the core `WithHandshake(string appVersion, IDeviceIdProvider)`. On Godot call `.WithHandshake(appVersion, new GodotDeviceIdProvider())` directly (which equally satisfies the `WithReconnect` handshake-identity requirement). `WithHandshake` lives in `Runtime/Core`, so it is engine-agnostic.
 
 | Mode | Entry | Notes |
 |---|---|---|
@@ -632,10 +639,12 @@ private void OnTickExecuted(int tick)
     while (filter.Next(out var entity))
     {
         ref readonly var t = ref frame.GetReadOnly<TransformComponent>(entity);
-        GetView(entity).transform.position = t.Position.ToUnityVector3();
+        GetView(entity).transform.position = t.Position.ToVector3();   // FP→engine vector; same call on Godot (returns Godot.Vector3)
     }
 }
 ```
+
+> The conversion extension is named `ToVector3()` on both engines (`FP*.Unity.cs` returns `UnityEngine.Vector3`, `FP*.Godot.cs` returns `Godot.Vector3`) — there is no `ToUnityVector3` / `ToGodotVector3`.
 
 > A game's View should read frames via `engine.PredictedFrame.Frame` (`FrameRef.Frame`) — it accesses the frame type-safely without the `(EcsSimulation)engine.Simulation` downcast, and returns `null` outside the ring-buffer range, so the call site just adds a null guard. On engine-internal paths that hold the `Simulation` instance directly, `_simulation.Frame` is equivalent.
 
@@ -656,8 +665,8 @@ private void OnTickExecuted(int tick)
 
 ### View transform pipeline
 
-`EntityView` base class handles lerp + `_errorVisual` composition + `VerifiedFrameInterpolator` branching as the
-standard path. Every view receives one `ApplyTransform` call per frame (during Unity LateUpdate). Subclasses only
+The view base class (`EntityView` on Unity, `EntityViewNode` on Godot) handles lerp + `_errorVisual` composition + `VerifiedFrameInterpolator` branching as the
+standard path. Every view receives one `ApplyTransform` call per frame — driven by **Unity `LateUpdate`** / **Godot `EntityViewUpdaterNode._Process`** (`ProcessPriority = 1000`, after the session driver). Subclasses only
 override `ApplyTransform` when special split is required (e.g. root vs interpolation target); regular views just
 inherit the base path.
 
@@ -911,4 +920,4 @@ Constructing `RoomManagerConfig` directly via object initializer (and passing it
 
 ---
 
-*Last updated: 2026-06-01*
+*Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine: session driving, Flow handshake, view conversions/timing)*
