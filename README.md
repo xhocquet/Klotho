@@ -148,6 +148,8 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
 │   ├── Plugins~/Logging.Mel/      MEL interop sample
 │   └── Server~/                   dedicated-server projects
 │
+├── addons/klotho/                 ← Godot addon
+│
 ├── Samples/                       ← standalone samples
 │   ├── Brawler/                   4-player fighter (Unity)
 │   ├── P2pSample/                 minimal P2P (Unity)
