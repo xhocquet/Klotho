@@ -23,13 +23,13 @@ namespace xpTURN.Klotho.Godot
             {
                 if (p.EndsWith(".json"))
                 {
-                    AddContextMenuItem("Convert DataAsset JSON -> bytes", Callable.From(OnConvert));
+                    AddContextMenuItem("Convert DataAsset JSON -> bytes", Callable.From<string[]>(OnConvert));
                     return;
                 }
             }
         }
 
-        private void OnConvert()
+        private void OnConvert(string[] paths)
         {
             _tool?.ConvertSelected();
         }

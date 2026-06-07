@@ -162,7 +162,7 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
     ├── KlothoGenerator.Tests/     generator tests
     ├── DeterminismVerification/   determinism verifier
     ├── PhysicsDeterminismProbe/   FP determinism probe
-    └── gen.build.sh               generator build script
+    └── gen.sh                     generator build script
 ```
 
 ---

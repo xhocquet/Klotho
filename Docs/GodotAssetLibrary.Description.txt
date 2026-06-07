@@ -1,0 +1,61 @@
+Klotho — Deterministic multiplayer netcode for Godot (.NET)
+
+Engine-agnostic, pure C# deterministic simulation for rollback, lockstep, and
+server-authoritative multiplayer. Determinism is built on 32.32 fixed-point math
+(FP64) and a seeded RNG: given the same inputs, every peer computes identical
+state — so the network sends inputs only and verifies with a hash. Frame-perfect
+and cross-platform reproducible.
+
+
+REQUIRES
+
+- Godot 4.4+ with .NET (mono) support
+- A C# (.NET 8) game project
+
+
+FEATURES
+
+- Netcode: P2P lockstep, rollback + client prediction, server-driven
+  (authoritative), dedicated server, spectator, late join, reconnect
+- Deterministic core: FP64 fixed-point math, vectors / quaternions / matrices,
+  seeded RNG (Xorshift128+)
+- ECS: sparse-set components, zero-GC frame, snapshot + rollback ring buffer
+- Deterministic physics: rigid bodies, collisions, CCD, joints, triggers, static BVH
+- Deterministic navigation: navmesh + A* + funnel + ORCA avoidance
+- Replay: record / playback / seek / variable speed (LZ4 compressed)
+- Source generator: serialization + component / command registration
+- Godot adapter: Node session driver + view nodes, Resource config assets,
+  Task-based join helpers, console + rolling-file logging
+
+
+INSTALL & SETUP
+
+1. Install from the Asset Library (or copy the folder) so that the addon sits at
+   res://addons/klotho/.
+
+2. Add one line to your game .csproj:
+
+       <Import Project="addons/klotho/Klotho.props" />
+
+3. Build the C# solution (dotnet build, or the Godot editor's Build button).
+   - NuGet deps (Newtonsoft.Json, K4os.Compression.LZ4, LiteNetLib) restore
+     automatically via Klotho.props.
+
+4. (Optional) Project > Project Settings > Plugins: enable "Klotho" for the
+   DataAsset JSON -> bytes editor tool. Build the project once before enabling.
+
+
+DEDICATED SERVER (optional)
+
+The server is a plain .NET 8 console app with no Godot dependency, running the
+same core. In a separate server .csproj add:
+
+       <Import Project="addons/klotho/Klotho.Server.props" />
+
+
+LINKS
+
+- Source & docs: https://github.com/xpTURN/Klotho
+- Quick start (Godot): Docs/QuickStart.Godot.md
+- Install guide (Godot): Docs/Installation.Godot.md
+

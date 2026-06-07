@@ -23,7 +23,7 @@
     <KlothoGameplayRoot>$(MSBuildThisFileDirectory)..\Runtime\Gameplay</KlothoGameplayRoot>
   </PropertyGroup>
 
-  <!-- Source Generator (prebuilt DLL shipped in package; rebuild via Tools/gen.build.sh in dev) -->
+  <!-- Source Generator (prebuilt DLL shipped in package; rebuild via Tools/gen.sh in dev) -->
   <ItemGroup>
     <Analyzer Include="$(MSBuildThisFileDirectory)..\Plugins\Analyzers\KlothoGenerator.dll" />
   </ItemGroup>

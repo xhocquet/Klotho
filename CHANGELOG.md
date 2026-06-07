@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.10] - 2026-06-07
+
+### Fix
+
+- `KlothoJsonContextMenu`: fixed `AddContextMenuItem` callback signature — `Callable.From(OnConvert)` wrapped a zero-argument method while Godot passes the selected paths array, causing an `ArgumentException`; changed to `Callable.From<string[]>` with a matching `Action<string[]>` signature.
+
 ## [0.2.9] - 2026-06-07
 
 ### Godot (.NET) support

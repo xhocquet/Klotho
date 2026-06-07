@@ -197,11 +197,11 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │
 ├── Docs/                   ← documentation
 └── Tools/                  ← .NET tooling (not redistributed)
-    ├── KlothoGenerator/    Roslyn source generator project (built by gen.build.sh)
-    ├── KlothoGenerator.Tests/  generator unit tests
+    ├── KlothoGenerator/         Roslyn source generator project (built by gen.sh)
+    ├── KlothoGenerator.Tests/   generator unit tests
     ├── DeterminismVerification/ determinism verification (.NET console)
     ├── PhysicsDeterminismProbe/ cross-platform FP determinism probe
-    └── gen.build.sh        generator build script
+    └── gen.sh                   generator build script
 ```
 
 ---
