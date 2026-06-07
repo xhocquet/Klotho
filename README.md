@@ -94,7 +94,7 @@ Three-layer separation:
 ## Tech Stack
 
 - **Unity 2022.3+** — scripting backends: Mono / IL2CPP (AOT-safe; serialization via source generation, no runtime codegen/reflection)
-- **Godot 4.4+ (mono / .NET, net8.0)** — the Godot adapter ships as `addons/klotho/` (prebuilt core DLL + adapter source). See [Installation — Godot](Docs/Installation.Godot.md).
+- **Godot 4.4+ (mono / .NET, net8.0)** — the Godot adapter ships as `addons/klotho/` (prebuilt core DLL + adapter source).
 - **C# language level** — Unity targets **C# 8.0** with the `xpTURN.Polyfill` package supplying the runtime-attribute shims required by C# 11; the Godot adapter is **net8.0 / `LangVersion latest`** and needs no polyfill (native `init` / `required`).
 - **UniTask** — async on Unity only (Cysharp). The **Godot adapter uses the standard library `Task`** — no UniTask dependency.
 - **xpTURN.Klotho.Logging (IKLogger)** — in-house structured logging (no external logging dependency). Optional MEL interop via the `Plugins~/Logging.Mel` sample adapter (`Microsoft.Extensions.Logging.Abstractions` DLL is consumer-provided).
