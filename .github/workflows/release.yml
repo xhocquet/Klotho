@@ -1,0 +1,48 @@
+name: Release Addon Package
+
+on:
+  push:
+    tags:
+      - 'v*'           # v1.0.0 형태 태그 push 시 발동
+  workflow_dispatch:   # Actions 탭에서 수동 실행도 가능
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get commit hash & tag
+        id: meta
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Build addon zip
+        run: |
+          mkdir -p dist
+
+          # addons/ 폴더만 포함 (불필요한 파일 제외)
+          zip -r dist/Klotho-addons-${{ steps.meta.outputs.sha }}.zip \
+            addons/ \
+            --exclude "*.import" \
+            --exclude "*/.DS_Store" \
+            --exclude "*/Thumbs.db"
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: |
+            ## Klotho ${{ steps.meta.outputs.tag }}
+
+            ### 설치 방법
+            1. zip 다운로드 후 압축 해제
+            2. `addons/` 폴더를 프로젝트 루트에 복사
+            3. Project → Project Settings → Plugins → Klotho 활성화
+          files: dist/Klotho-addons-${{ steps.meta.outputs.sha }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
