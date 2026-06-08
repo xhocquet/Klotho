@@ -44,7 +44,7 @@ jobs:
           body: |
             ## Klotho ${{ steps.meta.outputs.tag }}
 
-            ### Installation
+            ### Godot(.NET) Installation
             1. Download the zip and extract it
             2. Copy the `addons/` folder to your project root
             3. Go to Project → Project Settings → Plugins → Enable Klotho
