@@ -6,8 +6,8 @@ permissions:
 on:
   push:
     tags:
-      - 'v*'           # v1.0.0 형태 태그 push 시 발동
-  workflow_dispatch:   # Actions 탭에서 수동 실행도 가능
+      - 'v*'           # Triggered on tag push in v1.0.0 format
+  workflow_dispatch:   # Can also be run manually from the Actions tab
 
 jobs:
   build:
@@ -29,8 +29,8 @@ jobs:
         run: |
           mkdir -p dist
 
-          # addons/ 폴더만 포함 (불필요한 파일 제외)
-          zip -r dist/Klotho-addons-${{ steps.meta.outputs.sha }}.zip \
+          # Include only the addons/ folder (exclude unnecessary files)
+          zip -r dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip \
             addons/ \
             --exclude "*.import" \
             --exclude "*/.DS_Store" \
@@ -44,10 +44,10 @@ jobs:
           body: |
             ## Klotho ${{ steps.meta.outputs.tag }}
 
-            ### 설치 방법
-            1. zip 다운로드 후 압축 해제
-            2. `addons/` 폴더를 프로젝트 루트에 복사
-            3. Project → Project Settings → Plugins → Klotho 활성화
-          files: dist/Klotho-addons-${{ steps.meta.outputs.sha }}.zip
+            ### Installation
+            1. Download the zip and extract it
+            2. Copy the `addons/` folder to your project root
+            3. Go to Project → Project Settings → Plugins → Enable Klotho
+          files: dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
