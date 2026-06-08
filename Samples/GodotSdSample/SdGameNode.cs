@@ -20,7 +20,6 @@ namespace xpTURN.Samples.SdSample
 		private const string ConnectionKey = "xpTURN.SdSample";
 		private const int    RoomId        = 0;
 
-		private IKLoggerFactory     _loggerFactory;
 		private IKLogger            _logger;
 		private IDataAssetRegistry  _registry;
 		private LiteNetLibTransport _transport;
@@ -63,14 +62,15 @@ namespace xpTURN.Samples.SdSample
 			_hud  = GetNode<GodotSdHud>("UILayer/Hud");
 			_viewCallbacks = new GodotSdViewCallbacks(_hud);
 
-			_flow = new KlothoSessionFlow(new KlothoFlowSetup
-			{
-				Logger        = _logger,
-				Transport     = _transport,
-				AssetRegistry = _registry,
-				CallbacksFactory = (s, ss) =>
-					new SessionCallbacks(new SdSimulationCallbacks(_input), _viewCallbacks),
-			});
+			_flow = new KlothoSessionFlow(
+				new KlothoFlowSetupBuilder((s, ss) =>
+						new SessionCallbacks(new SdSimulationCallbacks(_input), _viewCallbacks))
+					.WithLogger(_logger)
+					.WithTransport(_transport)
+					.WithAssetRegistry(_registry)
+					.WithGodotDefaults()
+					.Build()
+			);
 
 			var playerScene = GD.Load<PackedScene>("res://player.tscn");
 			_factory = new SdEntityViewFactory(playerScene);
@@ -105,7 +105,7 @@ namespace xpTURN.Samples.SdSample
 		{
 			if (_session != null || _joining) return;
 			_joining = true;
-			_joinTask = _flow.JoinServerDrivenAsync(_transport, _menu.Host, _menu.Port, RoomId, _sesCfg, _logger);
+			_joinTask = _flow.JoinServerDrivenAsync(_transport, _menu.Host, _menu.Port, RoomId, _sesCfg);
 		}
 
 		private void OnReady()
@@ -186,17 +186,8 @@ namespace xpTURN.Samples.SdSample
 			}
 		}
 
-		// Logs to the Godot console (GodotLogSink) and to a rolling file under user://logs.
-		private IKLogger CreateLogger()
-		{
-			string logDir = ProjectSettings.GlobalizePath("user://logs");
-			System.IO.Directory.CreateDirectory(logDir);
-			_loggerFactory = KLoggerFactory.Create(b => b
-				.SetMinimumLevel(KLogLevel.Information)
-				.AddSink(new GodotLogSink())
-				.AddRollingFile(o => { o.FilePrefix = "Sd"; o.Directory = logDir; }));
-			return _loggerFactory.CreateLogger("Sd");
-		}
+		private static IKLogger CreateLogger()
+			=> GodotKlothoLogger.CreateDefault(filePrefix: "Sd", categoryName: "Sd");
 
 		// Configure the 3D view in code (LookAt avoids hand-written, easy-to-mistake basis matrices in .tscn).
 		private void SetupView3D()
@@ -243,7 +234,6 @@ namespace xpTURN.Samples.SdSample
 			_viewCallbacks?.Cleanup();
 			_pool?.Dispose();
 			_input?.Dispose();
-			_loggerFactory?.Dispose();   // flush + close the rolling file
 		}
 	}
 }

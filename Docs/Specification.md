@@ -172,8 +172,12 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │                       System.Runtime.CompilerServices.Unsafe.v6.1.2 (Span primitives)
 │   ├── Godot~/             Godot (.NET) adapter — Adapters/ (EntityViewNode, EntityViewUpdaterNode,
 │   │                       GodotSessionDriver, GodotConnectionAsync, GodotSessionFlowAsync,
+│   │                       GodotFlowSetupBuilderExtensions (WithGodotDefaults),
 │   │                       GodotSimulationConfig/GodotSessionConfig (Resource), GodotDebugSink/GodotLogSink,
-│   │                       GodotDeviceIdProvider, GodotReconnectCredentialsStore) · Packaging/ · plugin.cfg/plugin.gd
+│   │                       GodotKlothoLogger (CreateDefault), GodotDeviceIdProvider,
+│   │                       GodotReconnectCredentialsStore,
+│   │                       Deterministic/ FPRay3·FPPlane·FPBounds3 Godot conversion helpers)
+│   │                       · Packaging/ · plugin.cfg/plugin.gd
 │   ├── Editor/             NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
 │   │                       Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
 │   │                       ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)

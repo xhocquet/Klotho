@@ -77,7 +77,7 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **FPHash** — FNV-1a deterministic hashing
 - **FPAnimationCurve** — deterministic animation curves based on baked keyframes
 - **DeterministicRandom** — seeded RNG
-- **Engine conversions** — extension methods such as `FPVector3 ↔ Vector3` (same method names `ToVector3()` / `ToFPVector3()` on both engines; `FP*.Unity.cs` → `UnityEngine.Vector3`, `FP*.Godot.cs` → `Godot.Vector3`)
+- **Engine conversions** — extension methods such as `FPVector3 ↔ Vector3` (same method names `ToVector3()` / `ToFPVector3()` on both engines; `FP*.Unity.cs` → `UnityEngine.Vector3`, `FP*.Godot.cs` → `Godot.Vector3`). Geometry adapters: `FPRay3` (tuple decomposition + `ToRayQuery` → `PhysicsRayQueryParameters3D` on Godot; `ToRay` → `UnityEngine.Ray` on Unity), `FPPlane` (`ToPlane`/`ToFPPlane` — sign inversion on Godot: `D = −distance`), `FPBounds3` (`ToAabb`/`ToFPBounds3` on Godot; `ToBounds`/`ToFPBounds3` on Unity)
 
 ## Deterministic Physics
 
@@ -285,6 +285,8 @@ The Godot (.NET) adapter (`com.xpturn.klotho/Godot~/Adapters/`) mirrors the Unit
   - **DefaultGodotEntityViewPool / VerifiedFrameInterpolator / EngineEventOneShot / ErrorVisualState / ViewEnums** — pooling, interpolation, one-shot event subscription, error-visual smoothing, `BindBehaviour`/`ViewFlags` enums
 - **GodotSessionDriver** — `Node` adapter that drives `KlothoSession.Update` / `Stop` through `_Process`; same `BindTransport` / idle-pump / `OnIdleDisconnected` semantics as `KlothoSessionDriver`
 - **GodotConnectionAsync / GodotSessionFlowAsync** — `Task`-based connect / join helpers (`JoinP2PAsync` / `JoinServerDrivenAsync` / `ReconnectAsync`); host start uses the core `KlothoSessionFlow.StartHostAndListen`
+- **GodotFlowSetupBuilderExtensions** — `WithGodotDefaults()`: reads AppVersion from `ProjectSettings` + injects `GodotDeviceIdProvider` via `WithHandshake` in one call; falls back to `"0.0.0"` when no version is set. Mirrors `WithUnityDefaults()` on the Unity side
+- **GodotKlothoLogger** — `CreateDefault()`: `GodotLogSink` + `RollingFileSink` combined, defaulting to `ProjectSettings.GlobalizePath("user://logs")` (required for exported apps where relative paths are not writable). Mirrors `KlothoLogger.CreateDefault()` on the Unity side
 - **GodotAutoReconnect / GodotReconnectCredentialsStore / GodotDeviceIdProvider** — cold-start reconnect (`user://` credential store, `OS.GetUniqueId()`)
 - **GodotDebugSink / GodotLogSink / GodotKLoggerFactory** — console sinks (`GD.Print` / `GD.PushError`); compose with the core `KLoggerFactory` + `AddRollingFile`
 

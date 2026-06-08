@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.11] - 2026-06-08
+
+### Godot adapter parity
+
+- **`GodotFlowSetupBuilderExtensions`** — adds `WithGodotDefaults()`: reads app version from `ProjectSettings` + injects `GodotDeviceIdProvider` via `WithHandshake` in one call; falls back to `"0.0.0"` when no version is set.
+- **`KlothoSessionFlow.Logger` / `DeviceIdProvider` made public** — promoted from `internal` so cross-assembly Godot adapters can access them directly without re-passing as explicit parameters.
+- **`GodotSessionFlowAsync` fix** — removed the explicit `logger` parameter from all join/reconnect methods; `flow.Logger` and `flow.DeviceIdProvider` are now referenced directly, matching `KlothoSessionFlowAsync` on the Unity side. Fixes `PlayerJoinMessage.DeviceId` always being empty.
+- **Deterministic Geometry adapters** — added Godot conversion helpers for `FPRay3`, `FPPlane`, and `FPBounds3`.
+  - `FPRay3`: tuple decomposition (`ToRay` / `ToFPRay3`) + `PhysicsRayQueryParameters3D` helper (`ToRayQuery`).
+  - `FPPlane`: `ToPlane` / `ToFPPlane` — applies sign inversion (`Godot.Plane.D = −FPPlane.distance`; different equation convention, not a handedness issue).
+  - `FPBounds3`: `ToAabb` / `ToFPBounds3` — maps `Godot.Aabb` Position=min-corner / Size=full-size layout.
+- **`GodotKlothoLogger`** — adds `CreateDefault()`: `GodotLogSink` + `RollingFileSink` combined, defaulting to `ProjectSettings.GlobalizePath("user://logs")` (required for exported apps where relative paths are not writable).
+- **Samples** — `GodotP2pSample` and `GodotSdSample` updated to use `KlothoFlowSetupBuilder` + `WithGodotDefaults()` and `GodotKlothoLogger.CreateDefault()`.
+
 ## [0.2.10] - 2026-06-07
 
 ### Fix

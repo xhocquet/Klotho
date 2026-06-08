@@ -145,7 +145,7 @@ _flow = new KlothoSessionFlow(new KlothoFlowSetup
     AssetRegistry     = dataAssetRegistry,
     CredentialsStore  = credentialsStore,         // optional — warm-reconnect ticket persistence
     AppVersion        = Application.version,        // Godot: ProjectSettings.GetSetting("application/config/version") or a literal
-    DeviceIdProvider  = new UnityDeviceIdProvider(), // Godot: new GodotDeviceIdProvider()  (OS.GetUniqueId())
+    DeviceIdProvider  = new UnityDeviceIdProvider(), // Godot: new GodotDeviceIdProvider() (OS.GetUniqueId()); or use .WithGodotDefaults() on the builder (recommended)
     LifecycleObserver = this,                     // bulk-subscribed IKlothoSessionObserver
     CallbacksFactory  = (simCfg, sessionCfg) =>
         new SessionCallbacks(new MySimulationCallbacks(), new MyViewCallbacks()),

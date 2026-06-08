@@ -211,11 +211,11 @@ namespace xpTURN.Klotho.Core
         internal void FireOnSessionCreatedForSpectator(KlothoSession session)
             => FireOnSessionCreated(session, SessionEntryKind.Spectator);
 
-        // Read accessors for the async wrapper (KlothoSessionFlowAsync). Internal because the
-        // game already holds these references directly — the async layer needs them only because
-        // KlothoConnectionAsync takes them as explicit handshake parameters.
-        internal IKLogger Logger => _setup.Logger;
-        internal IDeviceIdProvider DeviceIdProvider => _setup.DeviceIdProvider;
+        // Read accessors for the async wrapper (KlothoSessionFlowAsync). Public so cross-assembly
+        // adapters (e.g. Godot) can forward them to connection helpers without re-requiring the caller
+        // to pass them explicitly.
+        public IKLogger Logger => _setup.Logger;
+        public IDeviceIdProvider DeviceIdProvider => _setup.DeviceIdProvider;
         internal Func<INetworkTransport> SpectatorTransportFactory => _setup.SpectatorTransportFactory;
 
         // True while a main-transport connect handshake (Join / Reconnect) is in flight. The driver

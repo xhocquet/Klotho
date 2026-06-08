@@ -54,7 +54,7 @@ com.xpturn.klotho/Godot~/                         (shared, unchanged)
        View:  EntityViewNode / EntityViewUpdaterNode / EntityViewFactory / VerifiedFrameInterpolator
               DefaultGodotEntityViewPool / GodotPlayerViewRegistry / EngineEventOneShot / ErrorVisualState
        Flow:  GodotSessionDriver / GodotSessionFlowAsync / GodotConnectionAsync
-       Misc:  GodotDebugSink / GodotLogSink / FP*.Godot.cs (+ reconnect & Resource-config helpers)
+       Misc:  GodotDebugSink / GodotLogSink / GodotKlothoLogger / FP*.Godot.cs incl. FPRay3·FPPlane·FPBounds3 (+ reconnect & Resource-config helpers)
 
 Samples/GodotP2pSample/   (Godot.NET.Sdk game; ProjectReference → adapter → core)
   Sim/   (copied)         PlayerComponent / MoveCommand / Movement·Score·RespawnSystem / GameOverEvent / PlayerStatsAsset
@@ -96,15 +96,15 @@ A `GodotSessionDriver` child node pumps the transport every frame — even befor
 ```
 _Ready  → WarmupRegistry.RunAll(); CreateLogger (console + rolling file)
         → LoadAssetRegistry (FileAccess on res://Data/P2pAssets.bytes)
-        → KlothoFlowSetup { Logger, Transport, AssetRegistry,
-              CallbacksFactory = new SessionCallbacks(new P2pSimulationCallbacks(input), viewCallbacks) }
+        → KlothoFlowSetupBuilder(callbacksFactory).WithLogger(...).WithTransport(...).WithAssetRegistry(...).WithGodotDefaults().Build()
+              (sets AppVersion from ProjectSettings + GodotDeviceIdProvider via WithGodotDefaults)
         → P2pEntityViewFactory(player.tscn); DefaultGodotEntityViewPool.Prewarm(player.tscn, MaxPlayers)
         → EntityViewUpdaterNode + GodotSessionDriver (added as children)
         → driver.BindTransport(transport); driver.PreSessionUpdate += capture input when Running
         → wire menu buttons; SetupView3D()
 
 Host  → flow.StartHostAndListen(simCfg, sessCfg, "Game", host, port)   → _session (return value) → OnSessionReady
-Join  → flow.JoinP2PAsync(transport, host, port, sessCfg, logger)       (async Task; resolved in _Process) → OnSessionReady
+Join  → flow.JoinP2PAsync(transport, host, port, sessCfg)               (async Task; resolved in _Process) → OnSessionReady
 OnSessionReady → view.Initialize(session.Engine, factory, pool); driver.Attach(session); enable Ready/Stop
 Ready → _session.SetReady(true)
 Stop  → driver.DetachAndStop(); view.Cleanup(); viewCallbacks.Cleanup()
@@ -136,7 +136,7 @@ Same surface as the Unity uGUI versions: menu = 4 `Button`s + 2 `LineEdit` (IP/P
 
 ### 5-6. Logging
 
-`P2pGameNode` logs through `IKLogger` to **both** the Godot console (`GodotLogSink`) and a rolling file under `user://logs`, composed via `KLoggerFactory.Create(b => b.AddSink(new GodotLogSink()).AddRollingFile(...))`. `GodotLogSink` (an `IKLogSink` added to the adapter) lets Godot-console output combine with the file sink.
+`P2pGameNode` logs through `IKLogger` to **both** the Godot console (`GodotLogSink`) and a rolling file under `user://logs`, via `GodotKlothoLogger.CreateDefault(filePrefix: "P2p", categoryName: "P2p")`. The default directory resolves to `ProjectSettings.GlobalizePath("user://logs")` — an absolute path that is writable in both the editor and exported apps.
 
 ---
 

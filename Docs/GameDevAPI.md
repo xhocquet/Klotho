@@ -305,7 +305,7 @@ Session teardown is idempotent at the framework level (`KlothoSession.Stop` `_st
 
 State observation is exclusively through `IKlothoSessionObserver` (§3.1: `OnStateChanged` / `OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged`) — backed by `IKlothoNetworkService.OnPhaseChanged` / `OnPlayerCountChanged` / `OnAllPlayersReadyChanged` and `KlothoEngine.OnStateChanged`, with network-service + spectator-service `OnPlayerCountChanged` forwarded so one observer works across host / guest / spectator. These four callbacks line up 1:1 with the four `IKlothoSession` read properties above — subscribe for transitions, read the property for the current value.
 
-Logger channel: prefer `engine.Logger` / `frame.Logger` for runtime logging. `KlothoLogger.CreateDefault` is an escape hatch — use it only when a separate category or rolling-file destination is needed.
+Logger channel: prefer `engine.Logger` / `frame.Logger` for runtime logging. `KlothoLogger.CreateDefault` (Unity) / `GodotKlothoLogger.CreateDefault` (Godot) are escape hatches — use them only when a separate category or rolling-file destination is needed.
 
 ### 3.2 KlothoSessionFlow — mode-dispatched entry points
 
@@ -319,7 +319,7 @@ var setup = new KlothoFlowSetupBuilder(callbacksFactory)   // required dependenc
     .WithTransport(transport)            // host / replay default transport
     .WithAssetRegistry(assetRegistry)
     .WithLifecycleObserver(this)         // IKlothoSessionObserver
-    .WithUnityDefaults()                 // AppVersion + UnityDeviceIdProvider (Runtime.Unity layer). Godot: .WithHandshake(appVersion, new GodotDeviceIdProvider())
+    .WithUnityDefaults()                 // AppVersion + UnityDeviceIdProvider (Runtime.Unity layer). Godot: .WithGodotDefaults() (Godot~/Adapters layer)
     .WithReconnect(credentialsStore)     // optional — requires WithHandshake / WithUnityDefaults
     .WithAutoPlayerConfig(() => new MyPlayerConfig { /* ... */ })  // optional
     .WithSpectator(() => new LiteNetLibTransport(/* ... */))       // optional — no-transport SpectateAsync
@@ -330,7 +330,7 @@ var flow = new KlothoSessionFlow(setup);
 
 `Build()` throws `FlowSetupValidationException` when `WithReconnect` is set without handshake identity (`WithHandshake` / `WithUnityDefaults`) — reconnect credentials are minted by a prior normal join, which needs that identity. Constructing `KlothoFlowSetup` directly via object initializer remains supported as a low-level escape hatch (custom validation bypass / tests).
 
-> **Godot**: there is no `WithGodotDefaults` — `WithUnityDefaults()` is just a Unity-layer shortcut for the core `WithHandshake(string appVersion, IDeviceIdProvider)`. On Godot call `.WithHandshake(appVersion, new GodotDeviceIdProvider())` directly (which equally satisfies the `WithReconnect` handshake-identity requirement). `WithHandshake` lives in `Runtime/Core`, so it is engine-agnostic.
+> **Godot**: use `.WithGodotDefaults()` (`Godot~/Adapters/GodotFlowSetupBuilderExtensions`) — it reads AppVersion from `ProjectSettings` and injects `GodotDeviceIdProvider` via the core `.WithHandshake(appVersion, deviceIdProvider)` in one call, mirroring `.WithUnityDefaults()`. Both satisfy the `WithReconnect` handshake-identity requirement. `.WithHandshake` lives in `Runtime/Core` and is engine-agnostic if you prefer to call it directly.
 
 | Mode | Entry | Notes |
 |---|---|---|

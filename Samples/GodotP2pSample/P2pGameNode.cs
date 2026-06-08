@@ -18,7 +18,6 @@ namespace xpTURN.Samples.P2pSample
 	{
 		private const string ConnectionKey = "xpTURN.P2pSample";
 
-		private IKLoggerFactory     _loggerFactory;
 		private IKLogger            _logger;
 		private IDataAssetRegistry  _registry;
 		private LiteNetLibTransport _transport;
@@ -59,14 +58,15 @@ namespace xpTURN.Samples.P2pSample
 			_hud  = GetNode<GodotP2pHud>("UILayer/Hud");
 			_viewCallbacks = new GodotP2pViewCallbacks(_hud);
 
-			_flow = new KlothoSessionFlow(new KlothoFlowSetup
-			{
-				Logger        = _logger,
-				Transport     = _transport,
-				AssetRegistry = _registry,
-				CallbacksFactory = (s, ss) =>
-					new SessionCallbacks(new P2pSimulationCallbacks(_input), _viewCallbacks),
-			});
+			_flow = new KlothoSessionFlow(
+				new KlothoFlowSetupBuilder((s, ss) =>
+						new SessionCallbacks(new P2pSimulationCallbacks(_input), _viewCallbacks))
+					.WithLogger(_logger)
+					.WithTransport(_transport)
+					.WithAssetRegistry(_registry)
+					.WithGodotDefaults()
+					.Build()
+			);
 
 			var playerScene = GD.Load<PackedScene>("res://player.tscn");
 			_factory = new P2pEntityViewFactory(playerScene);
@@ -109,7 +109,7 @@ namespace xpTURN.Samples.P2pSample
 		{
 			if (_session != null || _joining) return;
 			_joining = true;
-			_joinTask = _flow.JoinP2PAsync(_transport, _menu.Host, _menu.Port, _sesCfg, _logger);
+			_joinTask = _flow.JoinP2PAsync(_transport, _menu.Host, _menu.Port, _sesCfg);
 		}
 
 		private void OnReady()
@@ -189,17 +189,8 @@ namespace xpTURN.Samples.P2pSample
 			}
 		}
 
-		// Logs to the Godot console (GodotLogSink) and to a rolling file under user://logs.
-		private IKLogger CreateLogger()
-		{
-			string logDir = ProjectSettings.GlobalizePath("user://logs");
-			System.IO.Directory.CreateDirectory(logDir);
-			_loggerFactory = KLoggerFactory.Create(b => b
-				.SetMinimumLevel(KLogLevel.Information)
-				.AddSink(new GodotLogSink())
-				.AddRollingFile(o => { o.FilePrefix = "P2p"; o.Directory = logDir; }));
-			return _loggerFactory.CreateLogger("P2p");
-		}
+		private static IKLogger CreateLogger()
+			=> GodotKlothoLogger.CreateDefault(filePrefix: "P2p", categoryName: "P2p");
 
 		// Configure the 3D view in code (LookAt avoids hand-written, easy-to-mistake basis matrices in .tscn).
 		private void SetupView3D()
@@ -248,7 +239,6 @@ namespace xpTURN.Samples.P2pSample
 			_viewCallbacks?.Cleanup();
 			_pool?.Dispose();
 			_input?.Dispose();
-			_loggerFactory?.Dispose();   // flush + close the rolling file
 		}
 	}
 }

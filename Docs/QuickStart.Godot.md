@@ -103,7 +103,7 @@ using System.Threading.Tasks;
 using global::Godot;
 using xpTURN.Klotho.Core;          // KlothoSessionFlow, KlothoFlowSetup, IS*Config, IKlothoSessionObserver, KlothoState
 using xpTURN.Klotho.ECS;           // IDataAssetRegistry
-using xpTURN.Klotho.Godot;         // GodotSessionDriver, Godot*Config, GodotDeviceIdProvider, GodotKLoggerFactory
+using xpTURN.Klotho.Godot;         // GodotSessionDriver, Godot*Config, GodotKlothoLogger, GodotFlowSetupBuilderExtensions
 using xpTURN.Klotho.LiteNetLib;    // LiteNetLibTransport
 using xpTURN.Klotho.Network;       // INetworkTransport
 
@@ -119,23 +119,22 @@ public partial class PongController : Node, IKlothoSessionObserver
 
     public override void _Ready()
     {
-        var logger     = new GodotKLoggerFactory().CreateLogger("Pong");
+        var logger     = GodotKlothoLogger.CreateDefault(categoryName: "Pong");   // GodotLogSink + RollingFileSink under user://logs
         _transport     = new LiteNetLibTransport(logger, connectionKey: "pong");
         _simConfig     = GD.Load<GodotSimulationConfig>("res://Config/Simulation.tres"); // Resource
         _sessionConfig = GD.Load<GodotSessionConfig>("res://Config/Session.tres");
         _registry      = BuildAssetRegistry();   // your DataAssetRegistry, e.g. built from a .bytes asset (FileAccess)
 
-        _flow = new KlothoSessionFlow(new KlothoFlowSetup
-        {
-            Logger            = logger,
-            Transport         = _transport,
-            AssetRegistry     = _registry,
-            AppVersion        = (string)ProjectSettings.GetSetting("application/config/version"),
-            DeviceIdProvider  = new GodotDeviceIdProvider(),   // OS.GetUniqueId(); needed for Reconnect
-            LifecycleObserver = this,
-            CallbacksFactory  = (sim, sess) =>
-                new SessionCallbacks(new PongSimulationCallbacks(_input), new PongViewCallbacks()),
-        });
+        _flow = new KlothoSessionFlow(
+            new KlothoFlowSetupBuilder((sim, sess) =>
+                    new SessionCallbacks(new PongSimulationCallbacks(_input), new PongViewCallbacks()))
+                .WithLogger(logger)
+                .WithTransport(_transport)
+                .WithAssetRegistry(_registry)
+                .WithGodotDefaults()              // AppVersion from ProjectSettings + GodotDeviceIdProvider
+                .WithLifecycleObserver(this)
+                .Build()
+        );
 
         _driver = new GodotSessionDriver();
         AddChild(_driver);                                     // _Process pumps the transport while idle
@@ -153,8 +152,8 @@ public partial class PongController : Node, IKlothoSessionObserver
     // Join as a guest — standard Task (await it from an async method).
     public async Task Join(string host, int port)
     {
-        var session = await _flow.JoinP2PAsync(_transport, host, port, _sessionConfig,
-                                               new GodotKLoggerFactory().CreateLogger("Join"));
+        var session = await _flow.JoinP2PAsync(_transport, host, port, _sessionConfig);
+        // Logger and DeviceIdProvider are pulled from flow automatically (flow.Logger / flow.DeviceIdProvider).
         _driver.Attach(session);
     }
 
@@ -212,12 +211,10 @@ A full reference lives in [`Samples/GodotP2pSample/`](../Samples/GodotP2pSample/
 `KlothoSessionFlow` exposes these (engine-agnostic; the async joins come from `GodotSessionFlowAsync` as `Task`) — pick one per mode:
 
 - `StartHostAndListen(simCfg, sessionCfg, roomName, address, port)` — P2P host (sync, core).
-- `JoinP2PAsync(transport, host, port, sessionCfg, logger)` — P2P guest (`Task<KlothoSession>`).
-- `JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg, logger)` — Server-Driven client.
-- `ReconnectAsync(transport, creds, sessionConfigSeed, logger)` — cold-start reconnect (`creds` = `PersistedReconnectCredentials`). Requires a `DeviceIdProvider` + `AppVersion` set on the setup (step 4).
+- `JoinP2PAsync(transport, host, port, sessionCfg)` — P2P guest (`Task<KlothoSession>`). Logger and DeviceIdProvider are pulled from `flow` automatically.
+- `JoinServerDrivenAsync(transport, host, port, roomId, sessionCfg)` — Server-Driven client.
+- `ReconnectAsync(transport, creds, sessionConfigSeed)` — cold-start reconnect (`creds` = `PersistedReconnectCredentials`). Requires `WithGodotDefaults()` (or `.WithHandshake(appVersion, deviceIdProvider)`) on the builder — reconnect credentials are minted during the initial join.
 - Spectator / replay follow the core `KlothoSessionFlow` surface.
-
-> There is no `WithGodotDefaults` builder helper — if you build via `KlothoFlowSetupBuilder`, call the core `.WithHandshake(appVersion, new GodotDeviceIdProvider())` to satisfy `WithReconnect`'s handshake-identity requirement.
 
 Session creation / state is observed through the single `IKlothoSessionObserver` — branch on `OnSessionCreated`'s `SessionEntryKind`, not `simCfg.Mode`.
 

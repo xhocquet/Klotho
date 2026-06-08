@@ -15,6 +15,16 @@ self-contained distribution — drop it into your Godot project and add one line
 addons/klotho/
 ├── bin/xpTURN.Klotho.Runtime.dll   engine-agnostic core (prebuilt; no Godot API → no GodotSharp coupling)
 ├── Adapters/                       Godot adapter SOURCE (+ .cs.uid for stable script UIDs)
+│   ├── View/                       entity view layer (EntityViewNode, EntityViewUpdaterNode, pool, interpolation)
+│   ├── Deterministic/              FP type bridges: FPVector2/3/4, FPQuaternion, FPRay3, FPPlane, FPBounds3
+│   ├── Editor/                     DataAsset JSON→bytes editor tool
+│   ├── GodotSessionDriver          transport + session pump (Node-based)
+│   ├── GodotSessionFlowAsync       JoinP2PAsync / JoinServerDrivenAsync / ReconnectAsync (Task-based)
+│   ├── GodotFlowSetupBuilderExtensions  WithGodotDefaults() — AppVersion + GodotDeviceIdProvider in one call
+│   ├── GodotKlothoLogger           CreateDefault() — GodotLogSink + RollingFileSink under user://logs
+│   ├── GodotConnectionAsync        low-level connect/reconnect Task wrappers
+│   ├── GodotDebugSink / GodotLogSink   IKLogger / IKLogSink routing to the Godot console
+│   └── (+ reconnect, Resource-based config helpers)
 │                                   compiled into YOUR assembly against YOUR GodotSharp
 ├── Analyzers/KlothoGenerator.dll   source generator (runs on your own ECS components/commands)
 ├── Klotho.props                    wires the above into your project (import this)
@@ -77,9 +87,27 @@ To disable: toggle **Enable** off. The menu item and context menu entry are remo
 
 ## Usage notes
 
+- **Flow setup** — use `KlothoFlowSetupBuilder` + `WithGodotDefaults()` to wire AppVersion (read from
+  `ProjectSettings`) and `GodotDeviceIdProvider` in one call:
+  ```csharp
+  _flow = new KlothoSessionFlow(
+      new KlothoFlowSetupBuilder(callbacksFactory)
+          .WithLogger(_logger).WithTransport(_transport).WithAssetRegistry(_registry)
+          .WithGodotDefaults()
+          .Build());
+  ```
+- **Logging** — `GodotKlothoLogger.CreateDefault()` returns a logger that writes to both the Godot console
+  and a rolling file under `user://logs` (the path is resolved via `ProjectSettings.GlobalizePath` —
+  writable in both the editor and exported apps):
+  ```csharp
+  _logger = GodotKlothoLogger.CreateDefault(filePrefix: "MyGame", categoryName: "MyGame");
+  ```
+- **Deterministic geometry** — `FPRay3`, `FPPlane`, `FPBounds3` have Godot conversion helpers in
+  `Adapters/Deterministic/`. `FPPlane.ToPlane()` / `ToFPPlane()` apply a sign inversion
+  (`Godot.Plane.D = −FPPlane.distance` — a convention difference, not a handedness issue).
 - **Editor authoring** — `GodotSessionConfig` / `GodotSimulationConfig` are `[GlobalClass]` `Resource`s; once
   built they appear in the editor's *New Resource* menu, can be saved as `.tres`, and injected into
-  `KlothoFlowSetup` / `StartHostAndListen`.
+  `KlothoFlowSetupBuilder` / `StartHostAndListen`.
 - **Your own components** — declaring `[KlothoComponent]` / `[KlothoSerializable]` types triggers
   `KlothoGenerator` (shipped here as the analyzer).
 - **Stable UIDs** — `.cs.uid` files ship beside the adapter sources so Godot keeps script UIDs instead of
