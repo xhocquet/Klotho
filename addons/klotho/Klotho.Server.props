@@ -14,10 +14,10 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="xpTURN.Klotho.Runtime">
-      <HintPath>$(MSBuildThisFileDirectory)bin/xpTURN.Klotho.Runtime.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/xpTURN.Klotho.Runtime.dll</HintPath>
     </Reference>
     <Reference Include="KlothoServer">
-      <HintPath>$(MSBuildThisFileDirectory)bin/KlothoServer.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/KlothoServer.dll</HintPath>
     </Reference>
     <Analyzer Include="$(MSBuildThisFileDirectory)Analyzers/KlothoGenerator.dll" />
     <!-- a DLL <Reference> carries no transitive NuGet deps -> declare the core's runtime deps -->

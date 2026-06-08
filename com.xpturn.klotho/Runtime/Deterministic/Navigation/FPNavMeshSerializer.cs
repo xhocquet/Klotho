@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using xpTURN.Klotho.Serialization;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Geometry;
@@ -128,6 +129,65 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 gridWidth, gridHeight,
                 gridCellSize, gridOrigin
             );
+        }
+
+        // === JSON output (debug / inspection sidecar) ===
+
+        /// <summary>
+        /// Human-readable JSON dump of an FPNavMesh (debug / inspection).
+        /// Engine-agnostic — shared by the Unity and Godot exporters.
+        /// </summary>
+        public static string ToJson(FPNavMesh navMesh)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("{");
+
+            // vertices
+            sb.AppendLine("  \"vertices\": [");
+            for (int i = 0; i < navMesh.Vertices.Length; i++)
+            {
+                var v = navMesh.Vertices[i];
+                sb.Append($"    [{v.x.ToFloat()},{v.y.ToFloat()},{v.z.ToFloat()}]");
+                if (i < navMesh.Vertices.Length - 1) sb.Append(',');
+                sb.AppendLine();
+            }
+            sb.AppendLine("  ],");
+
+            // triangles
+            sb.AppendLine("  \"triangles\": [");
+            for (int i = 0; i < navMesh.Triangles.Length; i++)
+            {
+                var t = navMesh.Triangles[i];
+                sb.Append("    {");
+                sb.Append($"\"v0\":{t.v0},\"v1\":{t.v1},\"v2\":{t.v2}");
+                sb.Append($",\"neighbor0\":{t.neighbor0},\"neighbor1\":{t.neighbor1},\"neighbor2\":{t.neighbor2}");
+                sb.Append($",\"portal0Left\":{t.portal0Left},\"portal0Right\":{t.portal0Right}");
+                sb.Append($",\"portal1Left\":{t.portal1Left},\"portal1Right\":{t.portal1Right}");
+                sb.Append($",\"portal2Left\":{t.portal2Left},\"portal2Right\":{t.portal2Right}");
+                sb.Append($",\"centerXZ\":[{t.centerXZ.x.ToFloat()},{t.centerXZ.y.ToFloat()}]");
+                sb.Append($",\"area\":{t.area.ToFloat()}");
+                sb.Append($",\"areaMask\":{t.areaMask}");
+                sb.Append($",\"costMultiplier\":{t.costMultiplier.ToFloat()}");
+                sb.Append($",\"isBlocked\":{(t.isBlocked ? "true" : "false")}");
+                sb.Append($",\"minY\":{t.minY.ToFloat()},\"maxY\":{t.maxY.ToFloat()},\"centerY\":{t.centerY.ToFloat()}");
+                sb.Append('}');
+                if (i < navMesh.Triangles.Length - 1) sb.Append(',');
+                sb.AppendLine();
+            }
+            sb.AppendLine("  ],");
+
+            // bounds
+            sb.Append($"  \"boundsXZ\": {{\"center\":[{navMesh.BoundsXZ.center.x.ToFloat()},{navMesh.BoundsXZ.center.y.ToFloat()}]");
+            sb.AppendLine($",\"extents\":[{navMesh.BoundsXZ.extents.x.ToFloat()},{navMesh.BoundsXZ.extents.y.ToFloat()}]}},");
+
+            // grid metadata
+            sb.AppendLine($"  \"gridWidth\": {navMesh.GridWidth},");
+            sb.AppendLine($"  \"gridHeight\": {navMesh.GridHeight},");
+            sb.AppendLine($"  \"gridCellSize\": {navMesh.GridCellSize.ToFloat()},");
+            sb.AppendLine($"  \"gridOrigin\": [{navMesh.GridOrigin.x.ToFloat()},{navMesh.GridOrigin.y.ToFloat()}]");
+
+            sb.Append('}');
+            return sb.ToString();
         }
 
         private static void WriteTriangle(ref SpanWriter writer, ref FPNavMeshTriangle tri)

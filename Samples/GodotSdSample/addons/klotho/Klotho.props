@@ -7,7 +7,7 @@
   <ItemGroup>
     <!-- core = prebuilt DLL -->
     <Reference Include="xpTURN.Klotho.Runtime">
-      <HintPath>$(MSBuildThisFileDirectory)bin/xpTURN.Klotho.Runtime.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/xpTURN.Klotho.Runtime.dll</HintPath>
     </Reference>
     <!-- adapter = source: Adapters/**/*.cs is auto-compiled by the consumer's Godot.NET.Sdk default glob
          (addons/ is under the project tree). Do NOT add an explicit <Compile Include> here — it would

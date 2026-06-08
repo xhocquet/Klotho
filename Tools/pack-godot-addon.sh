@@ -2,7 +2,7 @@
 # NP4 — Generate the no-publish addons/ distribution (hybrid: core DLL + adapter source).
 #
 # Produces dist/addons/klotho/ from the canonical source (com.xpturn.klotho/):
-#   bin/        xpTURN.Klotho.Runtime.dll      (core, prebuilt; engine-agnostic, no GodotSharp coupling)
+#   lib/        xpTURN.Klotho.Runtime.dll      (core, prebuilt; engine-agnostic, no GodotSharp coupling)
 #               KlothoServer.dll               (server helpers: KlothoServerBootstrap / config loaders)
 #   Adapters/   adapter .cs source             (compiled in the consumer against its own GodotSharp)
 #   Analyzers/  KlothoGenerator.dll            (source generator for the consumer's own ECS code)
@@ -25,7 +25,7 @@ GEN_DLL="$PKG/Plugins/Analyzers/KlothoGenerator.dll"
 
 echo "==> addons output: $OUT"
 rm -rf "$OUT"
-mkdir -p "$OUT/bin" "$OUT/Adapters" "$OUT/Analyzers"
+mkdir -p "$OUT/lib" "$OUT/Adapters" "$OUT/Analyzers"
 
 echo "==> 1/6 build core + server DLLs (LiteNetLib excluded -> NuGet)"
 dotnet build "$SERVER_PACK" -c Release -v q -nologo >/dev/null
@@ -33,7 +33,7 @@ BIN="$PKG/Godot~/Packaging/bin/Release"
 CORE_DLL="$(find "$BIN" -name 'xpTURN.Klotho.Runtime.dll' | head -1)"
 SERVER_DLL="$(find "$BIN" -name 'KlothoServer.dll' | head -1)"
 [ -n "$CORE_DLL" ] && [ -n "$SERVER_DLL" ] || { echo "!! core/server DLL not found"; exit 1; }
-cp "$CORE_DLL" "$SERVER_DLL" "$OUT/bin/"
+cp "$CORE_DLL" "$SERVER_DLL" "$OUT/lib/"
 
 echo "==> 2/6 copy adapter source (+ .cs.uid so Godot keeps stable script UIDs)"
 ( cd "$PKG/Godot~/Adapters" && find . \( -name '*.cs' -o -name '*.cs.uid' \) -print0 | while IFS= read -r -d '' f; do
@@ -53,7 +53,7 @@ cat > "$OUT/Klotho.props" <<'PROPS'
   <ItemGroup>
     <!-- core = prebuilt DLL -->
     <Reference Include="xpTURN.Klotho.Runtime">
-      <HintPath>$(MSBuildThisFileDirectory)bin/xpTURN.Klotho.Runtime.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/xpTURN.Klotho.Runtime.dll</HintPath>
     </Reference>
     <!-- adapter = source: Adapters/**/*.cs is auto-compiled by the consumer's Godot.NET.Sdk default glob
          (addons/ is under the project tree). Do NOT add an explicit <Compile Include> here — it would
@@ -85,10 +85,10 @@ cat > "$OUT/Klotho.Server.props" <<'PROPS'
   </ItemGroup>
   <ItemGroup>
     <Reference Include="xpTURN.Klotho.Runtime">
-      <HintPath>$(MSBuildThisFileDirectory)bin/xpTURN.Klotho.Runtime.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/xpTURN.Klotho.Runtime.dll</HintPath>
     </Reference>
     <Reference Include="KlothoServer">
-      <HintPath>$(MSBuildThisFileDirectory)bin/KlothoServer.dll</HintPath>
+      <HintPath>$(MSBuildThisFileDirectory)lib/KlothoServer.dll</HintPath>
     </Reference>
     <Analyzer Include="$(MSBuildThisFileDirectory)Analyzers/KlothoGenerator.dll" />
     <!-- a DLL <Reference> carries no transitive NuGet deps -> declare the core's runtime deps -->

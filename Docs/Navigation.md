@@ -2,7 +2,7 @@
 
 A deterministic NavMesh navigation system based on FP64. All computation runs on fixed-point arithmetic, guaranteeing synchronization across clients.
 
-> **Engine scope**: the navigation **runtime** (`FPNavMesh`, `FPNavMeshQuery`, `FPNavMeshPathfinder`, `FPNavAgentSystem`, …) is engine-agnostic core — it runs unchanged on Unity, Godot, and the .NET server. Only the **baking pipeline** (`FPNavMeshExporter` + the Editor visualizer) is **Unity-Editor-only**: it converts a Unity NavMesh to a `.bytes` asset, which either engine then loads at runtime (Unity via `TextAsset.bytes`, Godot via `Godot.FileAccess.GetFileAsBytes`).
+> **Engine scope**: the navigation **runtime** (`FPNavMesh`, `FPNavMeshQuery`, `FPNavMeshPathfinder`, `FPNavAgentSystem`, …) is engine-agnostic core — it runs unchanged on Unity, Godot, and the .NET server. The **baking + visualization editor tools** exist for **both Unity and Godot**: the geometry pipeline core (`FPNavMeshBuildPipeline`) is shared in Runtime, with an engine-specific editor exporter and visualizer on each side. Each engine bakes its **own** scene's NavMesh to a `.bytes` asset, which it then loads at runtime (Unity via `TextAsset.bytes`, Godot via `Godot.FileAccess.GetFileAsBytes`). Cross-engine `.bytes` sharing is **not** supported (coordinate-handedness differs — each engine bakes independently).
 
 ## Components
 
@@ -32,12 +32,13 @@ com.xpturn.klotho/Runtime/Deterministic/Navigation/
 ├── FPNavMeshBinaryHeap.cs    # A* priority queue
 ├── FPNavMeshFunnel.cs        # SSFA path smoothing
 ├── FPNavMeshSerializer.cs    # Binary serialization
+├── FPNavMeshBuildPipeline.cs # Engine-agnostic bake pipeline (degenerate/T-junction/adjacency/grid)
 ├── NavAgentComponent.cs      # ECS agent component + FPNavAgentStatus enum
 ├── FPNavAgentSystem.cs       # Agent update system (Frame + EntityRef[])
 ├── FPNavAvoidance.cs         # ORCA collision avoidance
 └── NavCorridorHelper.cs      # Corridor helper utilities
 
-com.xpturn.klotho/Editor/NavMesh/   # Unity-Editor-only (baking + visualization; no Godot equivalent)
+com.xpturn.klotho/Editor/NavMesh/         # Unity Editor (baking + visualization)
 ├── FPNavMeshExporter.cs          # Unity NavMesh → FPNavMesh conversion tool
 ├── FPNavMeshVisualizerWindow.cs  # NavMesh visualization editor window
 ├── FPNavMeshVisualizerData.cs    # Visualization state
@@ -45,12 +46,22 @@ com.xpturn.klotho/Editor/NavMesh/   # Unity-Editor-only (baking + visualization;
 ├── FPNavMeshSceneOverlay.cs      # Scene-view overlay rendering
 ├── FPNavMeshAgentSimulator.cs    # Agent-movement simulator
 └── FPNavMeshInteraction.cs       # Click-to-navigate interaction
+
+com.xpturn.klotho/Godot~/Adapters/Editor/ # Godot Editor (baking + visualization; #if TOOLS)
+├── GodotFPNavMeshExporter.cs           # NavigationRegion3D → FPNavMesh conversion tool
+├── GodotFPNavMeshVisualizer.cs         # Visualizer controller (plugin.gd forwards 3D virtuals)
+├── GodotFPNavMeshVisualizerData.cs     # Visualization state
+├── GodotFPNavMeshVisualizerDock.cs     # Dock UI (Control tree)
+├── GodotFPNavMeshOverlay.cs            # Viewport overlay (ImmediateMesh)
+├── GodotFPNavMeshAgentSimulator.cs     # Agent-movement simulator
+├── GodotFPNavMeshInteraction.cs        # Shift+Click interaction
+└── GodotFPNavMeshVisualizerStyles.cs   # Visualization styles
 ```
 
 ## NavMesh Pipeline
 
 ```text
-Unity NavMesh ──[FPNavMeshExporter]──▸ .bytes file      ← bake: Unity Editor only
+Unity NavMesh / Godot NavigationRegion3D ──[exporter]──▸ .bytes file   ← bake: Unity or Godot Editor (each its own scene)
                                          │              ← load: any engine (Unity TextAsset / Godot FileAccess)
                             FPNavMeshSerializer.Deserialize()
                                          │
@@ -169,14 +180,21 @@ nav.HasNavDestination = true;
 navSystem.Update(ref frame, entities, entityCount, currentTick, dt);
 ```
 
-## NavMesh Export *(Unity-only — Editor)*
+## NavMesh Export & Visualization *(Editor)*
 
-Use the Unity Editor menu `Tools > Klotho > Export NavMesh` to export the current scene's Unity NavMesh to a `.bytes` file. Visualization is at `Tools > Klotho > Visualizer > NavMesh`. (Godot has no equivalent baking tool — produce the `.bytes` from a Unity project, then ship it to your Godot project and load it via `FileAccess`.)
+Both engines ship an editor exporter and visualizer; they share the geometry pipeline (`FPNavMeshBuildPipeline`) and produce the same `.bytes` binary format.
 
+**Unity** — `Tools > Klotho > Export NavMesh` exports the current scene's Unity NavMesh; visualization is at `Tools > Klotho > Visualizer > NavMesh`.
+
+**Godot** — `Project > Tools > Klotho: Export FPNavMesh` exports the selected `NavigationRegion3D` (output: `<scene_dir>/<RegionName>.NavMeshData.bytes` + `.json` sidecar); the visualizer toggles at `Project > Tools > Klotho: NavMesh Visualizer` — see [NavMeshVisualizer.Godot.md](NavMeshVisualizer.Godot.md).
+
+Shared bake steps:
 - Vertex welding (WELD_EPSILON = 0.001)
-- Degenerate-triangle removal
+- Degenerate-triangle removal + T-junction split
 - Automatic adjacency + portal build
 - Spatial-grid build (default cell size = 4.0)
+
+> Each engine bakes its **own** scene; the resulting `.bytes` is not interchangeable across engines (coordinate-handedness). Load it on the engine that produced it.
 
 ## Constants
 
@@ -191,4 +209,4 @@ Use the Unity Editor menu `Tools > Klotho > Export NavMesh` to export the curren
 
 ---
 
-*Last updated: 2026-06-07 (IMP53 — runtime engine-agnostic / baking Unity-Editor-only; Godot `.bytes` loading via FileAccess)*
+*Last updated: 2026-06-08 (IMP55 — Godot exporter + visualizer added; baking pipeline shared via `FPNavMeshBuildPipeline`, each engine bakes its own scene)*

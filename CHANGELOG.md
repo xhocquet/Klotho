@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.12] - 2026-06-09
+
+### Godot NavMesh tooling
+
+- **NavMesh exporter** — `NavigationMesh` → `FPNavMesh` exporter; emits a `.bytes` payload plus a `.json` sidecar (shared `ToJson`).
+- **Editor NavMesh visualizer** — load a NavMesh, run pathfinding, and simulate an agent in-editor.
+
+### Godot Addon Packaging
+
+- Renamed the addon DLL dir `bin/` → `lib/` so the prebuilt core/server DLLs are no longer dropped by default `bin` ignore filters during export/packaging.
+
 ## [0.2.11] - 2026-06-08
 
 ### Godot adapter parity
