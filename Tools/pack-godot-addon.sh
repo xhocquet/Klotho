@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG="$REPO_ROOT/com.xpturn.klotho"
-OUT="${1:-$REPO_ROOT/addons/klotho}"
+OUT="${1:-$REPO_ROOT/dist/addons/klotho}"
 SERVER_PACK="$PKG/Godot~/Packaging/Klotho.Server.Pack.csproj"   # ProjectReferences Klotho.Core.Pack -> builds both DLLs
 GEN_DLL="$PKG/Plugins/Analyzers/KlothoGenerator.dll"
 

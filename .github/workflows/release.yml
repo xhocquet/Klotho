@@ -31,7 +31,7 @@ jobs:
 
           # Include only the addons/ folder (exclude unnecessary files)
           zip -r dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip \
-            addons/ \
+            dist/ \
             --exclude "*.import" \
             --exclude "*/.DS_Store" \
             --exclude "*/Thumbs.db"

@@ -11,7 +11,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACK="$REPO_ROOT/Tools/pack-godot-addon.sh"
-STAGING="$REPO_ROOT/addons/klotho"
+STAGING="$REPO_ROOT/dist/addons/klotho"
 
 TARGETS=(
   "$REPO_ROOT/Samples/GodotP2pSample/addons/klotho"
