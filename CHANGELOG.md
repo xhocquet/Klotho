@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.13] - 2026-06-09
+
+### Godot NavMesh
+
+- **Steep-slope traversal fix** — a ramp baked as one large triangle could be impassable (its Y-span exceeds the multi-floor threshold). Resolved data-side with no core change: re-bake with finer tessellation (`edge_max_length <= 3`).
+- **Visualizer `Floor Y Thr` knob** — apply `MultiFloorYThreshold` live in the editor sim for diagnosis/tuning (editor-only; default 2.0, behavior unchanged unless raised).
+
+### Packaging
+
+- Moved the generated addon dist (`addons/klotho/`) to `dist/addons/klotho/` — it's a build artifact, not canonical source. Pure relocation; pack/deploy scripts updated.
+
 ## [0.2.12] - 2026-06-09
 
 ### Godot NavMesh tooling

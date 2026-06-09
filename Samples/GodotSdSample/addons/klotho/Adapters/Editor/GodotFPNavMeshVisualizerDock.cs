@@ -208,6 +208,7 @@ namespace xpTURN.Klotho.Godot
             AddChild(SpinRow("Speed", sim.DefaultSpeed, v => sim.DefaultSpeed = (float)v));
             AddChild(SpinRow("Radius", sim.DefaultRadius, v => sim.DefaultRadius = (float)v));
             AddChild(SpinRow("Accel", sim.DefaultAcceleration, v => sim.DefaultAcceleration = (float)v));
+            AddChild(SpinRow("Floor Y Thr", sim.MultiFloorYThreshold, v => sim.SetMultiFloorYThreshold((float)v)));
             AddChild(Check("Avoidance", sim.EnableAvoidance, v => sim.EnableAvoidance = v));
 
             var modes = new HBoxContainer();

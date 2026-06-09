@@ -48,6 +48,14 @@ jobs:
             1. Download the zip and extract it
             2. Copy the `addons/` folder to your project root
             3. Go to Project → Project Settings → Plugins → Enable Klotho
+
+            ### Unity Installation
+            Add via **Window > Package Manager > + > Add package from git URL...** (in order):
+            ```
+            https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
+            https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
+            https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho#${{ steps.meta.outputs.tag }}
+            ```
           files: dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -196,6 +196,8 @@ Shared bake steps:
 
 > Each engine bakes its **own** scene; the resulting `.bytes` is not interchangeable across engines (coordinate-handedness). Load it on the engine that produced it.
 
+> **Steep walkable slopes**: multi-floor traversal compares the **representative-height difference** of edge-adjacent triangles (`MultiFloorYThreshold`, default 2.0); a difference above the threshold is treated as a separate floor and blocked. A ramp baked as **one large triangle** whose Y-span exceeds ~2× the threshold therefore cannot stay within the threshold of *both* its lower and upper neighbour, so one side becomes impassable. Bake with finer tessellation (Godot NavigationMesh `edge_max_length` ≤ ~3; `agent_max_slope` bounds the per-triangle rise) so a ramp splits into triangles whose representative heights step gradually.
+
 ## Constants
 
 | Constant | Location | Value | Description |
@@ -209,4 +211,4 @@ Shared bake steps:
 
 ---
 
-*Last updated: 2026-06-08 (IMP55 — Godot exporter + visualizer added; baking pipeline shared via `FPNavMeshBuildPipeline`, each engine bakes its own scene)*
+*Last updated: 2026-06-09 — Godot exporter + visualizer added; baking pipeline shared via `FPNavMeshBuildPipeline`, each engine bakes its own scene.*

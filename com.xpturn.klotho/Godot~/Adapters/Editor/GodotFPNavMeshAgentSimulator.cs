@@ -24,6 +24,9 @@ namespace xpTURN.Klotho.Godot
         public float DefaultRadius = 0.5f;
         public float DefaultAcceleration = 10.0f;
         public bool EnableAvoidance = true;
+        // Diagnostic knob (IMP55 P1-1): multi-floor traversal threshold. Raising it lets the agent
+        // cross steep single ramp triangles whose centerY differs by more than the default 2.0.
+        public float MultiFloorYThreshold = 2.0f;
 
         // For ORCA visualization
         public FPNavAvoidance Avoidance => _avoidance;
@@ -54,6 +57,7 @@ namespace xpTURN.Klotho.Godot
             _simFrame = new Frame(MAX_AGENTS, null);
             _agentSystem = new FPNavAgentSystem(
                 data.NavMesh, data.Query, data.Pathfinder, data.Funnel, null);
+            _agentSystem.MultiFloorYThreshold = FP64.FromFloat(MultiFloorYThreshold);
 
             _avoidance = new FPNavAvoidance();
             if (EnableAvoidance)
@@ -96,6 +100,13 @@ namespace xpTURN.Klotho.Godot
                 _entities[index] = _entities[_entityCount];
                 _initialPositions[index] = _initialPositions[_entityCount];
             }
+        }
+
+        public void SetMultiFloorYThreshold(float v)
+        {
+            MultiFloorYThreshold = v;
+            if (_agentSystem != null)
+                _agentSystem.MultiFloorYThreshold = FP64.FromFloat(v);
         }
 
         public void SetAgentDestination(int index, Vector3 dest)
