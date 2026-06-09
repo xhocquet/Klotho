@@ -44,10 +44,18 @@ jobs:
           body: |
             ## Klotho ${{ steps.meta.outputs.tag }}
 
+            Deterministic Unity & Godot framework for rollback, lockstep & server-authoritative multiplayer. Engine-agnostic pure C# core, FP64 fixed-point math, ECS, physics, navigation, and replays — frame-perfect, cross-platform reproducible.
+
             ### Godot(.NET) Installation
             1. Download the zip and extract it
-            2. Copy the `addons/` folder to your project root
-            3. Go to Project → Project Settings → Plugins → Enable Klotho
+            2. Copy the `klotho/` folder into your project's `res://addons/`
+            3. Add one line to your game `.csproj`:
+               ```xml
+               <Import Project="addons/klotho/Klotho.props" />
+               ```
+            4. Build (`dotnet build` or the Godot editor's **Build** button)
+
+            See [Installation.Godot.md](https://github.com/xpTURN/Klotho/blob/${{ steps.meta.outputs.tag }}/Docs/Installation.Godot.md) for the dedicated-server setup and full details.
 
             ### Unity Installation
             Add via **Window > Package Manager > + > Add package from git URL...** (in order):
@@ -56,6 +64,8 @@ jobs:
             https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill
             https://github.com/xpTURN/Klotho.git?path=com.xpturn.klotho#${{ steps.meta.outputs.tag }}
             ```
+
+            See [Installation.Unity.md](https://github.com/xpTURN/Klotho/blob/${{ steps.meta.outputs.tag }}/Docs/Installation.Unity.md) for Polyfill activation, the dedicated-server setup and full details.
           files: dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
