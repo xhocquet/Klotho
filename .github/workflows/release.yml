@@ -53,6 +53,7 @@ jobs:
                ```xml
                <Import Project="addons/klotho/Klotho.props" />
                ```
+               > No `.csproj` yet? Generate one via *Project* ▸ *Tools* ▸ *C#* ▸ **Create C# solution**, then add the line above.
             4. Build (`dotnet build` or the Godot editor's **Build** button)
 
             See [Installation.Godot.md](https://github.com/xpTURN/Klotho/blob/${{ steps.meta.outputs.tag }}/Docs/Installation.Godot.md) for the dedicated-server setup and full details.
