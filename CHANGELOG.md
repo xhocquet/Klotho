@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.14] - 2026-06-10
+
+### Godot physics tooling
+
+- **FPStaticCollider exporter (IMP56)** — export Godot static colliders to `FPStaticCollider` `.bytes` (+ `.json` sidecar); converter and viewer wired as editor menu / FileSystem dock tools.
+- **FPPhysics visualizer (IMP57)** — in-editor physics world overlay: debug panel, immediate-mode drawer, and world visualizer. Static collider viewer hardened (load robustness, HUD corner option).
+
+### Samples & docs
+
+- **GodotPolySample** — added test scenes + exported data.
+- Docs — `PhysicsWorld.md` (deterministic physics overview), `PhysicsVisualizer.Godot.md`; adapter comments de-Unity'd; Installation/README touch-ups.
+
 ## [0.2.13] - 2026-06-09
 
 ### Godot NavMesh

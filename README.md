@@ -210,6 +210,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/SimulationConfigGuide.md](Docs/SimulationConfigGuide.md) | SimulationConfig recommended-value guide (per genre / platform) |
 | [Docs/BaseLibraries.md](Docs/BaseLibraries.md) | List of base libraries used |
 | [Docs/Navigation.md](Docs/Navigation.md) | Deterministic navigation (FPNavMesh · A* · Funnel · ORCA) |
+| [Docs/PhysicsWorld.md](Docs/PhysicsWorld.md) | Deterministic physics (rigid bodies · colliders · contacts · triggers · CCD) |
 | [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md) · [Docs/Samples/P2pSample.md](Docs/Samples/P2pSample.md) · [Docs/Samples/SdSample.md](Docs/Samples/SdSample.md) | `Unity` sample walkthroughs — Brawler, P2pSample, SdSample |
 | [Docs/Samples/GodotSdSample.md](Docs/Samples/GodotSdSample.md) · [Docs/Samples/GodotP2pSample.md](Docs/Samples/GodotP2pSample.md) | `Godot (.NET)` sample walkthroughs (architecture + Godot-specific gotchas) |
 

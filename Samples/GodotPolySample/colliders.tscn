@@ -1,0 +1,68 @@
+[gd_scene format=3 uid="uid://dl3wgjaj3ss4u"]
+
+[ext_resource type="Script" uid="uid://b6btwlprdcrgp" path="res://addons/klotho/Adapters/View/FPStaticColliderOverride.cs" id="1_ovr"]
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_1"]
+data = PackedVector3Array(-8, 0, -4, -8, 0, 10, 8, 0, 10, -8, 0, -4, 8, 0, 10, 8, 0, -4)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1"]
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_1"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
+
+[node name="Node3D" type="Node3D" unique_id=667583079]
+
+[node name="Node" type="Node" parent="." unique_id=1603997255]
+
+[node name="Floor" type="StaticBody3D" parent="Node" unique_id=1979587174]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/Floor" unique_id=1589559655]
+shape = SubResource("ConcavePolygonShape3D_1")
+
+[node name="BoxRotated" type="StaticBody3D" parent="Node" unique_id=724450100]
+transform = Transform3D(0.7071068, 0, -0.7071068, 0, 1, 0, 0.7071068, 0, 0.7071068, -4, 1, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/BoxRotated" unique_id=2076274825]
+shape = SubResource("BoxShape3D_1")
+
+[node name="FPStaticColliderOverride" type="Node" parent="Node/BoxRotated/CollisionShape3D" unique_id=1087624291]
+script = ExtResource("1_ovr")
+Id = 10
+Restitution = 0.5
+Friction = 0.8
+
+[node name="BoxScaled" type="StaticBody3D" parent="Node" unique_id=1557766344]
+transform = Transform3D(2, 0, 0, 0, 1, 0, 0, 0, 3, -1.5, 1, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/BoxScaled" unique_id=704349388]
+shape = SubResource("BoxShape3D_1")
+
+[node name="Sphere" type="StaticBody3D" parent="Node" unique_id=232715194]
+transform = Transform3D(1.5, 0, 0, 0, 1.5, 0, 0, 0, 1.5, 1.5, 1, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/Sphere" unique_id=1793082949]
+shape = SubResource("SphereShape3D_1")
+
+[node name="Capsule" type="StaticBody3D" parent="Node" unique_id=1539881603]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4, 1.5, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/Capsule" unique_id=808974660]
+shape = SubResource("CapsuleShape3D_1")
+
+[node name="MultiShape" type="StaticBody3D" parent="Node" unique_id=356289636]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 5)
+
+[node name="BoxPart" type="CollisionShape3D" parent="Node/MultiShape" unique_id=1797226640]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.75, 0, 0)
+shape = SubResource("BoxShape3D_1")
+
+[node name="SpherePart" type="CollisionShape3D" parent="Node/MultiShape" unique_id=1921014352]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.75, 0, 0)
+shape = SubResource("SphereShape3D_1")
+
+[node name="Trigger" type="Area3D" parent="Node" unique_id=147224261]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4, 1, 5)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Node/Trigger" unique_id=1550212421]
+shape = SubResource("BoxShape3D_1")

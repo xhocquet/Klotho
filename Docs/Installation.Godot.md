@@ -16,6 +16,7 @@ The Godot adapter ships as a self-contained `addons/klotho/` folder — a prebui
    ```xml
    <Import Project="addons/klotho/Klotho.props" />
    ```
+   > No `.csproj` yet? Generate one via *Project* ▸ *Tools* ▸ *C#* ▸ **Create C# solution**, then add the line above.
 3. Build (`dotnet build` or the Godot editor's **Build** button).
 
 `Klotho.props` references the prebuilt core DLL, adds the generator analyzer, and declares the managed runtime dependencies as NuGet `PackageReference`s (`Newtonsoft.Json 13.0.3`, `K4os.Compression.LZ4 1.3.8`, `LiteNetLib 2.1.4`). The adapter sources under `addons/klotho/Adapters/**` are picked up automatically by the `Godot.NET.Sdk` default compile glob — do **not** add an explicit `<Compile Include>`. The adapter is **net8.0**, so **no Polyfill step is needed** (native `init` / `required`). Full details (folder contents, `plugin.cfg`, GodotSharp coupling): [`com.xpturn.klotho/Godot~/README.md`](../com.xpturn.klotho/Godot~/README.md).

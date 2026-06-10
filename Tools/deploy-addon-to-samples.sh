@@ -14,8 +14,9 @@ PACK="$REPO_ROOT/Tools/pack-godot-addon.sh"
 STAGING="$REPO_ROOT/dist/addons/klotho"
 
 TARGETS=(
+  "$REPO_ROOT/Samples/GodotPolySample/addons/klotho"
   "$REPO_ROOT/Samples/GodotP2pSample/addons/klotho"
-  "$REPO_ROOT/Samples/GodotSdSample/addons/klotho"   # also used by the sibling GodotSdSampleServer
+  "$REPO_ROOT/Samples/GodotSdSample/addons/klotho"
 )
 
 echo "==> build addon once -> $STAGING"

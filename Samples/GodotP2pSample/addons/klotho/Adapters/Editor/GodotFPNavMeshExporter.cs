@@ -3,8 +3,8 @@
 // Wrapped in #if TOOLS so it compiles only into the editor build.
 //
 // Engine-specific part only (mesh extraction + vertex weld + save). The geometry pipeline
-// (degenerate removal, T-Junction split, adjacency, spatial grid) is shared with the Unity
-// exporter via FPNavMeshBuildPipeline (Runtime assembly).
+// (degenerate removal, T-Junction split, adjacency, spatial grid) is the engine-agnostic
+// FPNavMeshBuildPipeline (Runtime assembly).
 #if TOOLS
 using System.Collections.Generic;
 
@@ -33,7 +33,7 @@ namespace xpTURN.Klotho.Godot
 
             // Pass the region so GlobalTransform can be applied (local -> world).
             var (vertices, indices, areas) = ExtractTriangles(region, navMesh);
-            // Check triangle presence via indices — vertices may exist while polygon count is 0 (Unity parity).
+            // Check triangle presence via indices — vertices may exist while polygon count is 0.
             if (indices.Length == 0) { GD.PushError("[GodotFPNavMeshExporter] No triangles. Bake the NavigationMesh first."); return; }
 
             // Determine the output path (synchronous). Based on the edited scene's directory + region name.
@@ -83,7 +83,7 @@ namespace xpTURN.Klotho.Godot
 
         /// <summary>
         /// Merges duplicate vertices within epsilon distance (Godot.Vector3, GlobalTransform applied).
-        /// Welds in float space — same as the Unity exporter, kept engine-specific.
+        /// Welds in float space, before the deterministic conversion — kept engine-specific.
         /// </summary>
         private static void WeldVertices(global::Godot.Vector3[] srcVerts, Transform3D xform, float epsilon,
             out FPVector3[] outVertices, out int[] indexRemap)
@@ -130,7 +130,7 @@ namespace xpTURN.Klotho.Godot
                 f.StoreBuffer(data);
             }
 
-            // JSON sidecar (debug / inspection) — shared serializer with the Unity exporter.
+            // JSON sidecar (debug / inspection) — engine-agnostic serializer (Runtime assembly).
             string jsonRes = resPath.GetBaseName() + ".json";
             string jsonAbs = ProjectSettings.GlobalizePath(jsonRes);
             using (var jf = FileAccess.Open(jsonAbs, FileAccess.ModeFlags.Write))

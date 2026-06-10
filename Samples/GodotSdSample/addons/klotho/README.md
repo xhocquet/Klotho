@@ -46,6 +46,7 @@ are declared by `Klotho.props` as NuGet `PackageReference`s.
    ```xml
    <Import Project="addons/klotho/Klotho.props" />
    ```
+   > No `.csproj` yet? Generate one via *Project* ▸ *Tools* ▸ *C#* ▸ **Create C# solution**, then add the line above.
 3. Build (`dotnet build` or the Godot editor's *Build* button).
 
 `Klotho.props` references the core DLL, adds the generator analyzer, declares the three NuGet deps, and sets

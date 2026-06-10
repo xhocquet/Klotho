@@ -1,0 +1,17 @@
+<!--
+  GodotPolySample — standalone Godot 3D port. Self-contained: the ECS sim (Sim/), the simulation
+  callbacks (Game/) and the data asset (Data/) are copied in, with no reference to other sample projects.
+  Godot.NET.Sdk game project; ProjectReferences the Godot adapter library (core transitively).
+  KlothoGenerator emits the [KlothoOrder]/[KlothoDataAsset] partials.
+-->
+<Project Sdk="Godot.NET.Sdk/4.6.3">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <Import Project="addons/klotho/Klotho.props" />
+</Project>

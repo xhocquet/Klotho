@@ -124,7 +124,7 @@ namespace xpTURN.Klotho.Editor
                 FPStaticColliderSerializer.Save(list.ToArray(), fullPath);
 
                 string jsonPath = Path.ChangeExtension(fullPath, ".json");
-                File.WriteAllText(jsonPath, ToJson(list), Encoding.UTF8);
+                File.WriteAllText(jsonPath, FPStaticColliderSerializer.ToJson(list), Encoding.UTF8);
 
                 AssetDatabase.Refresh();
                 Debug.Log($"[FPStaticColliderExporter] Saved: {fullPath}  ({list.Count})");
@@ -136,75 +136,6 @@ namespace xpTURN.Klotho.Editor
                 Debug.LogError($"[FPStaticColliderExporter] Export failed: {e.Message}");
             }
         }
-
-        static string ToJson(List<FPStaticCollider> list)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("[");
-            for (int i = 0; i < list.Count; i++)
-            {
-                var sc = list[i];
-                var c = sc.collider;
-                sb.Append("  {");
-                sb.Append($"\"id\":{sc.id}");
-                sb.Append($",\"isTrigger\":{(sc.isTrigger ? "true" : "false")}");
-                sb.Append($",\"restitution\":{sc.restitution.ToFloat()}");
-                sb.Append($",\"friction\":{sc.friction.ToFloat()}");
-                sb.Append($",\"shape\":\"{c.type}\"");
-
-                switch (c.type)
-                {
-                    case ShapeType.Sphere:
-                        sb.Append($",\"position\":{Vec3(c.sphere.position)}");
-                        sb.Append($",\"radius\":{c.sphere.radius.ToFloat()}");
-                        break;
-                    case ShapeType.Box:
-                        sb.Append($",\"position\":{Vec3(c.box.position)}");
-                        sb.Append($",\"rotation\":{Quat(c.box.rotation)}");
-                        sb.Append($",\"halfExtents\":{Vec3(c.box.halfExtents)}");
-                        break;
-                    case ShapeType.Capsule:
-                        sb.Append($",\"position\":{Vec3(c.capsule.position)}");
-                        sb.Append($",\"rotation\":{Quat(c.capsule.rotation)}");
-                        sb.Append($",\"halfHeight\":{c.capsule.halfHeight.ToFloat()}");
-                        sb.Append($",\"radius\":{c.capsule.radius.ToFloat()}");
-                        break;
-                    case ShapeType.Mesh:
-                        sb.Append($",\"position\":{Vec3(c.mesh.position)}");
-                        sb.Append($",\"rotation\":{Quat(c.mesh.rotation)}");
-                        if (sc.meshData != null)
-                        {
-                            sb.Append(",\"vertices\":[");
-                            for (int v = 0; v < sc.meshData.vertices.Length; v++)
-                            {
-                                if (v > 0) sb.Append(',');
-                                sb.Append(Vec3(sc.meshData.vertices[v]));
-                            }
-                            sb.Append(']');
-                            sb.Append(",\"indices\":[");
-                            for (int idx = 0; idx < sc.meshData.indices.Length; idx++)
-                            {
-                                if (idx > 0) sb.Append(',');
-                                sb.Append(sc.meshData.indices[idx]);
-                            }
-                            sb.Append(']');
-                        }
-                        break;
-                }
-
-                sb.Append('}');
-                if (i < list.Count - 1) sb.Append(',');
-                sb.AppendLine();
-            }
-            sb.Append(']');
-            return sb.ToString();
-        }
-
-        static string Vec3(Deterministic.Math.FPVector3 v)
-            => $"[{v.x.ToFloat()},{v.y.ToFloat()},{v.z.ToFloat()}]";
-
-        static string Quat(Deterministic.Math.FPQuaternion q)
-            => $"[{q.x.ToFloat()},{q.y.ToFloat()},{q.z.ToFloat()},{q.w.ToFloat()}]";
 
         List<FPStaticCollider> Collect(out List<string> tags)
         {

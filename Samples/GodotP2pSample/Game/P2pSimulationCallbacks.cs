@@ -7,10 +7,14 @@ using xpTURN.Klotho.ECS.Systems;
 
 namespace xpTURN.Samples.P2pSample
 {
-    public class P2pSimulationCallbacks : ISimulationCallbacks
+    public class P2pSimulationCallbacks : ISimulationCallbacks, IFPPhysicsProviderSource
     {
         private readonly P2pInputCapture _input;
         private IKlothoEngine _engine;
+        private EcsSimulation _simulation;
+
+        // Exposes the live physics world to debug visualizers (FPPhysicsWorldVisualizer / Godot equivalent).
+        public IFPPhysicsWorldProvider PhysicsProvider => _simulation?.GetSystem<PhysicsSystem>();
 
         public P2pSimulationCallbacks(P2pInputCapture input)
         {
@@ -19,6 +23,7 @@ namespace xpTURN.Samples.P2pSample
 
         public void RegisterSystems(EcsSimulation simulation)
         {
+            _simulation = simulation;
             var events = new EventSystem();
             simulation.AddSystem(new CommandSystem(),  SystemPhase.PreUpdate);
             simulation.AddSystem(new MovementSystem(), SystemPhase.PreUpdate);
