@@ -3,7 +3,6 @@
   Engine-agnostic core: ECS, Serialization, Network, Core, Replay, Diagnostics.
 
   Excludes (each is a separate assembly or engine/json-coupled, mirroring the asmdef boundaries):
-    Unity/**            engine-coupled
     **/Json/**          DataAsset.Json subtree (Unity/json-coupled)
     Logging/**          xpTURN.Klotho.Logging assembly
     Gameplay/**         xpTURN.Klotho.Gameplay assembly
@@ -21,6 +20,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>xpTURN.Klotho.Runtime</AssemblyName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Fault-injection diagnostics (KLOTHO_FAULT_INJECTION): OFF by default. This is the shipped
+         package server mirror, so it must not compile in the test-only fault hooks gated by
+         #if KLOTHO_FAULT_INJECTION (EmulatedRtt/latency, GC pauses, drop/desync injection, etc.).
+         To run a local fault-injection smoke (e.g. the IMP60 RTT-schedule T-F4/T-F7 reproduction),
+         prepend "KLOTHO_FAULT_INJECTION;" to DefineConstants below; revert when done. The Brawler
+         sample server (Samples/Brawler/Server/BrawlerDedicatedServer.csproj) and the Unity Standalone
+         player carry the same toggle. -->
+    <DefineConstants>$(DefineConstants)</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -43,7 +50,7 @@
 
   <ItemGroup>
     <Compile Include="$(KlothoRuntimeRoot)\**\*.cs"
-             Exclude="$(KlothoRuntimeRoot)\Unity\**\*.cs;$(KlothoRuntimeRoot)\**\Json\**\*.cs;$(KlothoRuntimeRoot)\Logging\**\*.cs;$(KlothoRuntimeRoot)\Gameplay\**\*.cs;$(KlothoRuntimeRoot)\LiteNetLib\**\*.cs;$(KlothoRuntimeRoot)\ThirdParty\**\*.cs"
+             Exclude="$(KlothoRuntimeRoot)\**\Json\**\*.cs;$(KlothoRuntimeRoot)\Logging\**\*.cs;$(KlothoRuntimeRoot)\Gameplay\**\*.cs;$(KlothoRuntimeRoot)\LiteNetLib\**\*.cs;$(KlothoRuntimeRoot)\ThirdParty\**\*.cs"
              Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

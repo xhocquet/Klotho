@@ -102,15 +102,19 @@ namespace xpTURN.Klotho.Core
             // Replay does not consult sessionCfg; the recorded engine state carries the snapshot.
             // CallbacksFactory receives sessionCfg = null — the game ignores it in replay mode.
             var callbacks = _setup.CallbacksFactory(simulationConfig, null);
+            // Replay owns no connection: IsReplay skips network-service creation in Create, and
+            // Transport is deliberately NOT passed — if the flag were ever lost, the host path
+            // would fail fast (NRE on a null transport) instead of silently re-wiring a ghost
+            // service onto the live main transport.
             var session = KlothoSession.Create(new KlothoSessionSetup
             {
                 Logger = _setup.Logger,
-                Transport = _setup.Transport,
                 AssetRegistry = _setup.AssetRegistry,
                 LifecycleObserver = _setup.LifecycleObserver,
                 SimulationCallbacks = callbacks.Simulation,
                 ViewCallbacks = callbacks.View,
                 SimulationConfig = simulationConfig,
+                IsReplay = true,
             });
             session.Engine.StartReplay(replayData);
             FireOnSessionCreated(session, SessionEntryKind.Replay);

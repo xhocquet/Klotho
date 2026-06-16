@@ -8,7 +8,6 @@ using xpTURN.Klotho.Logging;
 using xpTURN.Klotho.ECS;
 using xpTURN.Klotho.Helper.Tests;
 using xpTURN.Klotho.Network;
-using xpTURN.Klotho.State;
 
 namespace xpTURN.Klotho.Core.Tests
 {
@@ -67,23 +66,15 @@ namespace xpTURN.Klotho.Core.Tests
             }
         }
 
-        // ── Path (c) — stub IStateSnapshot for RingSnapshotManager injection ──
+        // ── Path (c) — non-ECS spectator rollback resolves via ISimulation.GetNearestRollbackTick
+        //    (TestSimulation stateless mode restores any tick — no injection needed) ──
 
-        private sealed class StubSnapshot : IStateSnapshot
-        {
-            public int Tick { get; set; }
-            public byte[] Serialize() => Array.Empty<byte>();
-            public void Deserialize(byte[] data) { }
-            public ulong CalculateHash() => 0;
-        }
 
         // ── Reflection handles ──────────────────────────────────────────
 
         private static readonly FieldInfo _engineEventCollectorField = typeof(KlothoEngine)
             .GetField("_eventCollector", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static readonly FieldInfo _engineSnapshotManagerField = typeof(KlothoEngine)
-            .GetField("_snapshotManager", BindingFlags.NonPublic | BindingFlags.Instance);
 
         private static readonly FieldInfo _engineDispatcherField = typeof(KlothoEngine)
             .GetField("_dispatcher", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -128,8 +119,6 @@ namespace xpTURN.Klotho.Core.Tests
         private static int ReadSpectatorPredictionStartTick(KlothoEngine engine)
             => (int)_spectatorPredictionStartTickField.GetValue(engine);
 
-        private static IStateSnapshotManager ReadSnapshotManager(KlothoEngine engine)
-            => (IStateSnapshotManager)_engineSnapshotManagerField.GetValue(engine);
 
         // Drive the spectator forward by Update calls until prediction has populated
         // _spectatorPredictionStartTick (initialized lazily inside ExecuteSpectatorPredictedTick).
@@ -253,6 +242,62 @@ namespace xpTURN.Klotho.Core.Tests
                 $"New-only Regular event (variant 2) must be confirmed exactly once via DiffRollbackEvents on verified tick. Got {newConfirmed}.");
         }
 
+        // ── (b) EcsSim path — truncated prediction tail ──
+
+        // A Regular event predicted on a tick BEYOND the
+        // confirmed tick is the "truncated tail" — re-sim halts at the confirmed tick, shrinking
+        // CurrentTick below the old-cache bound. Pre-fix, DiffRollbackEvents fired a spurious
+        // OnEventCanceled for the tail; with the guard (oldEvt.Tick >= CurrentTick → skip) it must not.
+        // The tail is re-fired by subsequent re-prediction (Predicted), not canceled.
+        [Test]
+        public void Spectator_EcsSimRollback_TruncatedTailRegular_NotCanceled_IMP60_30_E4()
+        {
+            // SPECTATOR_INPUT_INTERVAL = 2 → MAX_SPECTATOR_PREDICTION_TICKS = 4. With confirmed at 0 the
+            // prediction head can reach tick 4, so a tick-3 event sits in the lead. Confirming to tick 2
+            // halts re-sim at 2 (CurrentTick → 3), leaving the tick-3 event in the truncated tail.
+            const int raiseAtTick = 3;
+            const int confirmTick = 2;
+            int predictedCount = 0;
+            int canceledCount = 0;
+
+            var sim = new EcsSimulation(maxEntities: 16, maxRollbackTicks: 8, deltaTimeMs: 25);
+            var raiser = new EventRaiserSystem
+            {
+                RaiseAtTick = raiseAtTick,
+                Factory = () => new TestRegularEvent { Payload = 1 },
+            };
+            sim.AddSystem(raiser, SystemPhase.Update);
+
+            var engine = new KlothoEngine(new SimulationConfig(), new SessionConfig());
+            engine.Initialize(sim, _logger);
+            InjectDispatcher(engine, _logger);
+
+            engine.OnEventPredicted += (tick, evt) => { if (evt is TestRegularEvent) predictedCount++; };
+            engine.OnEventCanceled  += (tick, evt) => { if (evt is TestRegularEvent) canceledCount++; };
+
+            engine.StartSpectator(MakeStartInfo());
+            engine.ResetToTick(0);
+
+            // Drive prediction forward until the tail event at raiseAtTick has been predicted
+            // (guarantees the prediction head advanced past raiseAtTick → CurrentTick > raiseAtTick).
+            DriveSpectatorUntilPredictionStarts(engine);
+            for (int i = 0; i < 16 && predictedCount < 1; i++)
+                engine.Update(0.05f);
+            Assert.GreaterOrEqual(predictedCount, 1,
+                "Setup invariant: the tail Regular event must be predicted (OnEventPredicted) before confirmation");
+
+            int baselineCanceled = canceledCount;
+
+            // Confirm a tick BELOW the tail event → re-sim halts there, truncating the tail.
+            engine.ConfirmSpectatorTick(confirmTick);
+            engine.Update(0.01f);
+
+            Assert.AreEqual(0, canceledCount - baselineCanceled,
+                "E-4: a truncated-tail Regular event (tick beyond re-sim CurrentTick) must NOT fire OnEventCanceled. " +
+                "Pre-fix this was a spurious cancel (flicker). The guard oldEvt.Tick >= CurrentTick skips it; " +
+                "re-prediction re-fires it as Predicted instead.");
+        }
+
         // ── (c) Snapshot path ───────────────────────────────────────────
 
         [Test]
@@ -301,11 +346,8 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.AreEqual(0, dispatchedCount,
                 "Synced events buffered during Predicted ticks must not dispatch before promotion-to-verified");
 
-            // _snapshotManager.GetSnapshot(predStart) must return non-null for the snapshot
-            // branch to proceed. Engine code never populates RingSnapshotManager itself, so
-            // inject a stub at predStart that Rollback.cs treats as a valid restore point.
-            ReadSnapshotManager(engine).SaveSnapshot(predStart, new StubSnapshot { Tick = predStart });
-
+            // The snapshot branch resolves via ISimulation.GetNearestRollbackTick —
+            // TestSimulation (stateless mode) restores any tick, so no injection is needed.
             engine.ConfirmSpectatorTick(raiseAtTick + 1);
             engine.Update(0.01f);
 
@@ -354,8 +396,6 @@ namespace xpTURN.Klotho.Core.Tests
                 "Regular event must fire OnEventPredicted during Predicted tick execution");
 
             int predStart = ReadSpectatorPredictionStartTick(engine);
-            ReadSnapshotManager(engine).SaveSnapshot(predStart, new StubSnapshot { Tick = predStart });
-
             variant = 2;
 
             int baselineConfirmed = confirmedCount;

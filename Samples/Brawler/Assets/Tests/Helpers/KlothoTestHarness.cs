@@ -154,6 +154,14 @@ namespace xpTURN.Klotho.Helper.Tests
             }
         }
 
+        // Single inject+tick step for tests that drive custom loop conditions (e.g. "until
+        // the engine aborts") where AdvanceAllToTick's host-tick target cannot terminate.
+        public void StepOnce(float deltaTime = 0.05f)
+        {
+            InjectEmptyInputsForAllPeers();
+            Tick(deltaTime);
+        }
+
         public void PumpMessages(int rounds = 12)
         {
             for (int i = 0; i < rounds; i++)
@@ -207,6 +215,10 @@ namespace xpTURN.Klotho.Helper.Tests
         //   - NOT call DisconnectPeer on the stalled peer (transport disconnect triggers
         //     engine.NotifyPlayerDisconnected → CanAdvanceTick fires OnDisconnectedInputNeeded
         //     which auto-fills empty inputs and advances the chain)
+        //   - call Host.Engine.DisableTimeSync() after StartPlaying (the throttle
+        //     slows the host to 1 tick / 10 tick-times against the frozen remote until the
+        //     staleness gate expires it at ~MaxRollbackTicks — overruns the target*10
+        //     safety limit)
         //
         // Stall mechanism: stallPlayerId's Update is skipped, so it produces no input. Host's
         // CanAdvanceTick fails (missing pid input), _disconnectedPlayerIds stays empty (no
@@ -262,8 +274,17 @@ namespace xpTURN.Klotho.Helper.Tests
             // Message-based reconnect handshake — preserved verbatim. Host-side state
             // (peer<->player mapping via HandleReconnectRequest) and guest-side NetworkService
             // state (Phase=Playing, _lateJoinState=Active via HandleFullStateResponse) sync here.
+            //
+            // Stop before re-Initialize: the old bare re-Initialize left the first
+            // subscription on the SAME NetworkService instance alive, so every received command
+            // dispatched into AddCommand twice — the harness was the actual source of the
+            // "double-dispatched OnCommandReceived on reconnect re-subscribe" worked
+            // around (found via Sweep_DisconnectReconnectRecovery). The engine now throws on
+            // re-Initialize without Stop; Stop unsubscribes the stale handlers, and the session
+            // state this peer needs back is restored by SeedReconnectFullState below.
             peer.Transport = new TestTransport();
             peer.NetworkService.Initialize(peer.Transport, _commandFactory, _logger);
+            peer.Engine.Stop();
             peer.Engine.Initialize(peer.Simulation, peer.NetworkService, _logger);
             peer.Engine.SetCommandFactory(_commandFactory);
             peer.NetworkService.SubscribeEngine(peer.Engine);
@@ -298,6 +319,24 @@ namespace xpTURN.Klotho.Helper.Tests
                 FullStateData = fullStateData,
                 FullStateHash = fullStateHash,
             };
+        }
+
+        // Test support: drive the production late-join SEED path
+        // (KlothoSession -> SeedLateJoinFullState -> ApplyP2PLateJoinFullState) that
+        // AddLateJoinGuest's message handshake does NOT exercise — the message FullState
+        // routes through HandleFullStateReceived's Resync branch, never reaching
+        // ApplyP2PLateJoinFullState. Mirrors BuildReconnectPayload (only FullStateTick/Data/Hash
+        // are read by the seed). Test-local on purpose: kept out of AddLateJoinGuest so existing
+        // late-join tests' catchup shape is unchanged.
+        public void SeedLateJoinFullStateFromHost(TestPeer peer)
+        {
+            var (fullStateData, fullStateHash) = _host.Simulation.SerializeFullStateWithHash();
+            peer.Engine.SeedLateJoinFullState(new LateJoinPayload
+            {
+                FullStateTick = _host.Engine.CurrentTick,
+                FullStateData = fullStateData,
+                FullStateHash = fullStateHash,
+            });
         }
 
         // ── Assertion helpers ──

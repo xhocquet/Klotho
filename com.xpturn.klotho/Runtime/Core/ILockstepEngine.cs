@@ -326,7 +326,15 @@ namespace xpTURN.Klotho.Core
         void EscalateExtraDelay(int step, int max);
 
         /// <summary>
-        /// Fired after ApplyExtraDelay/EscalateExtraDelay updates the recommended extra delay (newDelay).
+        /// Client-reactive de-escalation: decays the reactive extra-delay correction by `step` toward 0
+        /// during stable intervals (no recent PastTick/rollback-burst). Server-pushed baseline is
+        /// untouched. No-op when the reactive component is already 0.
+        /// </summary>
+        void DeEscalateExtraDelay(int step);
+
+        /// <summary>
+        /// Fired after ApplyExtraDelay/EscalateExtraDelay/DeEscalateExtraDelay updates the recommended
+        /// extra delay (effective, clamped value).
         /// Used by the client-reactive fallback to track the last server-push tick (engine-tick grace window).
         /// </summary>
         event Action<int> OnExtraDelayChanged;
@@ -414,6 +422,19 @@ namespace xpTURN.Klotho.Core
         /// Synced event dispatched only on verified ticks (tick, event).
         /// </summary>
         event Action<int, SimulationEvent> OnSyncedEvent;
+
+        /// <summary>
+        /// The Synced event set changed under desync-recovery re-simulation at a tick that was
+        /// already dispatched (tick, event, kind). The exactly-once invariant blocks (re-)dispatch
+        /// at or below the watermark, so this is the only signal that irreversible work ran on
+        /// diverged state — the engine cannot revert external side effects (reported scores etc.);
+        /// the game owns the response (reconcile, or AbortMatch for unrecoverable books).
+        /// Removed payloads are pooled old events valid ONLY during the callback (same contract as
+        /// OnEventCanceled). Exception: an Added IMatchEndEvent with no prior OnMatchEnded fires
+        /// OnMatchEnded normally (guard flag keeps exactly-once) instead of leaving the match
+        /// unendable; a Removed match end cannot be un-fired — AbortMatch is the recommended response.
+        /// </summary>
+        event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
 
         /// <summary>
         /// Full-state resync complete event (restoredTick).
@@ -528,6 +549,15 @@ namespace xpTURN.Klotho.Core
         /// View-layer render clock state. Used by both the prediction path and the snapshot interpolation path.
         /// </summary>
         RenderClockState RenderClock { get; }
+
+        /// <summary>
+        /// Input prediction hit rate (0.0 ~ 1.0): 1 - (fraction of arrived predictions that
+        /// forced a rollback). P2P-only — the sole feed is the P2P command receive path; SD
+        /// re-prediction is not counted. Sampled: predictions cleared by a rollback before
+        /// their actual command arrived are not counted. Persistently low values signal a
+        /// too-thin timing buffer (raise InputDelayTicks / extra delay).
+        /// </summary>
+        float PredictionAccuracy { get; }
 
         /// <summary>
         /// Looks up the frame at the specified tick from the ring buffer. Returns false if out of range.

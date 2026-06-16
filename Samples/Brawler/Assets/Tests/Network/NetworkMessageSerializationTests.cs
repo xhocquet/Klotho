@@ -61,6 +61,8 @@ namespace xpTURN.Klotho.Network.Tests
                 Tick = 100,
                 PlayerId = 2,
                 SenderTick = 98,
+                SenderAdvantage = -7,   // wire field (signed)
+                TimingFlags = 1,        // IsProxyTiming bit
                 CommandData = new byte[] { 1, 2, 3, 4, 5 }
             };
             var restored = RoundTrip<CommandMessage>(original);
@@ -68,6 +70,8 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.AreEqual(original.Tick, restored.Tick);
             Assert.AreEqual(original.PlayerId, restored.PlayerId);
             Assert.AreEqual(original.SenderTick, restored.SenderTick);
+            Assert.AreEqual(original.SenderAdvantage, restored.SenderAdvantage);
+            Assert.AreEqual(original.TimingFlags, restored.TimingFlags);
             Assert.AreEqual(original.CommandData.Length, restored.CommandData.Length);
             for (int i = 0; i < original.CommandData.Length; i++)
                 Assert.AreEqual(original.CommandData[i], restored.CommandData[i]);
@@ -258,6 +262,41 @@ namespace xpTURN.Klotho.Network.Tests
             var restored = RoundTrip<FullStateResponseMessage>(original);
 
             Assert.AreEqual(expectedHash, restored.StateHash);
+        }
+
+        #endregion
+
+        #region PlayerStateNotificationMessage
+
+        [Test]
+        public void PlayerStateNotificationMessage_RoundTrip_PreservesData()
+        {
+            var original = new PlayerStateNotificationMessage
+            {
+                PlayerId = 3,
+                State = (byte)PlayerStateChange.Left,
+            };
+            var restored = RoundTrip<PlayerStateNotificationMessage>(original);
+
+            Assert.AreEqual(original.PlayerId, restored.PlayerId);
+            Assert.AreEqual(original.State, restored.State);
+            Assert.AreEqual(PlayerStateChange.Left, (PlayerStateChange)restored.State);
+        }
+
+        [Test]
+        public void PlayerStateNotificationMessage_RegisteredWithSerializer()
+        {
+            // Confirms the [KlothoSerializable] source-gen ModuleInitializer registered type 78,
+            // so the registry-driven MessageSerializer round-trips it to the right concrete type.
+            var serializer = new MessageSerializer();
+            var msg = new PlayerStateNotificationMessage { PlayerId = 2, State = (byte)PlayerStateChange.Disconnected };
+            var bytes = serializer.Serialize(msg);
+            var restored = serializer.Deserialize(bytes);
+
+            Assert.IsInstanceOf<PlayerStateNotificationMessage>(restored);
+            var typed = (PlayerStateNotificationMessage)restored;
+            Assert.AreEqual(2, typed.PlayerId);
+            Assert.AreEqual((byte)PlayerStateChange.Disconnected, typed.State);
         }
 
         #endregion

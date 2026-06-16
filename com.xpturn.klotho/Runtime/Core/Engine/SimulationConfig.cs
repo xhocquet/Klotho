@@ -1,4 +1,5 @@
 using xpTURN.Klotho.Network;
+using xpTURN.Klotho.Logging;
 
 namespace xpTURN.Klotho.Core
 {
@@ -33,7 +34,7 @@ namespace xpTURN.Klotho.Core
         // --- Sync / Resync ---
 
         /// <inheritdoc />
-        public int SyncCheckInterval { get; set; } = 30;
+        public int SyncCheckInterval { get; set; } = 20;
 
         /// <inheritdoc />
         public int ResyncMaxRetries { get; set; } = 3;
@@ -43,6 +44,12 @@ namespace xpTURN.Klotho.Core
 
         /// <inheritdoc />
         public int CorrectiveResetCooldownMs { get; set; } = 5000;
+
+        /// <inheritdoc />
+        public int CorrectiveResetMaxAttempts { get; set; } = 2;
+
+        /// <inheritdoc />
+        public bool AutoAbortOnRecoveryExhausted { get; set; } = true;
 
         // --- Prediction ---
 
@@ -104,6 +111,9 @@ namespace xpTURN.Klotho.Core
         /// <inheritdoc />
         public int ReactiveEscalateCooldownTicks { get; set; } = 80;
 
+        /// <inheritdoc />
+        public int ReactiveDeEscalateStableTicks { get; set; } = 160;
+
         // --- Rollback Burst ---
 
         /// <inheritdoc />
@@ -119,5 +129,29 @@ namespace xpTURN.Klotho.Core
 
         /// <inheritdoc />
         public int TickDriftWarnMultiplier { get; set; } = 2;
+
+        /// <summary>
+        /// Enforces config invariants. Currently: ReactiveMax ≤ MaxRollbackTicks/2
+        /// — the reactive escalation ceiling must not exceed the rollback-budget clamp, else the client
+        /// reactive path could push effective extra-delay past the budget the engine clamps to.
+        ///
+        /// <para><paramref name="throwOnError"/>: authored/editor configs pass <c>true</c> (fail fast in
+        /// development); wire-received configs (<see cref="Network.SimulationConfigMessage"/>) pass
+        /// <c>false</c> so a malformed/hostile server config clamps+warns rather than crashing the client
+        /// mid-handshake. The engine's RecommendedExtraDelay clamp is the runtime backstop regardless.</para>
+        /// </summary>
+        public void Validate(xpTURN.Klotho.Logging.IKLogger logger = null, bool throwOnError = false)
+        {
+            int clampMax = MaxRollbackTicks / 2;
+            if (ReactiveMax > clampMax)
+            {
+                string msg = $"[SimulationConfig] ReactiveMax({ReactiveMax}) > MaxRollbackTicks/2({clampMax}) " +
+                             "violates the rollback-budget invariant (§7.3).";
+                if (throwOnError)
+                    throw new System.ArgumentOutOfRangeException(nameof(ReactiveMax), msg);
+                logger?.KWarning($"{msg} Clamping ReactiveMax to {clampMax}.");
+                ReactiveMax = clampMax;
+            }
+        }
     }
 }

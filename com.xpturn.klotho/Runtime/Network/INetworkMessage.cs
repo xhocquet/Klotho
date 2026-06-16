@@ -56,8 +56,22 @@ namespace xpTURN.Klotho.Network
         // Dynamic InputDelay — server→client push when smoothed RTT change crosses asymmetric threshold.
         RecommendedExtraDelayUpdate = 74,
 
+        // Dynamic InputDelay — client→server/host report of the client's effective
+        // extra-delay (baseline + reactive) so the server/host folds the client's reactive correction
+        // into its authoritative baseline. SD: client→server. P2P: guest→host (star topology, peerId 0).
+        ReactiveExtraDelayReport = 92,
+
         // Late join notification — host (P2P) / server (SD) broadcast to existing peers on new player completion.
         LateJoinNotification = 75,
+
+        // Recovery ladder rungs 3-4: guest→host resync-failure report and
+        // host→guests abort broadcast when corrective resets are exhausted.
+        ResyncFailureReport = 76,
+        MatchAbort = 77,
+
+        // Player state change: host (P2P) → existing guests on a confirmed
+        // disconnect / reconnect / leave, so guests exclude a departed peer from the timing vote.
+        PlayerStateNotification = 78,
 
         // Server-driven
         ClientInput = 80,

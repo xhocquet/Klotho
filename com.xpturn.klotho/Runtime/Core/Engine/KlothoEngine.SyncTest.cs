@@ -20,6 +20,7 @@ namespace xpTURN.Klotho.Core
             _syncTestRunner = new SyncTestRunner();
             _syncTestRunner.Initialize(_simulation, checkDistance);
             _syncTestRunner.OnSyncError += HandleSyncTestError;
+            _syncTestRunner.OnSyncTestDisabled += HandleSyncTestDisabled;
             _syncTestEnabled = true;
         }
 
@@ -31,6 +32,7 @@ namespace xpTURN.Klotho.Core
             if (_syncTestRunner != null)
             {
                 _syncTestRunner.OnSyncError -= HandleSyncTestError;
+                _syncTestRunner.OnSyncTestDisabled -= HandleSyncTestDisabled;
                 _syncTestRunner = null;
             }
             _syncTestEnabled = false;
@@ -49,6 +51,12 @@ namespace xpTURN.Klotho.Core
         private void HandleSyncTestError(SyncTestFailure failure)
         {
             _logger?.KError($"[KlothoEngine][SyncTest] Failed tick={failure.Tick} distance={failure.RollbackDistance} entities={failure.EntityCount} expected=0x{failure.ExpectedHash:X16} actual=0x{failure.ActualHash:X16}");
+        }
+
+        private void HandleSyncTestDisabled()
+        {
+            _logger?.KError($"[KlothoEngine][SyncTest] auto-disabled: {_syncTestRunner?.ConsecutiveFailLimit} consecutive failed checks — persistent non-determinism, further checks would repeat the same signal (IMP59 V2-H6)");
+            DisableSyncTest();
         }
 
         #endregion

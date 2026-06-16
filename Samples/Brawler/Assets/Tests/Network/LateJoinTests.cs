@@ -50,6 +50,12 @@ namespace xpTURN.Klotho.Network.Tests
                     }
                 }
             }
+            // Engine per-tick save trigger — no-op: this mock keeps no restorable history.
+            public void SaveSnapshot() { }
+
+            // No internal snapshot history — engine rollback resolve always fails (escalation paths under test).
+            public int GetNearestRollbackTick(int targetTick) => -1;
+
             public void Rollback(int targetTick) { CurrentTick = targetTick; }
             public long GetStateHash() => StateHash;
             public void Reset() { CurrentTick = 0; TickCallCount = 0; }
@@ -96,7 +102,10 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<IPlayerInfo> OnPlayerLeft;
             public event Action<ICommand> OnCommandReceived;
             public event Action<int, int, long, long> OnDesyncDetected;
-            public event Action<int, int> OnFrameAdvantageReceived;
+            public event Action<int, int, bool> OnSyncHashCompared;
+            public event Action<int, int> OnResyncFailureReported;
+            public event Action<int> OnMatchAbortReceived;
+            public event Action<int, int, int> OnFrameAdvantageReceived;
             public event Action<int> OnLocalPlayerIdAssigned;
             public event Action<int, int> OnFullStateRequested;
             public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -124,10 +133,15 @@ namespace xpTURN.Klotho.Network.Tests
             }
             public void RequestCommandsForTick(int tick) { }
             public void SendSyncHash(int tick, long hash) { }
+            public void InvalidateLocalSyncHashes(int fromTick) { }
+            public void InvalidateSyncHashes(int fromTick) { }
+            public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash) { }
+            public void BroadcastMatchAbort(byte reason) { }
             public void Update() { }
             public void FlushSendQueue() { }
             public void ClearOldData(int tick) { }
             public void SetLocalTick(int tick) { }
+            public void SetLocalAdvantage(int advantage) { }
             public void SendFullStateRequest(int currentTick) { }
             public void SendFullStateResponse(int peerId, int tick, byte[] stateData, long stateHash) { }
             public void BroadcastFullState(int tick, byte[] stateData, long stateHash, FullStateKind kind = FullStateKind.Unicast) { }
@@ -217,10 +231,10 @@ namespace xpTURN.Klotho.Network.Tests
             var snapshot = snapshotsArray.GetValue(idx);
             var snapshotType = snapshot.GetType();
 
-            var activeIds = (int[])snapshotType.GetField("ActivePlayerIds").GetValue(snapshot);
+            var activeIds = (List<int>)snapshotType.GetField("ActivePlayerIds").GetValue(snapshot);
 
             Assert.IsNotNull(activeIds);
-            Assert.AreEqual(2, activeIds.Length);
+            Assert.AreEqual(2, activeIds.Count);
             Assert.Contains(0, activeIds);
             Assert.Contains(1, activeIds);
         }
@@ -392,10 +406,10 @@ namespace xpTURN.Klotho.Network.Tests
             sysCmd.JoinedPlayerId = 2;
             inputBuffer.AddCommand(sysCmd);
 
-            Assert.IsFalse(inputBuffer.HasAllCommands(5, 1), "System command alone should not satisfy HasAllCommands");
+            Assert.IsFalse(inputBuffer.HasAllCommands(5, new List<int> { 0 }), "System command alone should not satisfy HasAllCommands");
 
             inputBuffer.AddCommand(new EmptyCommand(0, 5));
-            Assert.IsTrue(inputBuffer.HasAllCommands(5, 1), "Player input should satisfy HasAllCommands");
+            Assert.IsTrue(inputBuffer.HasAllCommands(5, new List<int> { 0 }), "Player input should satisfy HasAllCommands");
         }
 
         #endregion

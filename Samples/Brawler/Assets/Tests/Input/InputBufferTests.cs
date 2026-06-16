@@ -138,7 +138,7 @@ namespace xpTURN.Klotho.Input.Tests
             _buffer.AddCommand(new EmptyCommand(1, 10));
             _buffer.AddCommand(new EmptyCommand(2, 10));
 
-            Assert.IsTrue(_buffer.HasAllCommands(10, 3));
+            Assert.IsTrue(_buffer.HasAllCommands(10, new List<int> { 0, 1, 2 }));
         }
 
         [Test]
@@ -147,7 +147,22 @@ namespace xpTURN.Klotho.Input.Tests
             _buffer.AddCommand(new EmptyCommand(0, 10));
             _buffer.AddCommand(new EmptyCommand(1, 10));
 
-            Assert.IsFalse(_buffer.HasAllCommands(10, 3));
+            Assert.IsFalse(_buffer.HasAllCommands(10, new List<int> { 0, 1, 2 }));
+        }
+
+        [Test]
+        public void HasAllCommands_DepartedPlayerLeftover_DoesNotSatisfyQuorum()
+        {
+            // Regression pin: player 1 departed but left a future-tick command;
+            // active roster is {0, 2} and player 2's input is missing. The old count-based
+            // check (2 stored >= 2 active) wrongly satisfied the quorum — membership must not.
+            _buffer.AddCommand(new EmptyCommand(0, 10));
+            _buffer.AddCommand(new EmptyCommand(1, 10)); // leftover from departed player 1
+
+            Assert.IsFalse(_buffer.HasAllCommands(10, new List<int> { 0, 2 }),
+                "Leftover commands from departed players must not satisfy the tick quorum");
+            Assert.IsTrue(_buffer.HasAllCommands(10, new List<int> { 0, 1 }),
+                "Membership check passes only when every listed player's command is present");
         }
 
         #endregion
@@ -233,7 +248,7 @@ namespace xpTURN.Klotho.Input.Tests
 
         #endregion
 
-        #region Seal guard — Phase 2-1 ②-B silent desync 마지막 차단막
+        #region Seal guard — silent desync 마지막 차단막
 
         [Test]
         public void SealEmpty_MarksTickPlayerPair_IsSealedReturnsTrueForExactMatchOnly()
@@ -286,12 +301,36 @@ namespace xpTURN.Klotho.Input.Tests
                 "Seal at tick 12 (>= cleanup 10) must be preserved");
         }
 
+        [Test]
+        public void Unseal_RemovesSeal_RestoresAddCommandAtSealedTick()
+        {
+            // A sealed-but-no-command hole (rollback ClearAfter clears the command
+            // but keeps the seal) cannot be repopulated — AddCommand is dropped by the seal guard,
+            // freezing the chain. Unseal lets the range-fill authority restore its empty placeholder.
+            _buffer.SealEmpty(tick: 10, playerId: 1);
+            _buffer.AddCommand(new EmptyCommand(playerId: 1, tick: 10));
+            Assert.IsFalse(_buffer.HasCommandForTick(10),
+                "Precondition: sealed-no-command hole — AddCommand dropped by seal guard");
+
+            _buffer.Unseal(tick: 10, playerId: 1);
+            Assert.IsFalse(_buffer.IsSealed(10, 1), "Unseal must clear the seal");
+
+            _buffer.AddCommand(new EmptyCommand(playerId: 1, tick: 10));
+            Assert.IsTrue(_buffer.HasCommandForTick(10),
+                "After Unseal, AddCommand at the formerly-sealed (tick, playerId) must succeed — hole repopulated");
+
+            // Unseal is per-key: must not affect other seals.
+            _buffer.SealEmpty(tick: 11, playerId: 1);
+            _buffer.Unseal(tick: 10, playerId: 1); // idempotent / unrelated
+            Assert.IsTrue(_buffer.IsSealed(11, 1), "Unseal at (10,1) must not clear seal at (11,1)");
+        }
+
         #endregion
 
-        #region Overwrite
+        #region Duplicate
 
         [Test]
-        public void AddCommand_SamePlayerSameTick_Overwrites()
+        public void AddCommand_SamePlayerSameTick_KeepsFirst()
         {
             var cmd1 = new MoveCommand(0, 10, new FPVector3(FP64.FromRaw(100), FP64.Zero, FP64.Zero));
             var cmd2 = new MoveCommand(0, 10, new FPVector3(FP64.FromRaw(200), FP64.Zero, FP64.Zero));
@@ -299,12 +338,104 @@ namespace xpTURN.Klotho.Input.Tests
             _buffer.AddCommand(cmd1);
             _buffer.AddCommand(cmd2);
 
-            // Count should still be 1 (overwrite)
+            // Keep-first: the duplicate arrival is dropped (no pool return — the
+            // same instance can reach AddCommand twice via re-subscribed dispatch, and a double
+            // return would lend one instance to two slots); the stored instance survives.
             var commands = _buffer.GetCommands(10).ToList();
             Assert.AreEqual(1, commands.Count);
 
             var retrieved = (MoveCommand)_buffer.GetCommand(10, 0);
-            Assert.AreEqual(FP64.FromRaw(200), retrieved.Target.x);
+            Assert.AreEqual(FP64.FromRaw(100), retrieved.Target.x);
+            Assert.AreSame(cmd1, retrieved);
+        }
+
+        #endregion
+
+        #region AddCommandChecked — ownership contract
+
+        [Test]
+        public void AddCommandChecked_EmptySlot_ReturnsStored()
+        {
+            var result = _buffer.AddCommandChecked(new EmptyCommand(playerId: 0, tick: 10));
+
+            Assert.AreEqual(CommandStoreResult.Stored, result);
+            Assert.IsTrue(_buffer.HasCommandForTick(10, 0));
+        }
+
+        [Test]
+        public void AddCommandChecked_Null_ReturnsDroppedNull()
+        {
+            Assert.AreEqual(CommandStoreResult.DroppedNull, _buffer.AddCommandChecked(null));
+            Assert.AreEqual(0, _buffer.Count);
+        }
+
+        [Test]
+        public void AddCommandChecked_OverwriteDifferentInstance_ReturnsReplaced_AndSwapsInstance()
+        {
+            var predicted = new MoveCommand(0, 10, new FPVector3(FP64.FromRaw(100), FP64.Zero, FP64.Zero));
+            var verified = new MoveCommand(0, 10, new FPVector3(FP64.FromRaw(200), FP64.Zero, FP64.Zero));
+            _buffer.AddCommandChecked(predicted);
+
+            var result = _buffer.AddCommandChecked(verified, overwriteExisting: true);
+
+            Assert.AreEqual(CommandStoreResult.Replaced, result);
+            Assert.AreSame(verified, _buffer.GetCommand(10, 0),
+                "Overwrite must store the verified instance; the displaced one is left to GC");
+        }
+
+        [Test]
+        public void AddCommandChecked_SameInstance_NonOverwrite_ReturnsAlreadyStored()
+        {
+            // The double-dispatch shape: the SAME arrival instance re-enters AddCommand.
+            // Must be AlreadyStored (buffer property — caller must NOT Return), not
+            // DroppedDuplicate, in BOTH overwrite modes.
+            var cmd = new EmptyCommand(playerId: 0, tick: 10);
+            _buffer.AddCommandChecked(cmd);
+
+            Assert.AreEqual(CommandStoreResult.AlreadyStored, _buffer.AddCommandChecked(cmd));
+            Assert.AreSame(cmd, _buffer.GetCommand(10, 0));
+        }
+
+        [Test]
+        public void AddCommandChecked_SameInstance_Overwrite_ReturnsAlreadyStored()
+        {
+            var cmd = new EmptyCommand(playerId: 0, tick: 10);
+            _buffer.AddCommandChecked(cmd, overwriteExisting: true);
+
+            Assert.AreEqual(CommandStoreResult.AlreadyStored,
+                _buffer.AddCommandChecked(cmd, overwriteExisting: true));
+            Assert.AreSame(cmd, _buffer.GetCommand(10, 0));
+        }
+
+        [Test]
+        public void AddCommandChecked_DifferentInstance_NonOverwrite_ReturnsDroppedDuplicate_KeepsFirst()
+        {
+            var first = new EmptyCommand(playerId: 0, tick: 10);
+            var dup = new EmptyCommand(playerId: 0, tick: 10);
+            _buffer.AddCommandChecked(first);
+
+            var result = _buffer.AddCommandChecked(dup);
+
+            Assert.AreEqual(CommandStoreResult.DroppedDuplicate, result);
+            Assert.AreSame(first, _buffer.GetCommand(10, 0), "Keep-first must survive (IMP59 V2-H3)");
+        }
+
+        [Test]
+        public void AddCommandChecked_Sealed_ReturnsDroppedSealed_WithoutPoolReturn()
+        {
+            // The buffer no longer returns the sealed-drop arrival to CommandPool —
+            // disposal moved to checked callers. Pin with the pool count.
+            CommandPool.ClearAll();
+            _buffer.SealEmpty(tick: 10, playerId: 1);
+            var late = new EmptyCommand(playerId: 1, tick: 10);
+
+            int pooledBefore = CommandPool.GetTotalPooledCount();
+            var result = _buffer.AddCommandChecked(late);
+
+            Assert.AreEqual(CommandStoreResult.DroppedSealed, result);
+            Assert.AreEqual(pooledBefore, CommandPool.GetTotalPooledCount(),
+                "Sealed drop must not return the arrival to the pool inside the buffer");
+            Assert.IsFalse(_buffer.HasCommandForTick(10), "Sealed slot must remain empty");
         }
 
         #endregion
@@ -357,30 +488,40 @@ namespace xpTURN.Klotho.Input.Tests
             Assert.AreEqual(10, predicted.Tick);
         }
 
+        // The predictor no longer judges correctness itself — the engine passes the
+        // byte-equality verdict (one CommandDataEquals shared with the rollback decision), so the
+        // old type-only judgment (same type, different payload counted as a hit) is gone.
         [Test]
-        public void UpdateAccuracy_SameType_IncreasesAccuracy()
+        public void UpdateAccuracy_CorrectOutcome_IncreasesAccuracy()
         {
             var predictor = new SimpleInputPredictor();
 
-            var predicted = new MoveCommand(0, 10, FPVector3.Zero);
-            var actual = new MoveCommand(0, 10, new FPVector3(FP64.FromRaw(100), FP64.Zero, FP64.Zero));
-
-            predictor.UpdateAccuracy(predicted, actual);
+            predictor.UpdateAccuracy(wasCorrect: true);
 
             Assert.AreEqual(1.0f, predictor.Accuracy, 0.01f);
         }
 
         [Test]
-        public void UpdateAccuracy_DifferentType_DecreasesAccuracy()
+        public void UpdateAccuracy_IncorrectOutcome_DecreasesAccuracy()
         {
             var predictor = new SimpleInputPredictor();
 
-            var predicted = new MoveCommand(0, 10, FPVector3.Zero);
-            var actual = new EmptyCommand(0, 10);
-
-            predictor.UpdateAccuracy(predicted, actual);
+            predictor.UpdateAccuracy(wasCorrect: false);
 
             Assert.AreEqual(0.0f, predictor.Accuracy, 0.01f);
+        }
+
+        [Test]
+        public void UpdateAccuracy_MixedOutcomes_TracksRatio()
+        {
+            var predictor = new SimpleInputPredictor();
+
+            predictor.UpdateAccuracy(wasCorrect: true);
+            predictor.UpdateAccuracy(wasCorrect: true);
+            predictor.UpdateAccuracy(wasCorrect: false);
+            predictor.UpdateAccuracy(wasCorrect: true);
+
+            Assert.AreEqual(0.75f, predictor.Accuracy, 0.01f);
         }
     }
 }

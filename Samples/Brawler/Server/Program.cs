@@ -69,6 +69,11 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
     var logLevel = args.Length > 2 ? Enum.Parse<KLogLevel>(args[2]) : KLogLevel.Warning;
     using var loggerFactory = CreateLoggerFactory(logLevel);
     var logger = loggerFactory.CreateLogger("Server");
+    
+#if DEBUG || DEVELOPMENT_BUILD
+    CommandPool.SetDiagnosticLogger(logger);
+    EventPool.SetDiagnosticLogger(logger);
+#endif
 
     // Load config
     var simConfig = SimulationConfigLoader.Load(args, logger);
@@ -142,6 +147,10 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     var logLevel = args.Length > 4 ? Enum.Parse<KLogLevel>(args[4]) : KLogLevel.Warning;
     using var loggerFactory = CreateLoggerFactory(logLevel);
     var logger = loggerFactory.CreateLogger("Server");
+#if DEBUG || DEVELOPMENT_BUILD
+    CommandPool.SetDiagnosticLogger(logger);
+    EventPool.SetDiagnosticLogger(logger);
+#endif
 
     // Load config
     var simConfig = SimulationConfigLoader.Load(args, logger);

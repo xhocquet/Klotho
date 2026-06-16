@@ -8,7 +8,6 @@ using xpTURN.Klotho.Logging;
 
 using xpTURN.Klotho.Helper.Tests;
 using xpTURN.Klotho.Network;
-using xpTURN.Klotho.State;
 
 namespace xpTURN.Klotho.Core.Tests
 {
@@ -40,19 +39,10 @@ namespace xpTURN.Klotho.Core.Tests
             public override long GetContentHash() => ((long)EventTypeId << 32) | (uint)Payload;
         }
 
-        private sealed class StubSnapshot : IStateSnapshot
-        {
-            public int Tick { get; set; }
-            public byte[] Serialize() => Array.Empty<byte>();
-            public void Deserialize(byte[] data) { }
-            public ulong CalculateHash() => 0;
-        }
 
         private static readonly FieldInfo _engineEventCollectorField = typeof(KlothoEngine)
             .GetField("_eventCollector", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static readonly FieldInfo _engineSnapshotManagerField = typeof(KlothoEngine)
-            .GetField("_snapshotManager", BindingFlags.NonPublic | BindingFlags.Instance);
 
         private static readonly FieldInfo _engineSyncedWatermarkField = typeof(KlothoEngine)
             .GetField("_syncedDispatchHighWaterMark", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -60,8 +50,6 @@ namespace xpTURN.Klotho.Core.Tests
         private static readonly MethodInfo _engineApplyFullStateMethod = typeof(KlothoEngine)
             .GetMethod("ApplyFullState", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static IStateSnapshotManager ReadSnapshotManager(KlothoEngine engine)
-            => (IStateSnapshotManager)_engineSnapshotManagerField.GetValue(engine);
 
         private static int ReadSyncedWatermark(KlothoEngine engine)
             => (int)_engineSyncedWatermarkField.GetValue(engine);
@@ -136,9 +124,6 @@ namespace xpTURN.Klotho.Core.Tests
                 "evt.Tick (set by BeginTick) must match dispatch tick (set by DispatchTickEvents) — tick-argument invariant");
 
             // Inject stub snapshot so ResolveRollbackTick_Default finds a restore point.
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
-
             // Force rollback through raiseAtTick. Rollback.cs:143-144 rewinds _lastVerifiedTick
             // to resolvedTick - 1, so chain must re-advance past raiseAtTick — re-dispatch of
             // the resimulated Synced event would violate the single-fire invariant.
@@ -198,9 +183,6 @@ namespace xpTURN.Klotho.Core.Tests
 
             // Inject a stub snapshot at raiseAtTick - 1 so ResolveRollbackTick_Default can find
             // a restore point. Without this the non-ECS path always fails with NoSnapshot.
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
-
             // Change variant so resim produces an event with a different content hash.
             payloadVariant = 2;
             _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
@@ -243,9 +225,6 @@ namespace xpTURN.Klotho.Core.Tests
             _harness.AdvanceAllToTick(raiseAtTick + 5);
             Assert.AreEqual(1, dispatchedCount, "Initial pass must fire Synced exactly once");
 
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
-
             // Change variant so resim produces a different-content Synced at the same tick.
             payloadVariant = 2;
             _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
@@ -286,9 +265,6 @@ namespace xpTURN.Klotho.Core.Tests
             _harness.AdvanceAllToTick(raiseAtTick + 5);
             Assert.AreEqual(2, dispatchedCount,
                 $"Both Synced events at the same tick must fire on initial pass. Got {dispatchedCount}.");
-
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
 
             _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
             _harness.AdvanceAllToTick(raiseAtTick + 12);

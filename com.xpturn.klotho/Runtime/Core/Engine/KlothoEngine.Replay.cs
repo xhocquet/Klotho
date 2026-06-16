@@ -3,7 +3,6 @@ using xpTURN.Klotho.Logging;
 using System.IO;
 
 using xpTURN.Klotho.Input;
-using xpTURN.Klotho.State;
 using xpTURN.Klotho.Replay;
 
 namespace xpTURN.Klotho.Core
@@ -132,22 +131,30 @@ namespace xpTURN.Klotho.Core
             if (!_isReplayMode)
                 return;
 
-            // Find the snapshot closest to the target tick
+            // Find the snapshot closest to the target tick via the simulation's own snapshot
+            // history; with no history, replay seek re-simulates from tick 0.
             int startTick = 0;
-            if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
-            {
-                int nearestTick = ecsSim.GetNearestSnapshotTick(tick);
-                if (nearestTick >= 0)
-                    startTick = nearestTick;
-            }
-            else if (_snapshotManager is RingSnapshotManager ringMgr)
-            {
-                var nearest = ringMgr.GetNearestSnapshot(tick);
-                if (nearest != null)
-                    startTick = nearest.Tick;
-            }
+            int nearest = _simulation.GetNearestRollbackTick(tick);
+            if (nearest >= 0)
+                startTick = nearest;
 
             _simulation.Rollback(startTick);
+
+            // A backward seek must un-latch the Synced dispatch watermark so the
+            // resumed HandleReplayTick re-dispatches Synced events at re-played ticks (mirror
+            // Spectator.ResetToTick). GetNearestRollbackTick returns startTick <= tick, so
+            // startTick - 1 < tick keeps the resumed tick above the lowered watermark.
+            if (_syncedDispatchHighWaterMark >= startTick)
+                _syncedDispatchHighWaterMark = startTick - 1;
+            // Drop stale buffered events (pool-safe) and reset ring-wrap slot markers so the
+            // resumed ClearTick does not false-fire the newer-occupant dev guard after a long
+            // backward seek. Replay only plays forward from `tick` after a seek (no rollback that
+            // reads earlier ticks), so wiping the whole buffer is safe.
+            _eventBuffer.ClearAll();
+            // ClearAll just pooled events still referenced by the collector's residue (the prior
+            // HandleReplayTick leaves _collected populated). Drop those refs now so the empty-seek
+            // path (startTick == tick, loop body never runs) holds no dangling pointers.
+            _eventCollector.Clear();
 
             // Re-simulate from the nearest snapshot up to the target tick
             CurrentTick = startTick;
@@ -159,7 +166,19 @@ namespace xpTURN.Klotho.Core
                 _tickCommandsCache.Clear();
                 for (int i = 0; i < commands.Count; i++)
                     _tickCommandsCache.Add(commands[i]);
+                // Open the collector so RaiseEvent stamps evt.Tick correctly and
+                // any residue from the prior path is cleared (mirrors every other Tick path).
+                // BeginTick is load-bearing here: it clears the entry residue before the drop loop,
+                // so the loop never re-returns events already pooled by ClearAll above.
+                _eventCollector.BeginTick(CurrentTick);
                 _simulation.Tick(_tickCommandsCache);
+                // Seek re-simulation is state-advance only — these events fall outside the resumed
+                // dispatch range (HandleReplayTick re-runs from `tick`), so buffering them would
+                // double-dispatch. Return them to the pool instead, or they leak (the next BeginTick
+                // clears _collected with no pool return).
+                for (int ei = 0; ei < _eventCollector.Count; ei++)
+                    EventPool.Return(_eventCollector.Collected[ei]);
+                _eventCollector.Clear();
 
                 SaveSnapshot(CurrentTick);
 

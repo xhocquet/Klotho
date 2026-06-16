@@ -5,7 +5,7 @@ namespace xpTURN.Klotho.Core
     /// <summary>
     /// Render clock state for the view layer.
     /// Supports both the CSP path (Predicted*) and the snapshot interpolation path (Verified*) simultaneously.
-    /// On SD Client, AdaptiveRenderClock injects Verified values; in other modes the engine fills them with defaults.
+    /// All values are filled by the engine's RenderClock getter (the single presentation path for P2P/SD/replay).
     /// </summary>
     public struct RenderClockState
     {
@@ -17,7 +17,9 @@ namespace xpTURN.Klotho.Core
         public int VerifiedBaseTick;
         public double VerifiedTimeMs;
 
-        // SD Client adaptive only (1.0 baseline). 1f in other modes.
+        // Live verified-render-time catchup/slowdown scale ([0.5, 2.0]) from AdvanceVerifiedRenderTime,
+        // applied in all modes. 1f when no drift is computed (init / pre-verified / early-return).
+        // The smooth-converge multiplier — does NOT reflect the >10-tick instant snap.
         public float Timescale;
 
         // Tick interval of the current mode. For Replay, the value from recording metadata; otherwise SimulationConfig.TickIntervalMs.

@@ -25,6 +25,58 @@ namespace xpTURN.Klotho.ECS
 
         public int CurrentTick => _frame.Tick;
 
+        // Reused payload for GetActiveMatchEnd — callers (resync backstop) do not retain it.
+        private readonly MatchEndStatePayload _matchEndPayload = new MatchEndStatePayload();
+
+        /// <inheritdoc />
+        public bool IsMatchEndedState
+        {
+            // TryGetSingleton (NOT GetSingleton): the singleton is absent in spectator/pre-init and on
+            // an SD client before its first FullState — absence means "not ended", never throw.
+            get => _frame.TryGetSingleton<MatchEndStateComponent>(out var e)
+                   && _frame.GetReadOnly<MatchEndStateComponent>(e).Ended;
+        }
+
+        /// <inheritdoc />
+        public xpTURN.Klotho.Core.IMatchEndEvent GetActiveMatchEnd()
+        {
+            if (!_frame.TryGetSingleton<MatchEndStateComponent>(out var e))
+                return null;
+            ref readonly var c = ref _frame.GetReadOnly<MatchEndStateComponent>(e);
+            if (!c.Ended)
+                return null;
+            _matchEndPayload.WinnerPlayerId = c.WinnerPlayerId;
+            return _matchEndPayload;
+        }
+
+        // Engine-agnostic IMatchEndEvent backing the backstop (EcsSimulation cannot build a game event
+        // type). Carries the winner from MatchEndStateComponent; Reason is a sentinel ("resync") because
+        // the original game reason is not persisted in state — the game subtype is not
+        // preserved on the backstop path, which is sufficient for the one-way termination notification.
+        private sealed class MatchEndStatePayload : xpTURN.Klotho.Core.IMatchEndEvent
+        {
+            private static readonly FixedString32 s_resyncReason = FixedString32.FromString("resync");
+            public int WinnerPlayerId;
+            int xpTURN.Klotho.Core.IMatchEndEvent.WinnerPlayerId => WinnerPlayerId;
+            FixedString32 xpTURN.Klotho.Core.IMatchEndEvent.Reason => s_resyncReason;
+        }
+
+        /// <summary>
+        /// Scenario C: when &gt;= 0, XORs a salt into the hash of the named execution tick
+        /// (evaluated at _frame.Tick == value+1, the post-execution hash point) so an armed SD client's
+        /// resim mismatches the server's verified hash, driving a desync-resync FullState request. -1
+        /// disables. Set by the engine only on the targeted client, never the server. Hash-only and
+        /// tick-gated, so a FullState restore past the tick auto-recovers.
+        ///
+        /// <para>Field is compiled UNCONDITIONALLY (not under <c>#if KLOTHO_FAULT_INJECTION</c>) so the
+        /// EcsSimulation serialization layout is identical between the Editor and a player build whose
+        /// Scripting Define Symbols differ — otherwise the player build fails with "script class layout
+        /// is incompatible between the editor and the player". The salt is still applied only under the
+        /// define (see GetStateHash) and the field is only set by the engine under the define, so it is
+        /// inert (default -1) in non-fault-injection builds.</para>
+        /// </summary>
+        public int ForceDesyncHashTick = -1;
+
         public EcsSimulation(int maxEntities, int maxRollbackTicks = 10, int deltaTimeMs = 50, IKLogger logger = null, IDataAssetRegistryBuilder registryBuilder = null, IDataAssetRegistry assetRegistry = null)
         {
             if (assetRegistry != null && registryBuilder != null)
@@ -125,6 +177,43 @@ namespace xpTURN.Klotho.ECS
                 _ringBuffer.RestoreSystemState(targetTick, _snapshotParticipants);
         }
 
+        /// <summary>
+        /// Copies the live frame + participating system state into a caller-owned side buffer,
+        /// outside the rollback ring (the ring stores pre-tick snapshots only). SyncTest uses
+        /// this to keep the post-forward state so a failed check can restore the forward branch
+        /// instead of leaving the diverged resim branch live.
+        /// </summary>
+        public void CaptureStateTo(Frame targetFrame, ref byte[] systemStateBuffer)
+        {
+            targetFrame.CopyFrom(_frame);
+            if (_snapshotParticipants.Count == 0) return;
+
+            int totalSize = 0;
+            for (int i = 0; i < _snapshotParticipants.Count; i++)
+                totalSize += _snapshotParticipants[i].GetSnapshotSize();
+
+            if (systemStateBuffer == null || systemStateBuffer.Length < totalSize)
+                systemStateBuffer = new byte[totalSize];
+
+            var writer = new SpanWriter(systemStateBuffer);
+            for (int i = 0; i < _snapshotParticipants.Count; i++)
+                _snapshotParticipants[i].SaveSnapshot(ref writer);
+        }
+
+        /// <summary>
+        /// Restores the live frame + participating system state from a side buffer previously
+        /// filled by <see cref="CaptureStateTo"/>.
+        /// </summary>
+        public void RestoreStateFrom(Frame sourceFrame, byte[] systemStateBuffer)
+        {
+            _frame.CopyFrom(sourceFrame);
+            if (_snapshotParticipants.Count == 0 || systemStateBuffer == null) return;
+
+            var reader = new SpanReader(systemStateBuffer);
+            for (int i = 0; i < _snapshotParticipants.Count; i++)
+                _snapshotParticipants[i].RestoreSnapshot(ref reader);
+        }
+
         public long GetStateHash()
         {
             ulong frameHash = _frame.CalculateHash();
@@ -145,6 +234,16 @@ namespace xpTURN.Klotho.ECS
 
                 hash = FPHash.HashBytes(hash, new ReadOnlySpan<byte>(_hashBuffer, 0, writer.Position));
             }
+
+#if KLOTHO_FAULT_INJECTION
+            // Scenario C: salt the hash of one execution tick on the armed client so its
+            // resim diverges from the server's verified hash (determinism-failure path → FullStateRequest).
+            // The verified compare hashes after Tick() increments, so the post-execution hash of tick N
+            // is taken at _frame.Tick == N+1. Hash-only (no state mutation) + monotonic tick gate → a
+            // FullState restore past N stops the salt and recovery is clean.
+            if (ForceDesyncHashTick >= 0 && _frame.Tick == ForceDesyncHashTick + 1)
+                hash ^= 0x5DE59C00DEADF00DUL;
+#endif
 
             return (long)hash;
         }
@@ -276,6 +375,8 @@ namespace xpTURN.Klotho.ECS
         /// </summary>
         public bool TryGetSnapshotFrame(int tick, out Frame frame)
             => _ringBuffer.TryGetFrame(tick, _frame.Tick, out frame);
+
+        public int GetNearestRollbackTick(int targetTick) => GetNearestSnapshotTick(targetTick);
 
         public int GetNearestSnapshotTick(int targetTick)
             => _ringBuffer.GetNearestAvailableTick(targetTick, _frame.Tick);

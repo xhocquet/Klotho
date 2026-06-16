@@ -135,6 +135,30 @@ namespace xpTURN.Klotho.Diagnostics
         /// </summary>
         public static int ForceTickOffsetDelta;
 
+        /// <summary>
+        /// Scenario C: drop the SD server's unicast FullStateResponse to the listed
+        /// players (server side). Keyed by playerId (resolved from peerId at the serve point via
+        /// PeerToPlayerMap) for consistency with the other id-keyed knobs. Keeps a desynced client's
+        /// FullState request unanswered so the SD timeout/retry/terminate ladder fires; clearing
+        /// the id within ResyncMaxRetries lets a re-request succeed and recover.
+        /// Only affects the desync-resync unicast (SendFullStateResponse); initial/bootstrap
+        /// BroadcastFullState is unaffected.
+        /// </summary>
+        public static readonly HashSet<int> DropFullStateResponsePlayerIds = new HashSet<int>();
+
+        /// <summary>
+        /// Scenario C: execution tick at which the listed SD clients diverge their resim
+        /// hash from the server's verified hash (determinism-failure path → desync-resync FullStateRequest).
+        /// -1 disables. Pairs with <see cref="DropFullStateResponsePlayerIds"/> to drive the ladder.
+        /// </summary>
+        public static int ForceClientDesyncAtTick = -1;
+
+        /// <summary>
+        /// Scenario C: SD clients (by playerId) that apply <see cref="ForceClientDesyncAtTick"/>.
+        /// Each client self-filters by LocalPlayerId; the server is never armed.
+        /// </summary>
+        public static readonly HashSet<int> ForceClientDesyncPlayerIds = new HashSet<int>();
+
 #if KLOTHO_FAULT_INJECTION
         /// <summary>Reset all toggles to defaults. Call from test [SetUp] / [TearDown] for hygiene.</summary>
         public static void Reset()
@@ -148,6 +172,9 @@ namespace xpTURN.Klotho.Diagnostics
             SuppressBootstrapAckPlayerIds.Clear();
             ForceSpawnRetryPlayerIds.Clear();
             ForceTickOffsetDelta = 0;
+            DropFullStateResponsePlayerIds.Clear();
+            ForceClientDesyncAtTick = -1;
+            ForceClientDesyncPlayerIds.Clear();
         }
 #endif
     }

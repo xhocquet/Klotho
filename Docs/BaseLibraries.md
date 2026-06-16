@@ -35,7 +35,7 @@ Standalone packages shared across the xpTURN ecosystem. Installed via Git URL.
 | Item | Contents |
 | ---- | ---- |
 | Purpose | In-house structured logging (no external logging dependency) |
-| Location | [`com.xpturn.klotho/Runtime/Logging/`](../com.xpturn.klotho/Runtime/Logging/) (engine-agnostic core — `KLoggerFactory`, `KLogBuilder`, `RollingFileSink`) + per-engine console sinks: `Runtime/Unity/Logging/` (Unity) / `Godot~/Adapters/` (Godot) |
+| Location | [`com.xpturn.klotho/Runtime/Logging/`](../com.xpturn.klotho/Runtime/Logging/) (engine-agnostic core — `KLoggerFactory`, `KLogBuilder`, `RollingFileSink`) + per-engine console sinks: `Unity/Logging/` (Unity) / `Godot~/Adapters/` (Godot) |
 | Assembly | `xpTURN.Klotho.Logging` (core) + `xpTURN.Klotho.Logging.Unity` (Unity sink). **Godot has no separate `Logging.Godot`** — `GodotDebugSink` / `GodotLogSink` / `GodotKLoggerFactory` live in the single adapter assembly `xpTURN.Klotho.Runtime.Godot` |
 | Dependencies | `xpTURN.Polyfill.Runtime` only (`noEngineReferences: true` for the core) |
 

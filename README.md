@@ -126,7 +126,7 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
 ├── README.md  ·  CHANGELOG.md  ·  LICENSE
 ├── com.xpturn.klotho/             ← ★ framework package
 │   ├── package.json
-│   ├── Runtime/                   engine-agnostic core + Unity adapter
+│   ├── Runtime/                   engine-agnostic core
 │   │   ├── Core/                  engine · session · network
 │   │   ├── Logging/               IKLogger (in-house)
 │   │   ├── Gameplay/              built-in components / systems
@@ -138,11 +138,12 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
 │   │   ├── Replay/                record / playback (LZ4)
 │   │   ├── ECS/                   Frame · components · systems
 │   │   ├── Deterministic/         FP64 · physics · navigation
-│   │   ├── Unity/                 Unity adapter
 │   │   ├── LiteNetLib/            UDP transport
 │   │   └── ThirdParty/            vendored deps
+│   ├── Unity/                     Unity adapter
+│   │   └── Editor/                Unity-only editor tools
 │   ├── Godot~/                    Godot (.NET) adapter
-│   ├── Editor/                    Unity-only editor tools
+│   │   └── Adapters/Editor/       Godot (.NET) editor tools
 │   ├── Plugins/Analyzers/         source generator
 │   ├── Prefabs/                   debug prefabs (Unity)
 │   ├── Plugins~/Logging.Mel/      MEL interop sample

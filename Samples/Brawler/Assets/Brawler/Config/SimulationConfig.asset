@@ -17,10 +17,12 @@ MonoBehaviour:
   <CatchupMaxTicksPerFrame>k__BackingField: 200
   <InputDelayTicks>k__BackingField: 4
   <MaxRollbackTicks>k__BackingField: 50
-  <SyncCheckInterval>k__BackingField: 30
+  <SyncCheckInterval>k__BackingField: 20
   <ResyncMaxRetries>k__BackingField: 3
   <DesyncThresholdForResync>k__BackingField: 3
   <CorrectiveResetCooldownMs>k__BackingField: 5000
+  <CorrectiveResetMaxAttempts>k__BackingField: 2
+  <AutoAbortOnRecoveryExhausted>k__BackingField: 1
   <UsePrediction>k__BackingField: 1
   <Mode>k__BackingField: 1
   <HardToleranceMs>k__BackingField: 0
@@ -37,6 +39,7 @@ MonoBehaviour:
   <ReactiveMax>k__BackingField: 40
   <ServerPushGraceTicks>k__BackingField: 40
   <ReactiveEscalateCooldownTicks>k__BackingField: 80
+  <ReactiveDeEscalateStableTicks>k__BackingField: 160
   <RollbackBurstCount>k__BackingField: 3
   <RollbackWindowTicks>k__BackingField: 200
   <EventDispatchWarnMs>k__BackingField: 5

@@ -9,7 +9,7 @@ using xpTURN.Klotho.Input;
 namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
-    /// Verifies the Pause-grace auto-inject guard in KlothoEngine.cs:815-839 (IMP41 B-1 fix).
+    /// Verifies the Pause-grace auto-inject guard in KlothoEngine.cs:815-839.
     /// When EndGracePolicy.Pause is active after match-end, the engine emits StopCommand and
     /// must skip the subsequent auto-inject EmptyCommand. Without the guard, when
     /// _recommendedExtraDelay > 0 the empty would overwrite the stop at the shifted slot.
@@ -61,6 +61,7 @@ namespace xpTURN.Klotho.Core.Tests
 
             ((SessionConfig)engine.SessionConfig).EndGracePolicy = EndGracePolicy.Pause;
             _matchEndedDispatchedField.SetValue(engine, true);
+            peer.Simulation.MatchEnded = true; // gate now also requires the current state to be ended
 
             const int extraDelay = 5;
             engine.ApplyExtraDelay(extraDelay, ExtraDelaySource.DynamicPush);
@@ -86,6 +87,7 @@ namespace xpTURN.Klotho.Core.Tests
 
             ((SessionConfig)engine.SessionConfig).EndGracePolicy = EndGracePolicy.Pause;
             _matchEndedDispatchedField.SetValue(engine, true);
+            peer.Simulation.MatchEnded = true; // gate now also requires the current state to be ended
 
             int tickBefore = engine.CurrentTick;
             _harness.Tick();

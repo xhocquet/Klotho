@@ -32,6 +32,12 @@ namespace xpTURN.Klotho.Core.Tests
 
             public void Initialize() { CurrentTick = 0; }
             public void Tick(List<ICommand> commands) { CurrentTick++; }
+            // Engine per-tick save trigger — no-op: this mock keeps no restorable history.
+            public void SaveSnapshot() { }
+
+            // No internal snapshot history — engine rollback resolve always fails (escalation paths under test).
+            public int GetNearestRollbackTick(int targetTick) => -1;
+
             public void Rollback(int targetTick) { CurrentTick = targetTick; }
             public long GetStateHash() => StateHash;
             public void Reset() { CurrentTick = 0; }
@@ -103,7 +109,10 @@ namespace xpTURN.Klotho.Core.Tests
             public event Action<IPlayerInfo> OnPlayerLeft;
             public event Action<ICommand> OnCommandReceived;
             public event Action<int, int, long, long> OnDesyncDetected;
-            public event Action<int, int> OnFrameAdvantageReceived;
+            public event Action<int, int, bool> OnSyncHashCompared;
+            public event Action<int, int> OnResyncFailureReported;
+            public event Action<int> OnMatchAbortReceived;
+            public event Action<int, int, int> OnFrameAdvantageReceived;
             public event Action<int> OnLocalPlayerIdAssigned;
             public event Action<int, int> OnFullStateRequested;
             public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -125,10 +134,22 @@ namespace xpTURN.Klotho.Core.Tests
             public void SendCommand(ICommand command) { }
             public void RequestCommandsForTick(int tick) { }
             public void SendSyncHash(int tick, long hash) { }
+            public void InvalidateLocalSyncHashes(int fromTick) { }
+
+            public int InvalidateSyncHashesCallCount { get; private set; }
+            public int LastInvalidateSyncHashesTick { get; private set; } = int.MinValue;
+            public void InvalidateSyncHashes(int fromTick)
+            {
+                InvalidateSyncHashesCallCount++;
+                LastInvalidateSyncHashesTick = fromTick;
+            }
+            public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash) { }
+            public void BroadcastMatchAbort(byte reason) { }
             public void Update() { }
             public void FlushSendQueue() { }
             public void ClearOldData(int tick) { }
             public void SetLocalTick(int tick) { }
+            public void SetLocalAdvantage(int advantage) { }
 
             public void SendFullStateRequest(int currentTick)
             {
@@ -143,6 +164,11 @@ namespace xpTURN.Klotho.Core.Tests
             }
 
             public void BroadcastFullState(int tick, byte[] stateData, long stateHash, FullStateKind kind = FullStateKind.Unicast) { }
+
+            public void FireSyncHashCompared(int tick, int peerId, bool matched)
+            {
+                OnSyncHashCompared?.Invoke(tick, peerId, matched);
+            }
 
             public void FireDesyncDetected(int playerId, int tick, long localHash, long remoteHash)
             {
@@ -169,7 +195,10 @@ namespace xpTURN.Klotho.Core.Tests
                 OnPlayerJoined?.Invoke(null);
                 OnPlayerLeft?.Invoke(null);
                 OnCommandReceived?.Invoke(null);
-                OnFrameAdvantageReceived?.Invoke(0, 0);
+                OnFrameAdvantageReceived?.Invoke(0, 0, 0);
+                OnSyncHashCompared?.Invoke(0, 0, false);
+                OnResyncFailureReported?.Invoke(0, 0);
+                OnMatchAbortReceived?.Invoke(0);
                 OnLocalPlayerIdAssigned?.Invoke(0);
             }
         }
@@ -242,7 +271,9 @@ namespace xpTURN.Klotho.Core.Tests
         }
 
         /// <summary>
-        /// #11: After 3 consecutive desyncs, RequestFullStateResync is fired
+        /// #11: After 3 consecutive desyncs, RequestFullStateResync is fired.
+        /// Reports target DISTINCT sync ticks — duplicate reports for the same tick count once
+        /// (N peers reporting one diverged tick must not skip rung 1).
         /// </summary>
         [Test]
         public void ConsecutiveDesync_TriggersResync()
@@ -253,9 +284,28 @@ namespace xpTURN.Klotho.Core.Tests
                 LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
 
             for (int i = 0; i < 3; i++)
-                _networkService.FireDesyncDetected(1, 5, 111, 222);
+                _networkService.FireDesyncDetected(1, 5 + i, 111, 222);
 
             Assert.AreEqual(1, _networkService.SendFullStateRequestCallCount);
+        }
+
+        /// <summary>
+        /// #11b: Duplicate desync reports for the SAME sync tick count once — they must not
+        /// multiply the consecutive counter and jump straight to resync.
+        /// </summary>
+        [Test]
+        public void DuplicateDesyncReports_SameTick_CountOnce()
+        {
+            AdvanceToTick(10);
+
+            for (int i = 0; i < 3; i++)
+                LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
+
+            for (int i = 0; i < 3; i++)
+                _networkService.FireDesyncDetected(1, 5, 111, 222);
+
+            Assert.AreEqual(0, _networkService.SendFullStateRequestCallCount,
+                "Three reports for one tick are a single desync occurrence — no escalation");
         }
 
         /// <summary>
@@ -297,30 +347,132 @@ namespace xpTURN.Klotho.Core.Tests
             // Advance past the first sync check (tick 10)
             AdvanceToTick(12);
 
-            // Fire 2 desyncs (count=2, below threshold of 3)
+            // Fire 2 reports for the same tick — dedup counts once (count=1, below threshold of 3)
             LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
             LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
             _networkService.FireDesyncDetected(1, 5, 111, 222);
             _networkService.FireDesyncDetected(1, 5, 111, 222);
 
-            // Advance to tick 22 — at sync check on tick 20, a desync is detected on pending tick 10
-            // -> not reset. Then sets pending=20, desyncDetectedForPending=false.
-            LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex(@"\[Rollback\] failed"));
+            // With no matched anchor yet (anchor=0), the rung-1 target would be the
+            // desync tick itself — a futile rollback-to-self — so it is skipped (rollbackTarget >= tick),
+            // not attempted. No "[Rollback] failed" here (previously it rolled back to tick 5 and failed).
             AdvanceToTick(22);
 
-            // Advance to tick 32 — at sync check on tick 30, no desync on pending=20
-            // -> reset _consecutiveDesyncCount to 0
+            // Event-based promotion: a matched hash comparison advances the anchor
+            // and resets _consecutiveDesyncCount. Absence of comparisons no longer promotes.
+            _networkService.FireSyncHashCompared(20, 1, true); // peer 1 (the desyncing peer) — clears its per-peer counter
             AdvanceToTick(32);
 
-            // Fire 2 additional desyncs (count 0->1->2, below threshold)
+            // Fire 2 additional reports for one tick (count 0->1 after dedup, below threshold)
             LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
             LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("Desync detected"));
             _networkService.FireDesyncDetected(1, 25, 111, 222);
             _networkService.FireDesyncDetected(1, 25, 111, 222);
 
-            // Without the reset, the total count would be 4 (>=3) and resync would fire.
+            // Without the matched-compare reset, the accumulated count could keep growing across
+            // distinct ticks and eventually escalate; after the reset it restarts from 0.
             // After the reset, count is 2 so no resync.
             Assert.AreEqual(0, _networkService.SendFullStateRequestCallCount);
+        }
+
+        #endregion
+
+        #region Rollback cache invalidation + SyncHash invalidation wiring
+
+        // Mirrors the proven successful-rollback setup (PendingRollbackHashSendTests): a
+        // deterministic-hash sim with per-tick snapshots (so ExecuteRollback resolves) and the
+        // input-delay pre-fill so the rolled-back ticks have all commands.
+        private KlothoEngine BuildHostEngineWithRollback(out TestSimulation sim, out MockNetworkService net)
+        {
+            sim = new TestSimulation { UseDeterministicHash = true };
+            net = new MockNetworkService { IsHost = true };
+            var engine = new KlothoEngine(
+                new SimulationConfig { InputDelayTicks = 40, SyncCheckInterval = 10, MaxRollbackTicks = 50 },
+                new SessionConfig());
+            engine.Initialize(sim, net, _logger);
+            engine.SetCommandFactory(new CommandFactory());
+            engine.Start(enableRecording: false);
+            return engine;
+        }
+
+        /// <summary>
+        /// A successful rollback must invalidate the host's serialized FullState cache.
+        /// Rollback+resim leaves CurrentTick unchanged while the same-tick state bytes may differ,
+        /// so the next unicast serve must RE-SERIALIZE the current (rolled-back) state rather than
+        /// returning the stale cached bytes (detected via the sim's serialize-call count).
+        /// </summary>
+        [Test]
+        public void Rollback_InvalidatesHostFullStateCache_R3()
+        {
+            var engine = BuildHostEngineWithRollback(out var sim, out var net);
+
+            AdvanceEngine(engine, 30);
+
+            // Serve #1 — caches the serialized state at CurrentTick = 30.
+            net.FireFullStateRequested(peerId: 1, requestTick: 30);
+            Assert.AreEqual(1, net.FullStateResponses.Count);
+            int serializeAfterServe1 = sim.SerializeCallCount;
+
+            // A successful rollback invalidates the cache; the resim leaves CurrentTick unchanged.
+            engine.RequestRollback(25);
+            engine.Update(0.001f); // flush pending rollback (no full tick advance at 1ms)
+            Assert.AreEqual(30, engine.CurrentTick, "rollback+resim must leave CurrentTick unchanged");
+
+            // Serve #2 — cache was invalidated → re-serialize.
+            net.FireFullStateRequested(peerId: 1, requestTick: 30);
+            Assert.AreEqual(2, net.FullStateResponses.Count);
+            Assert.Greater(sim.SerializeCallCount, serializeAfterServe1,
+                "rollback must invalidate the host FullState cache so the next serve re-serializes");
+        }
+
+        /// <summary>
+        /// Regression: with no rollback between two serves at the same CurrentTick, the cache
+        /// stays valid — the second serve hits the cache (no re-serialize), proving the invalidation
+        /// is rollback-driven and the normal cache path is unchanged.
+        /// </summary>
+        [Test]
+        public void Serve_WithoutRollback_HitsCache_R3Regression()
+        {
+            var engine = BuildHostEngineWithRollback(out var sim, out var net);
+
+            AdvanceEngine(engine, 30);
+
+            net.FireFullStateRequested(peerId: 1, requestTick: 30); // serve #1 — cache fill at tick 30
+            int serializeAfterServe1 = sim.SerializeCallCount;
+
+            net.FireFullStateRequested(peerId: 1, requestTick: 30); // serve #2 — same CurrentTick, no rollback
+
+            Assert.AreEqual(2, net.FullStateResponses.Count);
+            Assert.AreEqual(serializeAfterServe1, sim.SerializeCallCount,
+                "without a rollback the cache is valid — the second serve does not re-serialize");
+        }
+
+        /// <summary>
+        /// SyncHash invalidation wiring: applying a FullState (resync) must invalidate the network layer's sync
+        /// hashes for ticks >= the apply tick, so the post-apply recompute is not compared against
+        /// a pre-reset remote hash across the reset boundary (false mismatch). This pins the engine
+        /// → network-service call; the dict-clearing behavior is covered at the network-service level.
+        /// </summary>
+        [Test]
+        public void ResyncApply_InvalidatesNetworkSyncHashes_DF7()
+        {
+            AdvanceToTick(60);
+
+            // Trigger resync via guard-2 rollback failure (mock sim has no snapshot history).
+            LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex(@"\[Rollback\] failed"));
+            _engine.RequestRollback(5);
+            _engine.Update(0.001f); // -> resync requested
+
+            Assert.AreEqual(0, _networkService.InvalidateSyncHashesCallCount,
+                "no sync-hash invalidation before the FullState is applied");
+
+            // Apply the resync FullState at tick 100.
+            _networkService.FireFullStateReceived(100, new byte[] { 1, 2, 3, 4 }, 12345L);
+
+            Assert.AreEqual(1, _networkService.InvalidateSyncHashesCallCount,
+                "FullState apply must invalidate the network sync hashes (D-F7)");
+            Assert.AreEqual(100, _networkService.LastInvalidateSyncHashesTick,
+                "invalidation must use the apply tick as the lower bound");
         }
 
         #endregion

@@ -25,7 +25,13 @@ namespace xpTURN.Klotho.Input
         int NewestTick { get; }
 
         /// <summary>
-        /// Add a command
+        /// Add a command to the buffer.
+        ///
+        /// <para><b>Ownership contract</b>: the caller transfers sole ownership of <paramref name="command"/>
+        /// to the buffer on entry. The caller MUST NOT retain or reuse the instance after this call returns —
+        /// the buffer may store it and later return it to CommandPool on cleanup
+        /// (<see cref="Clear"/>/<see cref="ClearBefore"/>/<see cref="ClearAfter"/>). Violating this contract
+        /// risks pool poisoning.</para>
         /// </summary>
         void AddCommand(ICommand command);
 
@@ -80,12 +86,16 @@ namespace xpTURN.Klotho.Input
         ICommand PredictInput(int playerId, int tick, List<ICommand> previousCommands);
 
         /// <summary>
-        /// Update prediction accuracy (compared against actual input)
+        /// Records one prediction outcome. The caller supplies the byte-equality verdict
+        /// (the engine shares a single CommandDataEquals result between the rollback decision
+        /// and this accounting; the old type-only comparison overcounted).
         /// </summary>
-        void UpdateAccuracy(ICommand predicted, ICommand actual);
+        void UpdateAccuracy(bool wasCorrect);
 
         /// <summary>
-        /// Prediction accuracy (0.0 ~ 1.0)
+        /// Prediction accuracy (0.0 ~ 1.0). Sampled metric: only predictions whose actual
+        /// command arrived through the P2P receive path are counted — predictions cleared
+        /// by a rollback are not.
         /// </summary>
         float Accuracy { get; }
     }

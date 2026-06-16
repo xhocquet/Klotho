@@ -12,6 +12,20 @@ namespace xpTURN.Klotho.Core
     }
 
     /// <summary>
+    /// Kind of Synced-event divergence reported by OnSyncedEventDivergence:
+    /// desync-recovery re-simulation changed the Synced event set at ticks at or below the
+    /// already-dispatched watermark, where the exactly-once guard blocks (re-)dispatch.
+    /// A changed payload at the same (tick, type) surfaces as a Removed + Added pair.
+    /// </summary>
+    public enum SyncedDivergenceKind
+    {
+        /// <summary>A Synced event appeared at an already-dispatched tick — it will never fire normally.</summary>
+        Added,
+        /// <summary>An already-dispatched Synced event disappeared — its side effects are stale.</summary>
+        Removed
+    }
+
+    /// <summary>
     /// Base class for game events raised during the simulation.
     /// Subclasses define concrete event types (damage, spawn, death, etc.).
     /// </summary>

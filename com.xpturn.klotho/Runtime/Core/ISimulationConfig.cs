@@ -41,8 +41,8 @@ namespace xpTURN.Klotho.Core
         /// P2P: Primary parameter for absorbing host/guest network round-trip time.
         /// ServerDriven: Applied as a targetTick shift on commands sent from the client to the server
         /// (server arrival headroom = (InputDelayTicks + SDInputLeadTicks) × TickIntervalMs).
-        /// The SD client's lead tick count over the server is governed by <see cref="SDInputLeadTicks"/>,
-        /// while the server's input reception deadline is controlled by <see cref="HardToleranceMs"/>. (The three parameters are independent and additive.)
+        /// The SD client's lead tick count over the server is governed by <see cref="SDInputLeadTicks"/>.
+        /// (The two parameters are independent and additive; the server accepts inputs until the tick executes.)
         /// </summary>
         int InputDelayTicks { get; }
 
@@ -86,6 +86,23 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         int CorrectiveResetCooldownMs { get; }
 
+        /// <summary>
+        /// Maximum corrective-reset attempts the host spends per divergence episode (recovery
+        /// ladder rung 3). Attempts decay back to zero after a quiet period of
+        /// max(CorrectiveResetCooldownMs x 2, ResyncMaxRetries x RESYNC_TIMEOUT_MS +
+        /// CorrectiveResetCooldownMs) without failure reports (must exceed the worst-case
+        /// RetryExhausted cadence). Host-local — not propagated
+        /// via SimulationConfigMessage. Range: 1 or greater. Default 2.
+        /// </summary>
+        int CorrectiveResetMaxAttempts { get; }
+
+        /// <summary>
+        /// When corrective-reset attempts are exhausted (rung 4), whether the host
+        /// broadcasts MatchAbort and aborts locally with AbortReason.StateDivergence.
+        /// False logs an error and leaves the decision to the game layer. Host-local. Default true.
+        /// </summary>
+        bool AutoAbortOnRecoveryExhausted { get; }
+
         // --- Prediction ---
 
         /// <summary>
@@ -105,13 +122,12 @@ namespace xpTURN.Klotho.Core
         // --- ServerDriven (only valid when Mode == ServerDriven) ---
 
         /// <summary>
-        /// Wall-clock deadline (milliseconds) for the server to accept a cmd, measured from that tick's execution time.
-        /// deadline = now_at_tick(cmd.Tick) + HardToleranceMs.
-        /// If 0, computed automatically (if SDInputLeadTicks=0 it falls back to the default of 10 — see <see cref="SimulationConfigExtensions.SDInputLeadTicksDefault"/>):
-        ///   - Initial value: (effectiveLeadTicks + InputDelayTicks + 1) × TickIntervalMs + 60ms (assumed RTT/2) + 20ms (jitter)
-        ///   - After the first handshake completes: (effectiveLeadTicks + InputDelayTicks + 1) × TickIntervalMs + avgRtt/2 + 20ms
-        /// Since <see cref="SDInputLeadTicks"/> and <see cref="InputDelayTicks"/> are reflected automatically,
-        /// 0 (auto) is generally recommended. Manual settings are for advanced tuning of network conditions.
+        /// Deprecated — has no effect. The server's effective input deadline is the
+        /// tick's execution moment: inputs missing at execution are substituted with EmptyCommand,
+        /// later arrivals are past-tick rejected, and chronic lateness self-corrects via client
+        /// lead escalation (DynamicInputDelayPolicy + server recommended-delay push).
+        /// The property and its wire fields are retained for serialized-asset and message
+        /// compatibility only.
         /// </summary>
         int HardToleranceMs { get; }
 
@@ -136,11 +152,8 @@ namespace xpTURN.Klotho.Core
         /// If 0, the default of 10 is used.
         /// On LateJoin/Reconnect recovery, the same value is used to re-establish the lead.
         /// Ignored in P2P mode.
-        /// cmd reception deadline headroom = (effectiveLeadTicks + InputDelayTicks) × TickIntervalMs
-        /// (since the window opens L+D ticks later, the minimum required H decreases by the same amount).
         /// effectiveLeadTicks = SDInputLeadTicks > 0 ? SDInputLeadTicks : 10 (<see cref="SimulationConfigExtensions.SDInputLeadTicksDefault"/>).
-        /// Acts additively with <see cref="InputDelayTicks"/>,
-        /// and is reflected in the <see cref="HardToleranceMs"/> auto-calc.
+        /// Acts additively with <see cref="InputDelayTicks"/>.
         /// </summary>
         int SDInputLeadTicks { get; }
 
@@ -156,7 +169,7 @@ namespace xpTURN.Klotho.Core
         /// Snapshot interpolation delay tick count for the View layer.
         /// When computing RenderClock.VerifiedBaseTick, <c>LastVerifiedTick - InterpolationDelayTicks</c> is applied.
         /// Larger values give more jitter-absorption headroom but also increase the render delay of remote entities. Recommended range is [1, 3].
-        /// On SD clients, this acts as the upper bound when AdaptiveRenderClock adjusts dynamically.
+        /// Fixed value — applied as-is by the live render clock (AdvanceVerifiedRenderTime); no dynamic adjustment.
         /// </summary>
         int InterpolationDelayTicks { get; }
 
@@ -207,6 +220,13 @@ namespace xpTURN.Klotho.Core
         /// Minimum gap (ticks) between successive reactive escalations to prevent runaway bumps.
         /// </summary>
         int ReactiveEscalateCooldownTicks { get; }
+
+        /// <summary>
+        /// Stable-interval dwell (ticks) with no PastTick reject / rollback-burst before the client
+        /// decays its reactive extra-delay correction by one ReactiveStep.
+        /// Biased conservative (≳ 2× escalate cooldown) to avoid thrash during transient lulls.
+        /// </summary>
+        int ReactiveDeEscalateStableTicks { get; }
 
         // --- Rollback Burst ---
 

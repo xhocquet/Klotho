@@ -16,10 +16,12 @@ namespace xpTURN.Klotho.Godot
         [Export] public int CatchupMaxTicksPerFrame { get; set; } = 200;
         [Export] public int InputDelayTicks { get; set; } = 4;
         [Export] public int MaxRollbackTicks { get; set; } = 50;
-        [Export] public int SyncCheckInterval { get; set; } = 30;
+        [Export] public int SyncCheckInterval { get; set; } = 20;
         [Export] public int ResyncMaxRetries { get; set; } = 3;
         [Export] public int DesyncThresholdForResync { get; set; } = 3;
         [Export] public int CorrectiveResetCooldownMs { get; set; } = 5000;
+        [Export] public int CorrectiveResetMaxAttempts { get; set; } = 2;
+        [Export] public bool AutoAbortOnRecoveryExhausted { get; set; } = true;
         [Export] public bool UsePrediction { get; set; } = true;
         [Export] public NetworkMode Mode { get; set; } = NetworkMode.P2P;
 
@@ -46,6 +48,7 @@ namespace xpTURN.Klotho.Godot
         [Export] public int ReactiveMax { get; set; } = 40;
         [Export] public int ServerPushGraceTicks { get; set; } = 40;
         [Export] public int ReactiveEscalateCooldownTicks { get; set; } = 80;
+        [Export] public int ReactiveDeEscalateStableTicks { get; set; } = 160;
 
         // Rollback Burst
         [Export] public int RollbackBurstCount { get; set; } = 3;

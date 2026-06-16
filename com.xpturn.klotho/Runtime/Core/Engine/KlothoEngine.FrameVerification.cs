@@ -38,7 +38,7 @@ namespace xpTURN.Klotho.Core
             int tick = _lastVerifiedTick + 1;
             while (tick < CurrentTick)
             {
-                if (!_inputBuffer.HasAllCommands(tick, _activePlayerIds.Count))
+                if (!_inputBuffer.HasAllCommands(tick, _activePlayerIds))
                 {
                     OnChainAdvanceBreak?.Invoke();
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
@@ -47,6 +47,13 @@ namespace xpTURN.Klotho.Core
                     break;
                 }
                 _lastVerifiedTick = tick;
+
+                // Deferred sync-hash send: this check tick was executed speculatively and has now
+                // reached verified with its predictions confirmed byte-equal (a mismatch would
+                // have rolled back first) — the stashed hash is the verified hash.
+                if (_deferredHashSendTicks.Remove(tick) && _localHashes.TryGetValue(tick, out long deferredHash))
+                    _networkService?.SendSyncHash(tick, deferredHash);
+
                 OnFrameVerified?.Invoke(tick);
                 FireVerifiedInputBatch();
 
@@ -70,23 +77,36 @@ namespace xpTURN.Klotho.Core
             _lastChainBreakLogMs = nowMs;
             _lastChainBreakLoggedTick = tick;
 
-            // Enumerate which playerIds have / are missing commands at the stalled tick.
+            // Enumerate which playerIds have / are missing commands at the stalled tick. Track
+            // whether any *non-disconnected* player is missing: if every missing player is a
+            // confirmed-disconnected peer (_disconnectedPlayerIds — populated on guests via
+            // the player state notification), this stall is the expected "host proactive-fill is
+            // ~1 tick behind" condition during a disconnect window, so log it at Debug to avoid
+            // per-tick WARN spam. Any non-disconnected missing player = a real stall → Warning.
             var sb = new System.Text.StringBuilder();
             sb.Append("present=[");
             bool first = true;
+            bool anyMissingNotDisconnected = false;
             for (int pi = 0; pi < _activePlayerIds.Count; pi++)
             {
                 int pid = _activePlayerIds[pi];
                 bool has = _inputBuffer.HasCommandForTick(tick, pid);
+                if (!has && !_disconnectedPlayerIds.Contains(pid))
+                    anyMissingNotDisconnected = true;
                 if (!first) sb.Append(',');
                 first = false;
-                sb.Append(pid).Append(has ? "✓" : "✗");
+                sb.Append(pid).Append(has ? '✓' : '✗');
             }
             sb.Append(']');
 
-            _logger?.KWarning($"[KlothoEngine][ChainBreak] stuck at tick={tick} (_lastVerifiedTick={_lastVerifiedTick}, CurrentTick={CurrentTick}, activeIds.Count={_activePlayerIds.Count}, recommendedExtraDelay={_recommendedExtraDelay}) {sb}");
+            if (anyMissingNotDisconnected)
+                _logger?.KWarning($"[KlothoEngine][ChainBreak] stuck at tick={tick} (_lastVerifiedTick={_lastVerifiedTick}, CurrentTick={CurrentTick}, activeIds.Count={_activePlayerIds.Count}, recommendedExtraDelay={RecommendedExtraDelay}) {sb}");
+            else
+                _logger?.KDebug($"[KlothoEngine][ChainBreak] stuck at tick={tick} (_lastVerifiedTick={_lastVerifiedTick}, CurrentTick={CurrentTick}, activeIds.Count={_activePlayerIds.Count}, recommendedExtraDelay={RecommendedExtraDelay}) {sb}"); // expected: only confirmed-disconnected peers are missing (reactive-fill lag)
 
-            if (!_chainBreakBufferDumped)
+            // One-shot buffer dump only for a real (unexpected) stall — skip the expected
+            // disconnect-window case so the dump is still available for a later genuine stall.
+            if (anyMissingNotDisconnected && !_chainBreakBufferDumped)
             {
                 _chainBreakBufferDumped = true;
                 _inputBuffer.DumpTickRange(tick - 3, tick + 3);

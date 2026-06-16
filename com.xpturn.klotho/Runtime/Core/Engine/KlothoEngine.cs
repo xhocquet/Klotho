@@ -4,7 +4,6 @@ using System.Collections.Generic;
 
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Input;
-using xpTURN.Klotho.State;
 using xpTURN.Klotho.Replay;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.Serialization;
@@ -59,7 +58,7 @@ namespace xpTURN.Klotho.Core
         public int LocalPlayerId => _networkService?.LocalPlayerId ?? 0;
         public int TickInterval => _simConfig.TickIntervalMs;
         public int InputDelay => _simConfig.InputDelayTicks;
-        public int RecommendedExtraDelay => _recommendedExtraDelay;
+        public int RecommendedExtraDelay => Math.Clamp(_baselineExtraDelay + _reactiveExtraDelay, 0, _simConfig.MaxRollbackTicks / 2);
 
         public event Action OnGameStart;
         public event Action<int> OnPreTick;
@@ -75,6 +74,7 @@ namespace xpTURN.Klotho.Core
         public event Action<int, SimulationEvent> OnEventConfirmed;
         public event Action<int, SimulationEvent> OnEventCanceled;
         public event Action<int, SimulationEvent> OnSyncedEvent;
+        public event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
         public event Action<int, IMatchEndEvent> OnMatchEnded;
         public event Action<int> OnResyncCompleted;
         public event Action<AbortReason> OnMatchAborted;
@@ -97,9 +97,12 @@ namespace xpTURN.Klotho.Core
         private IViewCallbacks _viewCallbacks;
         private CommandSender _commandSender;
 
-        // Server-recommended extra InputDelay ticks. Seeded on LateJoin/Reconnect accept and updated by
-        // periodic server push (mid-match RTT shifts) and client-reactive escalation.
-        private int _recommendedExtraDelay;
+        // Extra InputDelay split. _baselineExtraDelay = server-push authority (absolute
+        // SET, from RTT-based push + LateJoin/Reconnect/Sync seed). _reactiveExtraDelay = client-local
+        // additive correction (PastTick/rollback-burst escalation, self-decaying), preserved across push.
+        // Public RecommendedExtraDelay = clamped sum, bounded by MaxRollbackTicks/2.
+        private int _baselineExtraDelay;
+        private int _reactiveExtraDelay;
 
         // Last cmd.Tick sent — used for monotonic clamp on Reconnect-induced delay decreases.
         // Sentinel int.MinValue: no prev cmd. First cmd trivially passes (targetTick > int.MinValue + 1).
@@ -179,8 +182,10 @@ namespace xpTURN.Klotho.Core
         private int _randomSeed;
         private readonly Dictionary<int, PlayerConfigBase> _playerConfigs = new Dictionary<int, PlayerConfigBase>();
         private InputBuffer _inputBuffer;
-        private IStateSnapshotManager _snapshotManager;
         private SimpleInputPredictor _inputPredictor;
+
+        /// <inheritdoc />
+        public float PredictionAccuracy => _inputPredictor?.Accuracy ?? 1.0f;
 
         private float _accumulator;
         private bool _consumePendingDeltaTime;
@@ -198,9 +203,17 @@ namespace xpTURN.Klotho.Core
         private readonly List<int> _savedTicksCache = new List<int>();
 
         // Tracks the last good sync tick to roll back to when desync is detected.
+        // Promoted event-based: a matched hash comparison advances it monotonically;
+        // a tick that ever mismatched is vetoed (_lastMismatchedSyncTick). Order-independent:
+        // a mismatch arriving after a same-tick match demotes the anchor to _prevMatchedSyncTick
+        // (1-step history) before rung-1 reads it, so rung-1 never rolls back to a diverged tick
+        // regardless of match/mismatch arrival order.
         private int _lastMatchedSyncTick;
-        private int _pendingSyncCheckTick = -1;
-        private bool _desyncDetectedForPending;
+        private int _prevMatchedSyncTick;
+        private int _lastMismatchedSyncTick = -1;
+        // Check ticks executed speculatively: hash stashed in _localHashes, sent when the
+        // verified chain crosses the tick (deferred send — predictions confirmed byte-equal).
+        private readonly System.Collections.Generic.HashSet<int> _deferredHashSendTicks = new System.Collections.Generic.HashSet<int>();
 
         private ICommandFactory _commandFactory;
 
@@ -231,9 +244,6 @@ namespace xpTURN.Klotho.Core
         private ECS.Frame _puPFrame;
         private int _previousUpdateTick = -1;
 
-        // Verified clock dedicated to SD Client. Created on first access and used every Update tick.
-        private AdaptiveRenderClock _adaptiveRenderClock;
-        private AdaptiveRenderClock AdaptiveClock => _adaptiveRenderClock ??= new AdaptiveRenderClock();
         private bool IsSDClient =>
             _simConfig.Mode == NetworkMode.ServerDriven
             && _serverDrivenNetwork != null
@@ -247,6 +257,11 @@ namespace xpTURN.Klotho.Core
         // Advance a separate render time by wall-clock and clamp it with an upper bound based on _lastVerifiedTick.
         private double _verifiedRenderTimeMs;
         private bool   _verifiedRenderTimeInitialized;
+        // Drift-proportional render timescale computed by AdvanceVerifiedRenderTime, exposed via
+        // RenderClock so the view can read catchup/slowdown. Reset to 1f at the start of
+        // each AdvanceVerifiedRenderTime so an early-return frame (no drift computed) reports 1f
+        // rather than the previous frame's value.
+        private float  _verifiedRenderTimescale = 1f;
 
         public RenderClockState RenderClock
         {
@@ -279,7 +294,7 @@ namespace xpTURN.Klotho.Core
                     PredictedTimeMs = accum,
                     VerifiedBaseTick = verifiedBase,
                     VerifiedTimeMs = verifiedAlphaMs,
-                    Timescale = 1f,
+                    Timescale = _verifiedRenderTimescale,
                     TickIntervalMs = tickMs,
                 };
             }
@@ -294,9 +309,16 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         private void AdvanceVerifiedRenderTime(float deltaTime)
         {
+            // Default to 1f before any early-return so a frame that computes no drift reports 1f
+            // (overwritten with the clamped value once drift is computed below).
+            _verifiedRenderTimescale = 1f;
+
             if (_lastVerifiedTick < 0) return;
 
-            int tickMs = _simConfig.TickIntervalMs;
+            // Replay uses the tick interval from the time of recording (mirrors the RenderClock getter). Falls back to the current setting if no recording data is available.
+            int tickMs = _isReplayMode
+                ? (_replaySystem?.CurrentReplayData?.Metadata?.TickIntervalMs ?? _simConfig.TickIntervalMs)
+                : _simConfig.TickIntervalMs;
             if (tickMs <= 0) return;
 
             int targetBaseTick = System.Math.Max(0, _lastVerifiedTick - _simConfig.InterpolationDelayTicks);
@@ -318,6 +340,10 @@ namespace xpTURN.Klotho.Core
             float timescale = 1f - (float)driftTicks * 0.1f;
             if      (timescale < 0.5f) timescale = 0.5f;
             else if (timescale > 2.0f) timescale = 2.0f;
+
+            // Expose the smooth-converge multiplier. NOTE: this is the per-frame
+            // [0.5,2.0] convergence rate; it does NOT reflect the >10-tick instant snap below.
+            _verifiedRenderTimescale = timescale;
 
             _verifiedRenderTimeMs += deltaTime * 1000.0 * timescale;
 
@@ -426,7 +452,6 @@ namespace xpTURN.Klotho.Core
             _simConfig = simConfig;
             _sessionConfig = sessionConfig;
             _inputBuffer = new InputBuffer();
-            _snapshotManager = new RingSnapshotManager(_simConfig.MaxRollbackTicks);
             _engineSnapshots = new EngineStateSnapshot[SnapshotCapacity];
             _inputPredictor = new SimpleInputPredictor();
             _replaySystem = new ReplaySystem();
@@ -480,8 +505,27 @@ namespace xpTURN.Klotho.Core
             }
         }
 
+        // Re-init guard: a second Initialize without Stop double-subscribes the
+        // network handlers, so the same arrival instance reaches AddCommand twice — the
+        // double-dispatch precondition. Stop() resets the flag, but passing the guard after Stop
+        // only means re-subscription is clean: engine reuse (Stop -> Initialize -> Start) is
+        // unsupported — Initialize does not reset session state (_pendingVerifiedQueue,
+        // _inputBuffer, tick counters); create a new engine per session.
+        private bool _initialized;
+
+        private void ThrowIfAlreadyInitialized()
+        {
+            if (_initialized)
+                throw new InvalidOperationException(
+                    "KlothoEngine.Initialize called again without Stop — this double-subscribes network handlers " +
+                    "(duplicate command dispatch, IMP59-F2). Create a new engine per session, or call Stop() first.");
+            _initialized = true;
+        }
+
         public void Initialize(ISimulation simulation, IKlothoNetworkService networkService, IKLogger logger)
         {
+            ThrowIfAlreadyInitialized();
+
             // Authoritative callers (server / P2P host) fail fast on invalid config;
             // non-authoritative callers (SD client / P2P guest) log and proceed to tolerate cross-version skew.
             bool isAuthoritative = networkService.IsHost
@@ -504,6 +548,12 @@ namespace xpTURN.Klotho.Core
             if (_simConfig.Mode == NetworkMode.ServerDriven && _simConfig.InputDelayTicks < 2)
                 _logger?.KWarning(
                     $"[KlothoEngine] InputDelayTicks={_simConfig.InputDelayTicks} below recommended minimum of 2 — increased jitter risk under network spikes.");
+            if (_simConfig.Mode == NetworkMode.ServerDriven && _simConfig.SDInputLeadTicks >= _simConfig.MaxRollbackTicks)
+                _logger?.KWarning(
+                    $"[KlothoEngine] SDInputLeadTicks={_simConfig.SDInputLeadTicks} >= MaxRollbackTicks={_simConfig.MaxRollbackTicks} — clamped to {_simConfig.GetEffectiveSDInputLeadTicks()} (prediction lead is bounded by the snapshot ring)." );
+            if (_simConfig.Mode == NetworkMode.P2P && _simConfig.SyncCheckInterval * 2 > _simConfig.MaxRollbackTicks)
+                _logger?.KWarning(
+                    $"[KlothoEngine] SyncCheckInterval={_simConfig.SyncCheckInterval} exceeds MaxRollbackTicks/2 — clamped to {_simConfig.GetEffectiveSyncCheckInterval()} so a desync rollback to the last matched anchor stays within the rollback window.");
             (_inputBuffer as InputBuffer)?.SetLogger(logger);
 
             _activePlayerIds.Clear();
@@ -556,10 +606,13 @@ namespace xpTURN.Klotho.Core
             {
                 _networkService.OnCommandReceived += HandleCommandReceived;
                 _networkService.OnDesyncDetected += HandleNetworkDesync;
+                _networkService.OnSyncHashCompared += HandleSyncHashCompared;
                 _networkService.OnGameStart += HandleGameStart;
                 _networkService.OnFullStateRequested += HandleFullStateRequested;
                 _networkService.OnFullStateReceived += HandleFullStateReceived;
                 _networkService.OnLateJoinPlayerAdded += HandleLateJoinPlayerAdded;
+                _networkService.OnResyncFailureReported += HandleResyncFailureReported;
+                _networkService.OnMatchAbortReceived += HandleMatchAbortReceived;
                 OnHashMismatch += HandleHashMismatchForCorrectiveReset;
 
                 _timeSync = new TimeSyncService();
@@ -572,7 +625,7 @@ namespace xpTURN.Klotho.Core
             // Event system. SD server collects only Synced events (e.g. CommandRejectedSimEvent) for
             // network-layer unicast feedback; Regular events have no server-side subscribers and are
             // dropped at RaiseEvent to avoid GC churn. Other modes use the full collector.
-            _eventBuffer = new EventBuffer(SnapshotCapacity);
+            _eventBuffer = new EventBuffer(SnapshotCapacity, _logger);
             if (_simConfig.Mode == NetworkMode.ServerDriven && _serverDrivenNetwork != null && _serverDrivenNetwork.IsServer)
                 _eventCollector = new SyncedOnlyEventCollector();
             else
@@ -603,15 +656,33 @@ namespace xpTURN.Klotho.Core
             Initialize(simulation, networkService, logger);
         }
 
+        /// <summary>
+        /// Network-less initialization with callbacks — replay-playback sessions.
+        /// Mirrors the network overload's callback wiring without creating any network
+        /// subscription; chains to the 2-arg body, which owns the re-init guard.
+        /// </summary>
+        public void Initialize(ISimulation simulation, IKLogger logger,
+            ISimulationCallbacks simulationCallbacks, IViewCallbacks viewCallbacks = null)
+        {
+            _simulationCallbacks = simulationCallbacks;
+            _viewCallbacks = viewCallbacks;
+            _commandSender = new CommandSender(this);
+            Initialize(simulation, logger);
+        }
+
         public void Initialize(ISimulation simulation, IKLogger logger)
         {
+            // Separate body from the network overload — guard it directly (no network
+            // subscriptions here, but the same re-entry would double-attach _reliableTracker).
+            ThrowIfAlreadyInitialized();
+
             _simulation = simulation;
             _logger = logger;
             (_inputBuffer as InputBuffer)?.SetLogger(logger);
 
             _simulation.Initialize();
 
-            _eventBuffer = new EventBuffer(SnapshotCapacity);
+            _eventBuffer = new EventBuffer(SnapshotCapacity, _logger);
             _eventCollector = new EventCollector();
             if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
                 ecsSim.Frame.EventRaiser = _eventCollector;
@@ -655,6 +726,20 @@ namespace xpTURN.Klotho.Core
             // Calling it here would create entities that overlap the restored state (race-dependent
             // double-init).
             bool isSdClient = _simConfig.Mode == NetworkMode.ServerDriven && !IsServer;
+#if KLOTHO_FAULT_INJECTION
+            // Scenario C: arm a client-side hash divergence on the targeted SD client so
+            // its resim of ForceClientDesyncAtTick mismatches the server's verified hash → desync-resync
+            // FullStateRequest. Paired with DropFullStateResponsePlayerIds to exercise the recovery ladder.
+            // Server is never armed; tick is monotonic so a FullState restore past the tick auto-recovers.
+            if (isSdClient
+                && xpTURN.Klotho.Diagnostics.FaultInjection.ForceClientDesyncAtTick >= 0
+                && xpTURN.Klotho.Diagnostics.FaultInjection.ForceClientDesyncPlayerIds.Contains(LocalPlayerId)
+                && _simulation is xpTURN.Klotho.ECS.EcsSimulation desyncSim)
+            {
+                desyncSim.ForceDesyncHashTick = xpTURN.Klotho.Diagnostics.FaultInjection.ForceClientDesyncAtTick;
+                _logger?.KWarning($"[FaultInjection][SD] Client desync armed: playerId={LocalPlayerId}, atTick={desyncSim.ForceDesyncHashTick}");
+            }
+#endif
             if (!isSdClient)
             {
                 // Engine writes deterministic participant slots into the frame
@@ -677,6 +762,14 @@ namespace xpTURN.Klotho.Core
                     {
                         Seed = (ulong)(uint)_randomSeed,
                     });
+
+                    // Singleton match-end state — created here in the fixed deterministic
+                    // entity-creation order (participants → seed → matchEnd) so the state hash matches
+                    // across peers. The game's match-end system writes {Ended, Winner, Reason}; the engine
+                    // reads it (IsMatchEndedState / GetActiveMatchEnd) at resync/restore boundaries.
+                    // SD clients skip this block (!isSdClient) and receive the singleton via FullState.
+                    var matchEndEntity = frame.CreateEntity();
+                    frame.Add(matchEndEntity, new xpTURN.Klotho.ECS.MatchEndStateComponent());
                 }
 
                 _worldInitInProgress = true;
@@ -811,8 +904,11 @@ namespace xpTURN.Klotho.Core
             if (_timeSyncEnabled)
             {
                 int waitFrames = _timeSync.RecommendWaitFrames(requireIdleInput: true);
-                if (waitFrames > 0)
+                if (waitFrames > 0 && !_throttleNeedsTick)
                 {
+                    if (_throttleBudget <= 0)
+                        _throttleBudget = waitFrames; // one-shot arm (≤ MAX_FRAME_ADVANTAGE)
+
                     float waitMs = waitFrames * _simConfig.TickIntervalMs;
                     float before = _accumulator;
                     float remainder = before % _simConfig.TickIntervalMs;
@@ -821,10 +917,29 @@ namespace xpTURN.Klotho.Core
 
                     _logger?.KDebug($"[KlothoEngine] TimeSync: Waiting {waitFrames} frames (local={_timeSync.LocalAdvantageMean:F1}, remote={_timeSync.RemoteAdvantageMean:F1})");
 
+                    // Budget is in frame (tick-time) units — decrement only when the trim actually
+                    // consumed one tick's worth (tickSkipped), NOT per update. Per-update decrement
+                    // under-waits by interval/dt at high fps; the harness (dt == interval) masks it.
                     if (tickSkipped)
                     {
-                        _logger?.KWarning($"[KlothoEngine] TimeSync: Tick skip at tick {CurrentTick} (accumulator {before:F1}ms → {_accumulator:F1}ms, waitMs={waitMs:F1})");
+                        _throttleBudget--;
+
+                        // E-lite: supplementary sample so the means keep tracking reality while
+                        // frozen. Same tickSkipped gate as the budget — keeps the window at one
+                        // sample per tick-time in every regime (normal ticks / frozen skips).
+                        SampleAdvantageFrame();
+
+                        _logger?.KWarning($"[KlothoEngine] TimeSync: Tick skip at tick {CurrentTick} (accumulator {before:F1}ms → {_accumulator:F1}ms, waitMs={waitMs:F1}, budget={_throttleBudget})");
                     }
+                    if (_throttleBudget <= 0)
+                        _throttleNeedsTick = true;
+                }
+                else if (waitFrames == 0)
+                {
+                    // Mid-wait release (mean collapsed via the E-lite samples or a fresh tick
+                    // sample) — discard leftover budget so the next engagement re-arms with its
+                    // own recommendation instead of inheriting a stale, shorter one.
+                    _throttleBudget = 0;
                 }
             }
 
@@ -847,8 +962,14 @@ namespace xpTURN.Klotho.Core
 #endif
 
                 // Pause-grace auto-stop — emit StopCommand instead of game OnPollInput.
+                // Gate on (latch START) && (current state, RELEASE). The latch term keeps
+                // injection verified-timed — IsMatchEndedState is true even on predicted ticks, so a
+                // state-only gate would inject StopCommand during prediction and replay it if a rollback
+                // un-ends the match. The state term releases the gate when a watermark-below rollback
+                // restores a non-ended state (un-freezes), without un-firing the one-way latch.
                 bool pauseGraceFired = false;
                 if (_matchEndedDispatched
+                    && _simulation.IsMatchEndedState
                     && _sessionConfig.EndGracePolicy == EndGracePolicy.Pause)
                 {
                     var stop = CommandPool.Get<StopCommand>();
@@ -867,22 +988,21 @@ namespace xpTURN.Klotho.Core
                 int inputTick = CurrentTick + _simConfig.InputDelayTicks;
 
                 // Auto-inject EmptyCommand only when (a) no LocalPlayer cmd this tick AND (b) Pause grace not active.
-                // Pause grace already emitted StopCommand at inputTick + _recommendedExtraDelay; the auto-inject
+                // Pause grace already emitted StopCommand at inputTick + RecommendedExtraDelay; the auto-inject
                 // would land in the same slot and overwrite stop via last-write-wins.
-                if (!pauseGraceFired && !_inputBuffer.HasCommandForTick(inputTick, LocalPlayerId))
+                //
+                // Check the ACTUAL landing slot, not the bare inputTick. InputCommand stamps
+                // at inputTick + RecommendedExtraDelay and then clamps up to _lastSentCmdTick (monotonic),
+                // so this tick's real cmd (submitted by OnPollInput above, which already advanced
+                // _lastSentCmdTick) lands at max(inputTick + RecommendedExtraDelay, _lastSentCmdTick).
+                // Checking the bare inputTick (pre-extra, pre-clamp) missed it whenever RecommendedExtraDelay
+                // > 0 and re-injected an empty onto the real cmd's slot. _lastSentCmdTick is int.MinValue
+                // before the first send, so max() degrades to inputTick + RecommendedExtraDelay then.
+                // (This subsumes the former pre-clamp-slot DEBUG sentinel: a collision is now impossible here,
+                // and the SD send path's DroppedDuplicate suppression is the residual runtime backstop.)
+                int autoInjectTick = Math.Max(inputTick + RecommendedExtraDelay, _lastSentCmdTick);
+                if (!pauseGraceFired && !_inputBuffer.HasCommandForTick(autoInjectTick, LocalPlayerId))
                 {
-#if DEBUG || DEVELOPMENT_BUILD
-                    // Regression sentinel — must never fire on fix-applied builds.
-                    // Detects pre-fix Case 2 collision where auto-inject empty would land in the
-                    // same shifted slot as a previously-sent local cmd when _recommendedExtraDelay > 0.
-                    int emptyTargetTick = inputTick + _recommendedExtraDelay;
-                    if (_recommendedExtraDelay > 0
-                        && _inputBuffer.HasCommandForTick(emptyTargetTick, LocalPlayerId))
-                    {
-                        _logger?.KWarning(
-                            $"[KlothoEngine][AutoInjectOverwrite] empty would overwrite existing cmd at tick={emptyTargetTick}, inputTick={inputTick}, _recommendedExtraDelay={_recommendedExtraDelay}, CurrentTick={CurrentTick}");
-                    }
-#endif
                     var empty = CommandPool.Get<EmptyCommand>();
                     empty.PlayerId = LocalPlayerId;
                     InputCommand(empty);
@@ -934,54 +1054,106 @@ namespace xpTURN.Klotho.Core
 
         public void ApplyExtraDelay(int delay, ExtraDelaySource source)
         {
-            int prev = _recommendedExtraDelay;
-            // LagReductionLatency tracker — measures mid-match natural clamp resolution time.
-            // Reconnect path is excluded because catchup advances CurrentTick in a jump, making
-            // actualTicks reflect catchup duration rather than clamp resolution.
-            if (source == ExtraDelaySource.Reconnect)
+            int prevEffective = RecommendedExtraDelay;
+            if (source == ExtraDelaySource.DynamicPush)
             {
-                // Stale guard: a prior DynamicPush DOWN may have set pending; the first unclamped
-                // InputCommand after Reconnect catchup would emit stale prev/new with distorted
-                // actualTicks. Force-clear to suppress the false measurement.
-                _lagReductionPending = false;
+                // Mid-match server push sets the authoritative baseline. On an UP push (server now covers
+                // the client's need), MIGRATE the now-covered reactive into baseline — drain reactive by
+                // the increase so effective neither ratchets to the clamp nor overshoots, and authority
+                // transfers to the server. On a DOWN push (server RTT-improve), PRESERVE
+                // the client's reactive correction (a server estimate drop must not wipe a
+                // locally-needed lead). Net: effective on UP = max(newBaseline, prevEffective).
+                if (delay >= _baselineExtraDelay)
+                    _reactiveExtraDelay = Math.Max(0, prevEffective - delay);
+                _baselineExtraDelay = delay;
             }
-            else if (delay < prev)
+            else
             {
-                _lagReductionPending = true;
-                _lagReductionPrevDelay = prev;
-                _lagReductionNewDelay = delay;
-                _lagReductionStartTick = CurrentTick;
+                // Seed events (Sync/LateJoin/Reconnect) are an authoritative restart: the catchup jump
+                // makes residual reactive meaningless, so clear it.
+                _baselineExtraDelay = delay;
+                _reactiveExtraDelay = 0;
             }
-            _recommendedExtraDelay = delay;
+
             // DynamicPush fires mid-match (rate-limited 500ms) — Debug to avoid prod noise.
             // Sync/LateJoin/Reconnect are 1-shot accept events — Information for operational trace.
             if (source == ExtraDelaySource.DynamicPush)
-                _logger?.KDebug($"[KlothoEngine][{source}] Recommended extra delay applied: {delay} ticks (CurrentTick={CurrentTick}, prev={prev})");
+                _logger?.KDebug($"[KlothoEngine][{source}] Baseline extra delay applied: {delay} ticks (CurrentTick={CurrentTick}, prevEffective={prevEffective}, reactive={_reactiveExtraDelay})");
             else
-                _logger?.KInformation($"[KlothoEngine][{source}] Recommended extra delay applied: {delay} ticks (CurrentTick={CurrentTick}, prev={prev})");
-            OnExtraDelayChanged?.Invoke(delay);
+                _logger?.KInformation($"[KlothoEngine][{source}] Baseline extra delay applied: {delay} ticks (CurrentTick={CurrentTick}, prevEffective={prevEffective}, reactive reset)");
+
+            FinalizeExtraDelayChange(prevEffective, isReconnect: source == ExtraDelaySource.Reconnect);
         }
 
         public void EscalateExtraDelay(int step, int max)
         {
-            int newDelay = Math.Min(_recommendedExtraDelay + step, max);
-            if (newDelay > _recommendedExtraDelay)
+            int clampMax = _simConfig.MaxRollbackTicks / 2;
+            // ⓑ effective backstop: never let baseline+reactive exceed the rollback-budget clamp.
+            if (RecommendedExtraDelay >= clampMax) return;
+            // ⓐ reactive-alone cap = max (ReactiveMax).
+            int newReactive = Math.Min(_reactiveExtraDelay + step, max);
+            if (newReactive <= _reactiveExtraDelay) return;
+
+            int prevEffective = RecommendedExtraDelay;
+            _reactiveExtraDelay = newReactive;
+            int newEffective = RecommendedExtraDelay;
+            if (newEffective == prevEffective) return; // clamp absorbed the bump — no observable change
+            _logger?.KWarning($"[KlothoEngine][DynamicDelay] Reactive escalate: reactive={_reactiveExtraDelay}, effective {prevEffective}->{newEffective}");
+            FinalizeExtraDelayChange(prevEffective, isReconnect: false);
+        }
+
+        // Client-reactive de-escalation: decays the reactive correction by `step`
+        // toward 0 during stable intervals. Baseline (server authority) is untouched. No-op when reactive
+        // is already 0 — avoids spurious OnExtraDelayChanged when only server baseline is in effect.
+        public void DeEscalateExtraDelay(int step)
+        {
+            if (_reactiveExtraDelay <= 0) return;
+            int prevEffective = RecommendedExtraDelay;
+            _reactiveExtraDelay = Math.Max(0, _reactiveExtraDelay - step);
+            int newEffective = RecommendedExtraDelay;
+            if (newEffective == prevEffective) return; // sum clamped — reactive change not yet observable
+            _logger?.KDebug($"[KlothoEngine][DynamicDelay] Reactive de-escalate: reactive={_reactiveExtraDelay}, effective {prevEffective}->{newEffective}");
+            FinalizeExtraDelayChange(prevEffective, isReconnect: false);
+        }
+
+        // Shared post-mutation bookkeeping: LagReductionLatency tracker (measures clamp resolution after
+        // an effective decrease) + OnExtraDelayChanged notification (fires the effective/clamped value).
+        private void FinalizeExtraDelayChange(int prevEffective, bool isReconnect)
+        {
+            int newEffective = RecommendedExtraDelay;
+            // Reconnect excluded: catchup advances CurrentTick in a jump, so actualTicks would reflect
+            // catchup duration rather than clamp resolution (Reconnect stale-guard).
+            if (isReconnect)
             {
-                _logger?.KWarning($"[KlothoEngine][DynamicDelay] Reactive escalate: prev={_recommendedExtraDelay}, new={newDelay}");
-                _recommendedExtraDelay = newDelay;
-                OnExtraDelayChanged?.Invoke(newDelay);
+                _lagReductionPending = false;
             }
+            else if (newEffective < prevEffective)
+            {
+                _lagReductionPending = true;
+                _lagReductionPrevDelay = prevEffective;
+                _lagReductionNewDelay = newEffective;
+                _lagReductionStartTick = CurrentTick;
+            }
+            OnExtraDelayChanged?.Invoke(newEffective);
         }
 
         public IReliableCommandHandle IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null)
             => _reliableTracker.Issue(commandFactory, policy ?? ReliabilityPolicy.Default);
 
+        /// <summary>
+        /// Submit a command for the local player.
+        ///
+        /// <para><b>Ownership contract</b>: the caller transfers sole ownership of <paramref name="command"/>
+        /// to the engine on entry. The caller MUST NOT retain or reuse the instance after this call returns —
+        /// the engine may store it in InputBuffer (SD), serialize it through the transport (P2P), and
+        /// eventually return it to CommandPool via cleanup. Violating this contract risks pool poisoning.</para>
+        /// </summary>
         public void InputCommand(ICommand command, int extraDelay = 0)
         {
             // Target tick reflecting input delay. extraDelay adds per-command lead margin
             // (used by recovery paths — e.g. spawn cmd PastTick reject escalation).
-            // _recommendedExtraDelay compensates LateJoin/Reconnect catchup gap and mid-match RTT shifts.
-            int targetTick = CurrentTick + _simConfig.InputDelayTicks + extraDelay + _recommendedExtraDelay;
+            // RecommendedExtraDelay compensates LateJoin/Reconnect catchup gap and mid-match RTT shifts.
+            int targetTick = CurrentTick + _simConfig.InputDelayTicks + extraDelay + RecommendedExtraDelay;
 
             if (command is CommandBase cmdBase)
             {
@@ -999,7 +1171,7 @@ namespace xpTURN.Klotho.Core
                 }
 #endif
 
-                // Prevent non-monotonic cmd.Tick when _recommendedExtraDelay decreases on Reconnect / mid-match.
+                // Prevent non-monotonic cmd.Tick when RecommendedExtraDelay decreases on Reconnect / mid-match.
                 // Applied after fault injection to keep production-ordering invariant in fault tests.
                 // Strict-less-than: same-tick multiple cmds are legal in lockstep, so equal targetTick passes through.
                 bool clampEngaged = targetTick < _lastSentCmdTick;
@@ -1012,7 +1184,7 @@ namespace xpTURN.Klotho.Core
                     targetTick = clamped;
                 }
 
-                // Forward gap fill — when _recommendedExtraDelay increases mid-match, cmd.Tick jumps
+                // Forward gap fill — when RecommendedExtraDelay increases mid-match, cmd.Tick jumps
                 // forward leaving the in-between ticks with no local cmd. Subsequent frames target
                 // later ticks and never revisit the gap, so the chain stalls at the first missing
                 // tick. Emit empty cmds across the gap to keep the chain unbroken. The per-call
@@ -1057,8 +1229,30 @@ namespace xpTURN.Klotho.Core
             // ServerDriven mode places it in the local buffer and then sends to the server.
             if (_simConfig.Mode == NetworkMode.ServerDriven)
             {
-                _inputBuffer.AddCommand(command);
-                _serverDrivenNetwork.SendClientInput(targetTick, command);
+                // Send to the server ONLY the command the local buffer actually kept
+                // (Stored). A duplicate (tick, playerId) collision — an auto-inject empty over a real
+                // cmd, or a delay-decrease clamp piling reals onto one tick — is
+                // DroppedDuplicate (keep-first); sending it anyway lets the server's last-write-wins
+                // keep a different cmd than the local buffer kept, desyncing (button eaten). Suppressing
+                // the send makes local and server both keep the first cmd, independent of arrival order.
+                // System commands route through AddSystemCommand and always return Stored, so they are
+                // never suppressed (e.g. PlayerJoin). Dropped* arrivals are sole-owned here and the buffer
+                // never returns them, so return them to the pool; AlreadyStored/Replaced are
+                // buffer-owned and must NOT be returned.
+                var storeResult = _inputBuffer.AddCommandChecked(command);
+                if (storeResult == CommandStoreResult.Stored)
+                    _serverDrivenNetwork.SendClientInput(targetTick, command);
+                else if (storeResult == CommandStoreResult.DroppedDuplicate
+                         || storeResult == CommandStoreResult.DroppedSealed)
+                {
+#if DEBUG || DEVELOPMENT_BUILD
+                    // Smoke signal: confirms a colliding send was suppressed (empty / real)
+                    // so local↔server stay keep-first. Pre-fix this cmd would have been sent and the
+                    // server's last-write-wins would diverge.
+                    _logger?.KDebug($"[KlothoEngine][SendGate] Suppressed duplicate send: tick={targetTick}, playerId={LocalPlayerId}, type={command.GetType().Name}, result={storeResult}, extraDelay={RecommendedExtraDelay}");
+#endif
+                    CommandPool.Return(command);
+                }
                 return;
             }
 
@@ -1135,24 +1329,39 @@ namespace xpTURN.Klotho.Core
                 {
                     _networkService.OnCommandReceived -= HandleCommandReceived;
                     _networkService.OnDesyncDetected -= HandleNetworkDesync;
+                    _networkService.OnSyncHashCompared -= HandleSyncHashCompared;
                     _networkService.OnGameStart -= HandleGameStart;
                     _networkService.OnFrameAdvantageReceived -= HandleFrameAdvantage;
                     _networkService.OnFullStateRequested -= HandleFullStateRequested;
                     _networkService.OnFullStateReceived -= HandleFullStateReceived;
                     _networkService.OnLateJoinPlayerAdded -= HandleLateJoinPlayerAdded;
+                    _networkService.OnResyncFailureReported -= HandleResyncFailureReported;
+                    _networkService.OnMatchAbortReceived -= HandleMatchAbortReceived;
+                    OnHashMismatch -= HandleHashMismatchForCorrectiveReset;
                 }
             }
+
+            // Mirror the non-network subscriptions Initialize makes: without these,
+            // a Stop -> Initialize cycle re-subscribes the same simulation/replay instances and
+            // the handlers fire twice (e.g. HandleHashMismatchForCorrectiveReset would consume
+            // the corrective-reset budget twice per mismatch).
+            if (_simulation != null)
+                _simulation.OnPlayerJoinedNotification -= HandlePlayerJoinedNotification;
+            if (_replaySystem != null)
+                _replaySystem.OnInitialStateSnapshotSet -= HandleInitialStateSnapshotSet;
+
+            _initialized = false;
         }
 
         private bool CanAdvanceTick()
         {
-            if (_inputBuffer.HasAllCommands(CurrentTick, _activePlayerIds.Count))
+            if (_inputBuffer.HasAllCommands(CurrentTick, _activePlayerIds))
                 return true;
 
             if (_disconnectedPlayerIds.Count > 0)
                 OnDisconnectedInputNeeded?.Invoke(CurrentTick);
 
-            return _inputBuffer.HasAllCommands(CurrentTick, _activePlayerIds.Count);
+            return _inputBuffer.HasAllCommands(CurrentTick, _activePlayerIds);
         }
 
         private void ExecuteTick()
@@ -1195,37 +1404,54 @@ namespace xpTURN.Klotho.Core
             }
 
             // Store collected events into the tick buffer.
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            WarnIfReclaimingPendingSynced(CurrentTick);
+#endif
             _eventBuffer.ClearTick(CurrentTick);
             for (int ei = 0; ei < _eventCollector.Count; ei++)
                 _eventBuffer.AddEvent(CurrentTick, _eventCollector.Collected[ei]);
 
-            // Periodic state-hash synchronization check.
-            if (_networkService != null && CurrentTick % _simConfig.SyncCheckInterval == 0)
+            // Periodic state-hash synchronization check. Anchor promotion is event-based:
+            // HandleSyncHashCompared advances _lastMatchedSyncTick on matched comparisons.
+            // Send immediately only when this tick is verified at execution (chain-continuous,
+            // no pending rollback) — otherwise the hash may be computed on top of a mispredicted
+            // earlier tick; stash and defer to the verified promotion, same as the
+            // speculative-execution path.
+            if (_networkService != null && CurrentTick % _simConfig.GetEffectiveSyncCheckInterval() == 0)
             {
-                // If no desync was reported on the previously pending sync tick, promote it to matched.
-                if (_pendingSyncCheckTick >= 0 && !_desyncDetectedForPending)
-                {
-                    _lastMatchedSyncTick = _pendingSyncCheckTick;
-                    _consecutiveDesyncCount = 0;
-                }
-
                 long hash = _simulation.GetStateHash();
                 _localHashes[CurrentTick] = hash;
-                _networkService.SendSyncHash(CurrentTick, hash);
-                //_logger?.KDebug($"[KlothoEngine] SyncCheck: tick={CurrentTick}, hash=0x{hash:X16}");
-
-                _pendingSyncCheckTick = CurrentTick;
-                _desyncDetectedForPending = false;
+                if (CurrentTick == _lastVerifiedTick + 1 && !_hasPendingRollback)
+                    _networkService.SendSyncHash(CurrentTick, hash);
+                else
+                    _deferredHashSendTicks.Add(CurrentTick);
             }
 
             // TimeSync: update advantage history, idle input, and local tick.
+            // SenderTick is the REMOTE peers' timesync input — it must stay truthful regardless
+            // of whether OUR timesync is enabled (late-join/reconnect guests never pass
+            // HandleGameStart, so _timeSyncEnabled stays false on a fresh engine and the
+            // piggyback would freeze at the restore tick).
+            // `?.` is REQUIRED here (not defensive): replay engines run ExecuteTick with a
+            // null service (networkless Initialize) — see the null-guarded
+            // SendSyncHash above. The old in-guard dereference was only shielded by
+            // _timeSyncEnabled staying false on replay engines.
+            _networkService?.SetLocalTick(CurrentTick);
+            // Push the measured advantage OUTSIDE the timesync guard (parallel to
+            // SetLocalTick) so a throttle-disabled guest still reports a truthful SenderAdvantage
+            // to the host. CalculateLocalAdvantage reads _remoteTicks, which is populated regardless
+            // of _timeSyncEnabled. Only the wire value rounds; the window mean keeps the fraction.
+            _networkService?.SetLocalAdvantage((int)System.Math.Round(CalculateLocalAdvantage()));
+
             if (_timeSyncEnabled)
             {
-                // A positive localAdv means local is ahead of remote.
-                // AdvanceFrame takes (how far local is behind, how far remote is behind), so the sign is inverted.
-                float localAdv = CalculateLocalAdvantage();
-                _timeSync.AdvanceFrame(-localAdv, localAdv);
-                _networkService.SetLocalTick(CurrentTick);
+                // Feed the window with local advantage + the true (exchanged) remote advantage,
+                // mirror fallback until a remote sample arrives.
+                SampleAdvantageFrame();
+
+                // Normal sampling has resumed on this tick — the throttle may re-engage.
+                _throttleNeedsTick = false;
+                _throttleBudget = 0;
 
                 bool hasActiveInput = false;
                 for (int i = 0; i < commands.Count; i++)
@@ -1282,8 +1508,7 @@ namespace xpTURN.Klotho.Core
                 int playerId = _activePlayerIds[pi];
                 if (!_inputBuffer.HasCommandForTick(CurrentTick, playerId))
                 {
-                    GetPreviousCommands(playerId, PREDICTION_HISTORY_COUNT);
-                    var predicted = _inputPredictor.PredictInput(playerId, CurrentTick, _previousCommandsCache);
+                    var predicted = PredictInputOrEmpty(playerId, CurrentTick, -1);
                     _tickCommandsCache.Add(predicted);
                     _pendingCommands.Add(predicted);
                 }
@@ -1293,17 +1518,38 @@ namespace xpTURN.Klotho.Core
             _tickCommandsCache.Sort(s_commandComparer);
             _simulation.Tick(_tickCommandsCache);
 
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            WarnIfReclaimingPendingSynced(CurrentTick);
+#endif
             _eventBuffer.ClearTick(CurrentTick);
             for (int ei = 0; ei < _eventCollector.Count; ei++)
                 _eventBuffer.AddEvent(CurrentTick, _eventCollector.Collected[ei]);
 
+            // Deferred sync-hash: stash the hash for check ticks executed speculatively (same
+            // P2P gate as the ExecuteTick send). Sent when the verified chain crosses this tick;
+            // skipping entirely would leave no comparison and stall anchor promotion.
+            if (_networkService != null && CurrentTick % _simConfig.GetEffectiveSyncCheckInterval() == 0)
+            {
+                _localHashes[CurrentTick] = _simulation.GetStateHash();
+                _deferredHashSendTicks.Add(CurrentTick);
+            }
+
             // TimeSync must keep advancing even during prediction. If it halts, SenderTick stops
             // and remote peers' TimeSync forcibly slows down.
+            // SenderTick must stay truthful even when timesync is disabled (see the
+            // hoisted twin in ExecuteTick). `?.` is REQUIRED: replay engines run with a null service.
+            _networkService?.SetLocalTick(CurrentTick);
+            // Truthful advantage push outside the guard (twin of the ExecuteTick hoist).
+            _networkService?.SetLocalAdvantage((int)System.Math.Round(CalculateLocalAdvantage()));
+
             if (_timeSyncEnabled)
             {
-                float localAdv = CalculateLocalAdvantage();
-                _timeSync.AdvanceFrame(-localAdv, localAdv);
-                _networkService.SetLocalTick(CurrentTick);
+                // True (exchanged) remote advantage with mirror fallback.
+                SampleAdvantageFrame();
+
+                // Normal sampling has resumed on this tick — the throttle may re-engage.
+                _throttleNeedsTick = false;
+                _throttleBudget = 0;
 
                 bool hasActiveInput = false;
                 for (int i = 0; i < _tickCommandsCache.Count; i++)
@@ -1329,6 +1575,30 @@ namespace xpTURN.Klotho.Core
             DispatchTickEvents(executedTick, FrameState.Predicted);
         }
 
+        // Prediction for a missing player's input. A confirmed-disconnected peer
+        // (_disconnectedPlayerIds — populated on guests via propagation) has its slot
+        // filled by the host with empty (and sealed); predict empty to match so the host's empty
+        // fill does not mismatch a repeat-last prediction and force a rollback every tick for the
+        // whole disconnect window, which also pollutes the reactive DynamicInputDelay
+        // escalation. Speculative only: the prediction goes into _pendingCommands and the
+        // verified chain uses the host's authoritative fill — the choice (empty vs repeat-last)
+        // cannot change the verified result/StateHash, only whether a rollback is requested.
+        // empty must be a fresh pooled EmptyCommand (NOT the CreateEmptyCommand reuse-template):
+        // it is stored per (playerId, tick) in _pendingCommands until reconciled.
+        private ICommand PredictInputOrEmpty(int playerId, int tick, int fromTick)
+        {
+            if (_disconnectedPlayerIds.Contains(playerId))
+            {
+                var empty = CommandPool.Get<EmptyCommand>();
+                empty.PlayerId = playerId;
+                empty.Tick = tick;
+                return empty;
+            }
+
+            GetPreviousCommands(playerId, PREDICTION_HISTORY_COUNT, fromTick);
+            return _inputPredictor.PredictInput(playerId, tick, _previousCommandsCache);
+        }
+
         /// <summary>
         /// Fills a cached list with previous commands to avoid GC.
         /// </summary>
@@ -1336,7 +1606,12 @@ namespace xpTURN.Klotho.Core
         {
             _previousCommandsCache.Clear();
             int startTick = fromTick >= 0 ? fromTick - 1 : CurrentTick - 1;
-            for (int t = startTick; t >= 0 && _previousCommandsCache.Count < count; t--)
+            // Scan floor: the buffer holds nothing below OldestTick (empty-buffer sentinel 0 is a
+            // safe floor), and prediction relevance ends within the rollback window — bounds the
+            // former unbounded back-scan to tick 0 for sparse players.
+            int floorTick = Math.Max(_inputBuffer.OldestTick, startTick - _simConfig.MaxRollbackTicks);
+            if (floorTick < 0) floorTick = 0;
+            for (int t = startTick; t >= floorTick && _previousCommandsCache.Count < count; t--)
             {
                 var cmd = _inputBuffer.GetCommand(t, playerId);
                 if (cmd != null)
@@ -1346,7 +1621,49 @@ namespace xpTURN.Klotho.Core
 
         private void HandleCommandReceived(ICommand command)
         {
-            _inputBuffer.AddCommand(command);
+            // Checked add: the arrival is deserialize-born and unused by the network
+            // service after dispatch, so this handler is its sole owner. A sealed drop returns
+            // it to the pool at the end of ReconcileConfirmedAgainstPrediction (relocation of the
+            // Return removed from the buffer's seal guard — placing it after the last field read
+            // there also closes the old pattern of reading a pool-returned instance). Duplicate
+            // drops stay GC-delegated.
+            var storeResult = _inputBuffer.AddCommandChecked(command);
+            ReconcileConfirmedAgainstPrediction(command, storeResult, resyncOnDeepRollback: false);
+        }
+
+        // Shared reconcile of a confirmed command (network arrival via HandleCommandReceived,
+        // OR catchup confirmed input via ReceiveConfirmedCommand) against the local speculative
+        // prediction. Extracted so the catchup path reconciles identically and a late mispredicted
+        // remote input rolls back + re-simulates instead of being promoted frozen. resyncOnDeepRollback:
+        // catchup callers pass true so a rollback target below the snapshot-ring window (CurrentTick -
+        // MaxRollbackTicks) falls back to FullStateResync instead of a partial clamp re-sim that cannot
+        // correct the mispredicted gap tick; the normal arrival path passes false to keep the
+        // existing clamp-and-continue behavior. storeResult is by-value — the overwrite branch's
+        // reassignment and the trailing DroppedSealed Return both read this local copy.
+        private void ReconcileConfirmedAgainstPrediction(ICommand command, CommandStoreResult storeResult, bool resyncOnDeepRollback)
+        {
+            // A reconnecting player's real input must overwrite an UNSEALED empty
+            // placeholder on EVERY P2P peer — the host's proactive proxy-fill (InjectDisconnected-
+            // PlayerInputs) or a guest's gap-fill / relayed empty. keep-first drops the real as
+            // DroppedDuplicate because the empty was seated first, leaving that peer's buffer on
+            // empty while the reconnected player simulated real -> per-peer desync. real != empty,
+            // so keep-first is wrong on host AND guest alike; the empty is a provisional placeholder
+            // and the reconnect-real reaches every peer via relay, so all converge to the real
+            // (the former host-only handling was an asymmetry that left guests on empty). This handler is
+            // subscribed only on the non-ServerDriven (P2P) branch, so no mode guard is needed.
+            // Unsealed is required: a sealed slot is a committed range fill and stays DroppedSealed
+            // (the seal guard precedes the overwrite branch). RequestRollback is explicit because
+            // the proactive empty was a confirmed proxy, not a prediction, so the prediction-mismatch
+            // path below won't fire (predicted == null); it self-no-ops when tick >= CurrentTick
+            // (frontier fills are picked up naturally when the sim reaches the tick).
+            if (storeResult == CommandStoreResult.DroppedDuplicate
+                && !(command is EmptyCommand)
+                && !_inputBuffer.IsSealed(command.Tick, command.PlayerId)
+                && _inputBuffer.GetCommand(command.Tick, command.PlayerId) is EmptyCommand)
+            {
+                storeResult = _inputBuffer.AddCommandChecked(command, overwriteExisting: true);
+                RequestRollbackOrResync(command.Tick, resyncOnDeepRollback);
+            }
 
             // To avoid GC, find the matching prediction with a manual loop instead of a lambda.
             ICommand predicted = null;
@@ -1362,14 +1679,19 @@ namespace xpTURN.Klotho.Core
 
             if (predicted != null)
             {
-                _inputPredictor.UpdateAccuracy(predicted, command);
                 _pendingCommands.Remove(predicted);
 
+                // Single byte-equality comparison shared by the rollback decision and accuracy
+                // accounting: accuracy = 1 - (fraction of arrived predictions that
+                // forced a rollback). The old type-only accuracy judgment overcounted.
+                bool match = CommandDataEquals(predicted, command);
+                _inputPredictor.UpdateAccuracy(match);
+
                 // Only request rollback when the prediction differs from the actual input.
-                if (!CommandDataEquals(predicted, command))
+                if (!match)
                 {
                     _logger?.KWarning($"[KlothoEngine] PredictionMismatch: Prediction mismatch tick={command.Tick}, player={command.PlayerId}, predicted={predicted.CommandTypeId}, actual={command.CommandTypeId}");
-                    RequestRollback(command.Tick);
+                    RequestRollbackOrResync(command.Tick, resyncOnDeepRollback);
                 }
             }
 
@@ -1384,6 +1706,9 @@ namespace xpTURN.Klotho.Core
             {
                 TryAdvanceVerifiedChain();
             }
+
+            if (storeResult == CommandStoreResult.DroppedSealed)
+                CommandPool.Return(command);
         }
 
         private bool CommandDataEquals(ICommand a, ICommand b)
@@ -1480,6 +1805,30 @@ namespace xpTURN.Klotho.Core
             }
         }
 
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+        // Dev guard: slot reuse at execution destroys the previous occupant's
+        // events. If that occupant is still beyond chain advance (lag > ring capacity), its
+        // pending Synced events are permanently lost — surface it instead of failing silently
+        // (the "host self-wipe during P2P quorum stall" scenario).
+        private void WarnIfReclaimingPendingSynced(int tick)
+        {
+            if (_networkService == null) return;
+            int occupant = _eventBuffer.GetSlotOccupantTick(tick);
+            if (occupant < 0 || occupant >= tick || occupant <= _lastVerifiedTick) return;
+
+            var evts = _eventBuffer.GetEvents(tick);
+            for (int i = 0; i < evts.Count; i++)
+            {
+                if (evts[i].Mode == EventMode.Synced)
+                {
+                    _logger?.KWarning($"[KlothoEngine][EventBuffer] Pending Synced event WIPED by slot reuse: occupantTick={occupant}, reusedFor={tick}, _lastVerifiedTick={_lastVerifiedTick}, lag={CurrentTick - _lastVerifiedTick}");
+                    OnPendingWipe?.Invoke(occupant, -1, WipeKind.SyncedEvent);
+                    break;
+                }
+            }
+        }
+#endif
+
         private void CleanupOldData()
         {
             // Never wipe data at ticks the chain has not advanced past — those entries are
@@ -1499,29 +1848,13 @@ namespace xpTURN.Klotho.Core
 
                 _inputBuffer.ClearBefore(cleanupTick);
                 _networkService?.ClearOldData(cleanupTick);
-                int eventCleanFrom = System.Math.Max(0, cleanupTick - CLEANUP_MARGIN_TICKS);
 
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
-                // Diagnostic — log Synced events that are about to be wiped while still pending
-                // dispatch (chain advance has not reached them). Indicates chain advance lag
-                // exceeding (MaxRollbackTicks + 2*CLEANUP_MARGIN_TICKS) → events permanently lost.
-                for (int t = eventCleanFrom; t < cleanupTick; t++)
-                {
-                    if (t <= _lastVerifiedTick) continue; // already chain-advanced — Synced was dispatched
-                    var pendingEvts = _eventBuffer.GetEvents(t);
-                    for (int ei = 0; ei < pendingEvts.Count; ei++)
-                    {
-                        var evt = pendingEvts[ei];
-                        if (evt.Mode == EventMode.Synced)
-                        {
-                            _logger?.KWarning($"[KlothoEngine][Cleanup] Pending Synced event WIPED: tick={t}, typeId={evt.EventTypeId}, _lastVerifiedTick={_lastVerifiedTick}, CurrentTick={CurrentTick}, lag={CurrentTick - _lastVerifiedTick}");
-                            OnPendingWipe?.Invoke(t, -1, WipeKind.SyncedEvent);
-                        }
-                    }
-                }
-#endif
-
-                _eventBuffer.ClearRange(eventCleanFrom, cleanupTick);
+                // No event-buffer trim here: slots self-clean at execution time via
+                // ClearTick(CurrentTick) on wrap reuse. A nominal-tick range clear on the ring
+                // wiped LIVE events 8~18 ticks old (capacity MaxRollbackTicks+2 < trim distance
+                // MaxRollbackTicks+10..20 always wraps), corrupting rollback event diffs and
+                // destroying pending Synced events. Pending-Synced loss on slot reuse is now
+                // surfaced by WarnIfReclaimingPendingSynced at the reuse point.
 
                 // Collect keys to remove in a cached list to avoid GC, then remove them all at once.
                 _hashKeysToRemoveCache.Clear();

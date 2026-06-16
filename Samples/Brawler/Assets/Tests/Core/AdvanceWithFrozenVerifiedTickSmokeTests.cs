@@ -58,6 +58,11 @@ namespace xpTURN.Klotho.Core.Tests
                 harness.CreateHost(2);
                 var guest = harness.AddGuest();
                 harness.StartPlaying();
+                // The throttle slows the host to 1 tick / 10 tick-times against a
+                // frozen remote (until the staleness gate expires the entry at ~50 ticks),
+                // overrunning the helper's safety limit (target * 10). Timing policy is
+                // irrelevant to this prediction/ring scenario — switch it off.
+                harness.Host.Engine.DisableTimeSync();
 
                 const int baselineTick = 20;
                 harness.AdvanceAllToTick(baselineTick);
@@ -144,14 +149,21 @@ namespace xpTURN.Klotho.Core.Tests
             var sim = new EcsSimulation(maxEntities: 16, maxRollbackTicks: ecsMaxRollback, deltaTimeMs: 50);
             sim.Initialize();
 
+            // Save every tick like the engine does — the ring slot for tick 0 is physically
+            // overwritten once saves pass tick (capacity). Since retention is
+            // save-relative (consistent with HasFrame): advancement alone, without saves,
+            // no longer expires a physically intact snapshot.
             sim.SaveSnapshot();  // tick 0
             for (int i = 0; i < ecsMaxRollback + 5; i++)
+            {
                 sim.Tick(new System.Collections.Generic.List<ICommand>());
+                sim.SaveSnapshot();
+            }
 
             int nearestSnapshot = sim.GetNearestSnapshotTick(0);
             Assert.AreNotEqual(0, nearestSnapshot,
                 $"EcsSim with maxRollbackTicks={ecsMaxRollback} must NOT retain tick 0 snapshot " +
-                $"after advancing {ecsMaxRollback + 5} ticks — confirms (b-4)/(b-6) needs larger ecsMaxRollback.");
+                $"after {ecsMaxRollback + 5} per-tick saves (slot overwritten) — confirms (b-4)/(b-6) needs larger ecsMaxRollback.");
         }
     }
 }

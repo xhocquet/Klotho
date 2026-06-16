@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using xpTURN.Klotho.Logging;
 
 namespace xpTURN.Klotho.Core
 {
@@ -55,6 +56,17 @@ namespace xpTURN.Klotho.Core
         /// Dispatches all Synced events at <paramref name="tick"/> exactly once across the engine
         /// lifetime. Idempotent across rollback/resim: re-entry with the same tick (i.e.
         /// <paramref name="tick"/> &lt;= <c>_syncedDispatchHighWaterMark</c>) skips the entire batch.
+        ///
+        /// Ring-wrap guard: under a deep prediction stall the lead can reach the
+        /// event-ring capacity (<c>MaxRollbackTicks + 2</c>), at which point tick T and tick
+        /// T + capacity alias the same buffer slot — so the list handed in for <paramref name="tick"/>
+        /// may actually hold a different tick's events. The collector stamps <c>evt.Tick</c> at raise
+        /// time (<see cref="EventCollector"/>), so we dispatch only events whose own tick matches:
+        /// this prevents firing a Synced event at the wrong tick (and re-firing it when the chain
+        /// later reaches its real tick — the exactly-once violation). The wrapped-out earlier tick's
+        /// events were already overwritten in the ring (surfaced by WarnIfReclaimingPendingSynced);
+        /// they are lost rather than mis-fired, and the recovery ladder rebuilds state on a stall
+        /// that deep.
         /// </summary>
         private void DispatchSyncedEventsForTick(int tick, IReadOnlyList<SimulationEvent> events)
         {
@@ -64,6 +76,7 @@ namespace xpTURN.Klotho.Core
             {
                 var evt = events[i];
                 if (evt.Mode != EventMode.Synced) continue;
+                if (evt.Tick != tick) continue;  // ring-wrap: slot holds another tick's events — never fire here
                 _dispatcher.Dispatch(OnSyncedEvent, tick, evt, nameof(OnSyncedEvent));
                 if (evt is IMatchEndEvent endEvt)
                 {
@@ -75,7 +88,14 @@ namespace xpTURN.Klotho.Core
             if (anyFired) _syncedDispatchHighWaterMark = tick;
         }
 
-        private void DiffRollbackEvents(int fromTick)
+        /// <summary>
+        /// <paramref name="dispatchedSyncedMark"/> is the Synced dispatch watermark captured by the
+        /// caller BEFORE its re-advance/promotion loop raises it — Synced events above this boundary
+        /// are dispatched exactly once by the verified chain/batch path and must not be misread as
+        /// divergences; at or below it the exactly-once guard blocks dispatch, so set changes there
+        /// are reported via OnSyncedEventDivergence.
+        /// </summary>
+        private void DiffRollbackEvents(int fromTick, int dispatchedSyncedMark)
         {
             // Collection of events newly gathered after re-simulation.
             _rollbackNewEventsCache.Clear();
@@ -86,11 +106,23 @@ namespace xpTURN.Klotho.Core
                     _rollbackNewEventsCache.Add(newEvents[ei]);
             }
 
-            // Regular events that occurred before but disappeared after re-simulation are dispatched as canceled.
+            // Regular events that occurred before but disappeared after re-simulation are dispatched as
+            // canceled. Already-dispatched Synced events (tick <= watermark) that disappeared are reported
+            // as Removed divergence — the payload is a pooled old event, valid only during the callback.
             for (int oi = 0; oi < _rollbackOldEventsCache.Count; oi++)
             {
                 var oldEvt = _rollbackOldEventsCache[oi];
-                if (oldEvt.Mode != EventMode.Regular)
+                // The new cache spans [fromTick, CurrentTick). Old events at/after
+                // CurrentTick are the truncated prediction tail — possible only when CurrentTick
+                // shrank below the old-cache bound, i.e. the spectator path (re-sim halts at the
+                // confirmed tick). On P2P/SD CurrentTick never shrinks here so this never fires.
+                // The tail is not "disappeared" (re-prediction re-fires it; if confirmation removed
+                // it, the consumer's state-based cleanup handles it) — skip to avoid a spurious
+                // OnEventCanceled flicker. The caller still pool-returns these events.
+                if (oldEvt.Tick >= CurrentTick)
+                    continue;
+                bool dispatchedSynced = oldEvt.Mode == EventMode.Synced && oldEvt.Tick <= dispatchedSyncedMark;
+                if (oldEvt.Mode != EventMode.Regular && !dispatchedSynced)
                     continue;
 
                 bool found = false;
@@ -107,16 +139,23 @@ namespace xpTURN.Klotho.Core
                     }
                 }
                 if (!found)
-                    _dispatcher.Dispatch(OnEventCanceled, oldEvt.Tick, oldEvt, nameof(OnEventCanceled));
+                {
+                    if (dispatchedSynced)
+                        ReportSyncedEventDivergence(oldEvt, SyncedDivergenceKind.Removed);
+                    else
+                        _dispatcher.Dispatch(OnEventCanceled, oldEvt.Tick, oldEvt, nameof(OnEventCanceled));
+                }
             }
 
             // Newly appeared events are dispatched as Confirmed/Predicted depending on whether they are verified.
-            // Synced events are dispatched separately after hash verification on the verified chain/batch path, so they are skipped here.
+            // Synced events above the watermark are dispatched separately on the verified chain/batch path, so
+            // they are skipped here; at or below it that path is blocked by the tick-level exactly-once guard,
+            // so a new Synced event there is reported as Added divergence instead of being silently lost.
             for (int ni = 0; ni < _rollbackNewEventsCache.Count; ni++)
             {
                 var newEvt = _rollbackNewEventsCache[ni];
 
-                if (newEvt.Mode == EventMode.Synced) continue;
+                if (newEvt.Mode == EventMode.Synced && newEvt.Tick > dispatchedSyncedMark) continue;
 
                 bool found = false;
                 long newHash = newEvt.GetContentHash();
@@ -131,16 +170,35 @@ namespace xpTURN.Klotho.Core
                         break;
                     }
                 }
-                if (!found)
+                if (found)
+                    continue;
+
+                if (newEvt.Mode == EventMode.Synced)
                 {
-                    FrameState evtState = newEvt.Tick <= _lastVerifiedTick
-                        ? FrameState.Verified : FrameState.Predicted;
-                    if (evtState == FrameState.Verified)
-                        _dispatcher.Dispatch(OnEventConfirmed, newEvt.Tick, newEvt, nameof(OnEventConfirmed));
-                    else
-                        _dispatcher.Dispatch(OnEventPredicted, newEvt.Tick, newEvt, nameof(OnEventPredicted));
+                    ReportSyncedEventDivergence(newEvt, SyncedDivergenceKind.Added);
+                    // Match-end special case: notification alone would leave the match unendable.
+                    // The _matchEndedDispatched guard preserves the exactly-once invariant.
+                    if (newEvt is IMatchEndEvent endEvt && !_matchEndedDispatched)
+                    {
+                        _matchEndedDispatched = true;
+                        OnMatchEnded?.Invoke(newEvt.Tick, endEvt);
+                    }
+                    continue;
                 }
+
+                FrameState evtState = newEvt.Tick <= _lastVerifiedTick
+                    ? FrameState.Verified : FrameState.Predicted;
+                if (evtState == FrameState.Verified)
+                    _dispatcher.Dispatch(OnEventConfirmed, newEvt.Tick, newEvt, nameof(OnEventConfirmed));
+                else
+                    _dispatcher.Dispatch(OnEventPredicted, newEvt.Tick, newEvt, nameof(OnEventPredicted));
             }
+        }
+
+        private void ReportSyncedEventDivergence(SimulationEvent evt, SyncedDivergenceKind kind)
+        {
+            _logger?.KWarning($"[KlothoEngine][SyncedDivergence] {kind}: tick={evt.Tick}, type={evt.EventTypeId} — desync recovery changed already-dispatched Synced history; irreversible side effects may be stale");
+            OnSyncedEventDivergence?.Invoke(evt.Tick, evt, kind);
         }
 
         #endregion

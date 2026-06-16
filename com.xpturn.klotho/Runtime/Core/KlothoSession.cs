@@ -225,7 +225,9 @@ namespace xpTURN.Klotho.Core
             else
             {
                 Engine.Stop();
-                NetworkService.LeaveRoom(keepReconnectCredentials);
+                // Null for replay sessions — and replay always reaches here: playback
+                // of a recorded MatchEnd event drives the auto-shutdown scheduler into Stop.
+                NetworkService?.LeaveRoom(keepReconnectCredentials);
             }
 
             // Framework-owned replay save — after Engine.Stop (both branches above), before the terminal
@@ -350,7 +352,7 @@ namespace xpTURN.Klotho.Core
             // 1. Create EcsSimulation
             var simulation = new EcsSimulation(
                 simConfig.MaxEntities,
-                simConfig.MaxRollbackTicks,
+                simConfig.GetSnapshotCapacity(), // ring capacity = MaxRollbackTicks + 2
                 simConfig.TickIntervalMs,
                 setup.Logger,
                 assetRegistry: setup.AssetRegistry);
@@ -458,21 +460,29 @@ namespace xpTURN.Klotho.Core
                 };
             }
 
-            // 5. Create + initialize NetworkService — guest (Connection) uses the skip-handshake path
-            IKlothoNetworkService networkService;
-            if (simConfig.Mode == NetworkMode.ServerDriven)
+            // 5. Create + initialize NetworkService — guest (Connection) uses the skip-handshake path.
+            //    Replay sessions create none: the replay metadata's Mode used to route
+            //    this block down the host path, subscribing a ghost service to the live main
+            //    transport (stale-pong RTT pollution, epoch SharedClock logs, and a live-message
+            //    surface into the replay engine). NetworkService == null follows the spectator
+            //    precedent — observers/forwarders/properties are already null-guarded.
+            IKlothoNetworkService networkService = null;
+            if (!setup.IsReplay)
             {
-                var sdService = new ServerDrivenClientService();
-                if (isGuest) sdService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger, setup.RoomId);
-                else         sdService.Initialize(transport, commandFactory, setup.Logger);
-                networkService = sdService;
-            }
-            else
-            {
-                var p2pService = new KlothoNetworkService();
-                if (isGuest) p2pService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger);
-                else         p2pService.Initialize(transport, commandFactory, setup.Logger);
-                networkService = p2pService;
+                if (simConfig.Mode == NetworkMode.ServerDriven)
+                {
+                    var sdService = new ServerDrivenClientService();
+                    if (isGuest) sdService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger, setup.RoomId);
+                    else         sdService.Initialize(transport, commandFactory, setup.Logger);
+                    networkService = sdService;
+                }
+                else
+                {
+                    var p2pService = new KlothoNetworkService();
+                    if (isGuest) p2pService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger);
+                    else         p2pService.Initialize(transport, commandFactory, setup.Logger);
+                    networkService = p2pService;
+                }
             }
 
             // 5.1 Reconnect credentials wire — optional. Both KlothoNetworkService and ServerDrivenClientService
@@ -506,8 +516,11 @@ namespace xpTURN.Klotho.Core
 
             // 6. Create Engine: inject both SimulationConfig and SessionConfig
             var engine = new KlothoEngine(simConfig, sessionConfig);
-            engine.Initialize(simulation, networkService, setup.Logger,
-                setup.SimulationCallbacks, setup.ViewCallbacks);
+            if (setup.IsReplay)
+                engine.Initialize(simulation, setup.Logger, setup.SimulationCallbacks, setup.ViewCallbacks);
+            else
+                engine.Initialize(simulation, networkService, setup.Logger,
+                    setup.SimulationCallbacks, setup.ViewCallbacks);
             engine.SetCommandFactory(commandFactory);
             if (networkService is KlothoNetworkService p2pNs)
                 p2pNs.SubscribeEngine(engine);
@@ -685,7 +698,7 @@ namespace xpTURN.Klotho.Core
             _simCallbacks = callbacks.Simulation;
 
             var simulation = new EcsSimulation(
-                simCfg.MaxEntities, simCfg.MaxRollbackTicks, simCfg.TickIntervalMs,
+                simCfg.MaxEntities, simCfg.GetSnapshotCapacity(), simCfg.TickIntervalMs,
                 _logger, assetRegistry: _pendingSetup.AssetRegistry);
             callbacks.Simulation?.RegisterSystems(simulation);
             simulation.LockAssetRegistry();

@@ -102,7 +102,10 @@ namespace xpTURN.Klotho.Network
         public event Action<IPlayerInfo> OnPlayerLeft;
         public event Action<ICommand> OnCommandReceived;
         public event Action<int, int, long, long> OnDesyncDetected;
-        public event Action<int, int> OnFrameAdvantageReceived;
+        public event Action<int, int, bool> OnSyncHashCompared;
+        public event Action<int, int> OnResyncFailureReported;
+        public event Action<int> OnMatchAbortReceived;
+        public event Action<int, int, int> OnFrameAdvantageReceived;
         public event Action<int> OnLocalPlayerIdAssigned;
         public event Action<int, int> OnFullStateRequested;
         public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -251,6 +254,21 @@ namespace xpTURN.Klotho.Network
                 _pendingExtraDelayApply = null;
             }
             engine.OnCatchupComplete += HandleCatchupComplete;
+            engine.OnExtraDelayChanged += HandleEngineExtraDelayChanged;
+        }
+
+        // Report the client's effective extra-delay to the server so it folds
+        // the locally-observed reactive correction (PastTick) into its authoritative baseline. Changes
+        // are inherently sparse (escalate cooldown / decay dwell), so no extra rate-limit is needed;
+        // dedupe on unchanged value. Server drops reports outside Phase==Playing.
+        private int _lastReportedEffective = -1;
+        private void HandleEngineExtraDelayChanged(int effective)
+        {
+            if (effective == _lastReportedEffective) return;
+            _lastReportedEffective = effective;
+            SendToServer(new ReactiveExtraDelayReportMessage { EffectiveExtraDelay = effective },
+                DeliveryMethod.ReliableOrdered);
+            _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"sd-client\",\"dir\":\"send\",\"effective\":{effective}}}");
         }
 
         // Applies the value immediately if the engine is ready, otherwise buffers it for SubscribeEngine.
@@ -388,7 +406,30 @@ namespace xpTURN.Klotho.Network
             // no-op: compared against server hash via local resimulation
         }
 
+        public void InvalidateLocalSyncHashes(int fromTick)
+        {
+            // no-op: P2P-only sync-hash exchange
+        }
+
+        public void InvalidateSyncHashes(int fromTick)
+        {
+            // no-op: P2P-only sync-hash exchange
+        }
+
+        public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash)
+        {
+            // no-op: P2P-only recovery ladder reporting
+        }
+
+        public void BroadcastMatchAbort(byte reason)
+        {
+            // no-op: P2P-only recovery ladder reporting
+        }
+
         public void SetLocalTick(int tick) { _localTick = tick; }
+
+        // Server-driven client does not piggyback frame-advantage on CommandMessage — no-op.
+        public void SetLocalAdvantage(int advantage) { }
 
         public void ClearOldData(int tick)
         {
@@ -815,6 +856,11 @@ namespace xpTURN.Klotho.Network
             if (_reconnectState == ReconnectState.WaitingForFullState)
             {
                 _reconnectState = ReconnectState.None;
+                // Restore Phase lost on a self-initiated disconnect (fault-injection's
+                // DisconnectPeerCalled is not reconnect-eligible → Phase=Disconnected). The
+                // natural NetworkFailure path keeps Phase==Playing, so the setter's change-guard
+                // makes this a no-op there. Mirrors P2P HandleFullStateResponse.
+                Phase = SessionPhase.Playing;
                 OnReconnected?.Invoke();
             }
 
@@ -865,6 +911,25 @@ namespace xpTURN.Klotho.Network
         }
 
         // ── Reconnect ───────────────────────────────────────────
+
+        /// <summary>
+        /// Fault-injection only — forces in-session reconnect arming, mirroring the
+        /// reconnect-eligible branch of <see cref="HandleDisconnected"/> but without its
+        /// Phase==Playing / reason==NetworkFailure gate. The harness severs the client with
+        /// DisconnectPeer (→ DisconnectPeerCalled, not reconnect-eligible), so the natural arm
+        /// never fires; calling this drives the same self-reconnect state machine
+        /// (<see cref="UpdateReconnect"/> → transport reconnect) the production NetworkFailure
+        /// path uses. Sets the timer fields too, else UpdateReconnect's elapsed math would
+        /// immediately time out. Unlike P2P, no PauseForReconnect — SD's natural reconnect path
+        /// does not pause the engine.
+        /// </summary>
+        internal void ArmInSessionReconnectForFaultInjection()
+        {
+            _reconnectState = ReconnectState.WaitingForTransport;
+            _reconnectStartTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _reconnectRetryCount = 0;
+            OnReconnecting?.Invoke();
+        }
 
         private void HandleReconnectAccept(ReconnectAcceptMessage msg)
         {
@@ -1078,7 +1143,10 @@ namespace xpTURN.Klotho.Network
             OnPlayerLeft?.Invoke(null);
             OnCommandReceived?.Invoke(null);
             OnDesyncDetected?.Invoke(0, 0, 0, 0);
-            OnFrameAdvantageReceived?.Invoke(0, 0);
+            OnSyncHashCompared?.Invoke(0, 0, false);
+            OnResyncFailureReported?.Invoke(0, 0);
+            OnMatchAbortReceived?.Invoke(0);
+            OnFrameAdvantageReceived?.Invoke(0, 0, 0);
             OnFullStateRequested?.Invoke(0, 0);
             OnFullStateReceived?.Invoke(0, null, 0, FullStateKind.Unicast);
             OnPlayerDisconnected?.Invoke(null);

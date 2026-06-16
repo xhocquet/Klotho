@@ -46,7 +46,7 @@ namespace xpTURN.Samples.P2pSample
         private void Awake()
         {
             _logger = KlothoLogger.CreateDefault(level: _logLevel, filePrefix: "Client", categoryName: "Client");
-            _logger?.KInformation($"P2pSample logger started.");
+            _logger?.KInformation($"P2pSample logger started : LogLevel={_logLevel}");
 
             _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
         }

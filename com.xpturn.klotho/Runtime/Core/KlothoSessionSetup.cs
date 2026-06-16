@@ -36,6 +36,15 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public int RoomId { get; set; } = -1;
 
+        /// <summary>
+        /// Replay-playback session (set by KlothoSessionFlow.StartReplay). The session creates
+        /// no network service: without this flag, Create followed the replay metadata's Mode
+        /// down the host path and subscribed a full service to the live main transport — a
+        /// ghost wiring whose stale-pong flush polluted the server's RTT push decisions and
+        /// whose uninitialized SharedClock logged epoch values.
+        /// </summary>
+        public bool IsReplay { get; set; }
+
         // ── DataAssetRegistry ──
 
         /// <summary>

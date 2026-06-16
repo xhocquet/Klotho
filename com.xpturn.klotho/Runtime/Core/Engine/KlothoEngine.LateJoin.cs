@@ -138,14 +138,19 @@ namespace xpTURN.Klotho.Core
 
         private void HandlePlayerJoinedNotification(int joinedPlayerId)
         {
-            bool added = !_activePlayerIds.Contains(joinedPlayerId);
-            if (added)
+            // Engine roster: idempotent add (semantics unchanged).
+            if (!_activePlayerIds.Contains(joinedPlayerId))
                 _activePlayerIds.Add(joinedPlayerId);
 
-            // Mirror the roster mutation into the frame so the deterministic
-            // SessionParticipantComponent slot set stays in sync with _activePlayerIds.
-            // PlayerJoinCommand path → same tick on all nodes → deterministic.
-            if (added && _simulation is EcsSimulation ecsSim)
+            // Gate the deterministic slot CreateEntity on the FRAME, not _activePlayerIds.
+            // A late-join guest's _activePlayerIds already contains its own id (Initialize seeds it
+            // from the live roster), so the old `!_activePlayerIds.Contains` gate evaluated false on
+            // the joiner and true on the peers — the joiner SKIPPED the slot CreateEntity while peers
+            // created it, an off-by-one entity cursor → permanent hash desync. The frame is hash-locked
+            // (the deterministic truth, identical on every node and under rollback re-sim): create the
+            // slot iff no SessionParticipantComponent for this player exists yet, so every node creates
+            // it exactly once. Player count is small → linear scan, no allocation.
+            if (_simulation is EcsSimulation ecsSim && !HasParticipantSlot(ecsSim.Frame, joinedPlayerId))
             {
                 var frame = ecsSim.Frame;
                 var slotEntity = frame.CreateEntity();
@@ -164,6 +169,21 @@ namespace xpTURN.Klotho.Core
             }
             _logger?.KInformation($"[KlothoEngine][Roster] PlayerJoined: playerId={joinedPlayerId}, rosterCount={_activePlayerIds.Count}, active=[{sb}], CurrentTick={CurrentTick}, _lastVerifiedTick={_lastVerifiedTick}");
 #endif
+        }
+
+        // Does the frame already hold a SessionParticipantComponent slot for this player?
+        // Components are dense-packed (ComponentStorageFlat.Add: ComponentsSpan[count]; Remove: swap-back),
+        // so ComponentsSpan[0..Count) are the live slots — a PlayerId match scan, order-independent, no alloc.
+        private static bool HasParticipantSlot(Frame frame, int playerId)
+        {
+            var slots = frame.GetStorage<SessionParticipantComponent>();
+            var components = slots.ComponentsSpan;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                if (components[i].PlayerId == playerId)
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -223,10 +243,10 @@ namespace xpTURN.Klotho.Core
 
             _lastVerifiedTick = tick;
             _lastMatchedSyncTick = tick;
-            _pendingSyncCheckTick = -1;
-            _desyncDetectedForPending = false;
+            _prevMatchedSyncTick = 0;
+            _lastMismatchedSyncTick = -1; // new baseline — stale mismatch records no longer apply
 
-            _consecutiveDesyncCount = 0;
+            ClearPerPeerDesyncState();
             _resyncRetryCount = 0;
 
             _hasPendingRollback = false;
@@ -237,6 +257,16 @@ namespace xpTURN.Klotho.Core
             _teleportedEntities.Clear();
 
             StartCatchingUp();
+
+            // Late-join/reconnect guests get a fresh engine and never pass
+            // HandleGameStart, so EnableTimeSync (the sole P2P caller) was never reached —
+            // they ran with _timeSyncEnabled false forever and never self-throttled, an
+            // asymmetry vs start-join guests. Enable it
+            // here, the P2P-only merge point of both seed paths. Ordering: after the state is
+            // seeded (EnableTimeSync clears _remoteTicks; _activePlayerIds was restored by
+            // ApplyFullState above, so the throttle has live inputs once catchup feeds them).
+            EnableTimeSync();
+
             _logger?.KInformation($"[KlothoEngine][P2P] Late Join FullState received, starting catchup: tick={tick}");
         }
     }

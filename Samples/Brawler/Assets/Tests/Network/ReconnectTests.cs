@@ -159,6 +159,27 @@ namespace xpTURN.Klotho.Network.Tests
             return null;
         }
 
+        private string GetClientReconnectStateName()
+        {
+            var field = typeof(KlothoNetworkService).GetField("_reconnectState",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return field.GetValue(_clientService).ToString();
+        }
+
+        private long GetClientReconnectStartTimeMs()
+        {
+            var field = typeof(KlothoNetworkService).GetField("_reconnectStartTimeMs",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return (long)field.GetValue(_clientService);
+        }
+
+        private sealed class FixedDeviceIdProvider : IDeviceIdProvider
+        {
+            private readonly string _id;
+            public FixedDeviceIdProvider(string id) { _id = id; }
+            public string GetDeviceId() => _id;
+        }
+
         #endregion
 
         #region 19. Normal reconnect scenario
@@ -252,6 +273,134 @@ namespace xpTURN.Klotho.Network.Tests
             _hostService.Update();
 
             Assert.Greater(fullStateRequestedPeerId, 0, "FullStateRequested should fire for reconnecting peer");
+        }
+
+        #endregion
+
+        #region 19b. In-session reconnect arm (first-message invariant / deviceId / arm hook)
+
+        /// <summary>
+        /// Regression guard: an armed in-session reconnect must send ReconnectRequest
+        /// as its first (and only) post-reconnect message — never PlayerJoin. A PlayerJoin-first
+        /// return is what degraded the reconnect into a late-join (new playerId).
+        /// </summary>
+        [Test]
+        public void Reconnect_ArmedClient_FirstMessageIsReconnectRequest_NotPlayerJoin()
+        {
+            StartPlaying();
+
+            // Host loses the client mid-game and reserves its slot. TestTransport.Disconnect()
+            // surfaces NetworkFailure on the client, so it arms in-session reconnect (production path).
+            _clientTransport.Disconnect();
+            _hostService.Update();
+            Assert.AreEqual(1, GetDisconnectedPlayerCount(), "host should reserve the reconnect slot");
+
+            // Capture every message the host receives from the returning client.
+            var hostReceived = new List<INetworkMessage>();
+            var probe = new MessageSerializer();
+            Action<int, byte[], int> capture = (peerId, data, len) =>
+            {
+                var m = probe.Deserialize(data, len);
+                if (m != null) hostReceived.Add(m);
+            };
+            _hostTransport.OnDataReceived += capture;
+
+            // Drive the in-session reconnect state machine (UpdateReconnect → Connect → ReconnectRequest).
+            PumpMessages();
+            _hostTransport.OnDataReceived -= capture;
+
+            Assert.IsNotEmpty(hostReceived, "host should receive the returning client's first message");
+            Assert.IsInstanceOf<ReconnectRequestMessage>(hostReceived[0],
+                "armed client's first message must be ReconnectRequest");
+            Assert.IsFalse(hostReceived.Exists(m => m is PlayerJoinMessage),
+                "armed client must never send PlayerJoin");
+        }
+
+        /// <summary>
+        /// Arm-hook unit guard: the fault-injection arm must (1) only be needed because
+        /// a LocalDisconnect does not auto-arm, and (2) seed the timer fields so UpdateReconnect does
+        /// not immediately time out.
+        /// </summary>
+        [Test]
+        public void ArmInSessionReconnectForFaultInjection_SeedsTimer_NoInstantTimeout()
+        {
+            StartPlaying();
+
+            // Mirror the FI harness sever (DisconnectPeer → LocalDisconnect): NOT reconnect-eligible.
+            _clientTransport.SimulateDisconnect(DisconnectReason.LocalDisconnect);
+            Assert.AreEqual("None", GetClientReconnectStateName(),
+                "LocalDisconnect must not auto-arm in-session reconnect");
+
+            _clientService.ArmInSessionReconnectForFaultInjection();
+
+            Assert.AreEqual("WaitingForTransport", GetClientReconnectStateName());
+            Assert.AreNotEqual(0L, GetClientReconnectStartTimeMs(),
+                "arm must seed _reconnectStartTimeMs, else UpdateReconnect instantly times out");
+
+            // A single Update() must not collapse to Failed (no instant timeout).
+            _clientService.Update();
+            Assert.AreNotEqual("Failed", GetClientReconnectStateName(),
+                "armed reconnect must not instantly time out");
+        }
+
+        [Test]
+        public void Reconnect_MatchingDeviceId_Accepted()
+        {
+            _clientService.SetReconnectCredentialsStore(null, "1.0", new FixedDeviceIdProvider("dev-A"));
+            StartPlaying();
+
+            _clientTransport.Disconnect();
+            _hostService.Update();
+
+            IPlayerInfo reconnectedPlayer = null;
+            _hostService.OnPlayerReconnected += p => reconnectedPlayer = p;
+
+            var newClientTransport = new TestTransport();
+            newClientTransport.Connect("localhost", 7777);
+
+            var serializer = new MessageSerializer();
+            var reconnectReq = new ReconnectRequestMessage
+            {
+                SessionMagic = GetSessionMagic(),
+                PlayerId = 1,
+                DeviceId = "dev-A"
+            };
+            newClientTransport.Send(0, serializer.Serialize(reconnectReq), DeliveryMethod.ReliableOrdered);
+            _hostService.Update();
+
+            Assert.IsNotNull(reconnectedPlayer, "matching deviceId should reconnect");
+            Assert.AreEqual(1, reconnectedPlayer.PlayerId);
+            Assert.AreEqual(0, GetDisconnectedPlayerCount());
+        }
+
+        [Test]
+        public void Reconnect_MismatchedDeviceId_Rejected()
+        {
+            _clientService.SetReconnectCredentialsStore(null, "1.0", new FixedDeviceIdProvider("dev-A"));
+            StartPlaying();
+
+            _clientTransport.Disconnect();
+            _hostService.Update();
+
+            IPlayerInfo reconnectedPlayer = null;
+            _hostService.OnPlayerReconnected += p => reconnectedPlayer = p;
+
+            var newClientTransport = new TestTransport();
+            newClientTransport.Connect("localhost", 7777);
+
+            var serializer = new MessageSerializer();
+            var reconnectReq = new ReconnectRequestMessage
+            {
+                SessionMagic = GetSessionMagic(),
+                PlayerId = 1,
+                DeviceId = "dev-B" // wrong device
+            };
+            newClientTransport.Send(0, serializer.Serialize(reconnectReq), DeliveryMethod.ReliableOrdered);
+            _hostService.Update();
+
+            Assert.IsNull(reconnectedPlayer, "mismatched deviceId must not reconnect");
+            Assert.AreEqual(1, GetDisconnectedPlayerCount(),
+                "reserved slot must remain (rejected, not consumed)");
         }
 
         #endregion
@@ -794,6 +943,7 @@ namespace xpTURN.Klotho.Network.Tests
             public FrameRef PredictedPreviousFrame => FrameRef.None(FrameKind.PredictedPrevious);
             public FrameRef PreviousUpdatePredictedFrame => FrameRef.None(FrameKind.PreviousUpdatePredicted);
             public RenderClockState RenderClock => default;
+            public float PredictionAccuracy => 1.0f;
             public bool TryGetFrameAtTick(int tick, out xpTURN.Klotho.ECS.Frame frame) { frame = null; return false; }
 
             public event Action<int> OnTickExecuted;
@@ -807,6 +957,7 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<int, SimulationEvent> OnEventConfirmed;
             public event Action<int, SimulationEvent> OnEventCanceled;
             public event Action<int, SimulationEvent> OnSyncedEvent;
+            public event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
             public event Action<int> OnResyncCompleted;
             public event Action OnResyncFailed;
             public event Action<AbortReason> OnMatchAborted;
@@ -828,6 +979,7 @@ namespace xpTURN.Klotho.Network.Tests
             public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void ApplyExtraDelay(int delay, ExtraDelaySource source) { }
             public void EscalateExtraDelay(int step, int max) { }
+            public void DeEscalateExtraDelay(int step) { }
             public void Stop() { }
             public void AbortMatch(AbortReason reason) { }
             public void StartSpectator(SpectatorStartInfo info) { }
@@ -867,6 +1019,7 @@ namespace xpTURN.Klotho.Network.Tests
                 OnEventConfirmed?.Invoke(0, default);
                 OnEventCanceled?.Invoke(0, default);
                 OnSyncedEvent?.Invoke(0, default);
+                OnSyncedEventDivergence?.Invoke(0, default, default);
                 OnResyncCompleted?.Invoke(0);
                 OnResyncFailed?.Invoke();
                 OnCommandRejected?.Invoke(0, 0, default);

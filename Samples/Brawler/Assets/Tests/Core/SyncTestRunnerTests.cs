@@ -271,6 +271,84 @@ namespace xpTURN.Klotho.Core.Tests
 
         #endregion
 
+        #region IMP59 V2-H6: failure containment
+
+        /// <summary>
+        /// Breaks resim determinism on purpose: writes a counter that lives OUTSIDE frame state
+        /// into a component, so re-simulating a tick produces a different value than the
+        /// forward pass did.
+        /// </summary>
+        private sealed class NonDeterministicSystem : ISystem
+        {
+            public EntityRef Target;
+            public int ExternalCounter;
+
+            public void Update(ref Frame frame)
+            {
+                if (!frame.Has<HealthComponent>(Target)) return;
+                ref var hp = ref frame.Get<HealthComponent>(Target);
+                hp.CurrentHealth = ++ExternalCounter;
+            }
+        }
+
+        [Test]
+        public void SyncTest_Failure_RestoresForwardState()
+        {
+            var sim = new EcsSimulation(MaxEntities, maxRollbackTicks: MaxRollbackTicks, deltaTimeMs: 50);
+            var nonDet = new NonDeterministicSystem();
+            sim.AddSystem(nonDet, SystemPhase.Update);
+            sim.Initialize();
+            nonDet.Target = AddPlayerEntity(sim, 0, FPVector3.Zero);
+
+            var runner = new SyncTestRunner();
+            runner.Initialize(sim, checkDistance: 2);
+
+            SyncTestResult? firstFail = null;
+            for (int tick = 0; tick < 10 && firstFail == null; tick++)
+            {
+                var result = runner.RunTick(tick, NoCommands);
+                if (result.Status == SyncTestStatus.Fail)
+                    firstFail = result;
+            }
+
+            Assert.IsNotNull(firstFail, "The non-deterministic system must fail a check");
+            // The diverged resim branch must not stay live: the post-failure live state is the
+            // forward branch (hash equals the forward hash captured before the rollback check).
+            Assert.AreEqual(firstFail.Value.ExpectedHash, sim.GetStateHash(),
+                "A failed check must restore the post-forward state (side buffer, IMP59 V2-H6)");
+        }
+
+        [Test]
+        public void SyncTest_ConsecutiveFailures_AutoDisables()
+        {
+            var sim = new EcsSimulation(MaxEntities, maxRollbackTicks: MaxRollbackTicks, deltaTimeMs: 50);
+            var nonDet = new NonDeterministicSystem();
+            sim.AddSystem(nonDet, SystemPhase.Update);
+            sim.Initialize();
+            nonDet.Target = AddPlayerEntity(sim, 0, FPVector3.Zero);
+
+            var runner = new SyncTestRunner();
+            runner.Initialize(sim, checkDistance: 2);
+
+            int failCount = 0;
+            bool disabledFired = false;
+            runner.OnSyncError += _ => failCount++;
+            runner.OnSyncTestDisabled += () => disabledFired = true;
+
+            // Each failure re-arms a resume-skip window (tick + D + 1) so the next comparison
+            // does not roll back into resim-polluted ring slots; with persistent non-determinism
+            // every subsequent check fails until the consecutive limit fires the disable signal.
+            for (int tick = 0; tick < 60 && !disabledFired; tick++)
+                runner.RunTick(tick, NoCommands);
+
+            Assert.IsTrue(disabledFired,
+                "ConsecutiveFailLimit consecutive failures must raise OnSyncTestDisabled");
+            Assert.AreEqual(runner.ConsecutiveFailLimit, failCount,
+                "The disable signal must fire exactly at the consecutive-failure limit");
+        }
+
+        #endregion
+
         #region Intentional Failure Detection
 
         [Test]

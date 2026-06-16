@@ -17,11 +17,14 @@
 | `UsePrediction` | Pause on missing input (Paused) | Predict, then rollback | — |
 | `SDInputLeadTicks` | Less server-arrival slack · risk of unapplied input | Higher perceived input latency · greater stability | — (SD only) |
 | `InterpolationDelayTicks` | Fresher remote entities · more jitter exposure | Smoother interpolation · more delay | — (View) |
+| `QuorumMissDropTicks` | Faster presumed-drop recovery · false-positive rollback thrash on jitter | Slower recovery · more jitter-tolerant | — (P2P only) |
 
 **Key formulas (SD mode):**
 ```
 Effective input latency (perceived) ≈ (InputDelayTicks + SDInputLeadTicks) × TickIntervalMs
-Server input arrival deadline       ≈ HardToleranceMs (auto: above + RTT/2 + 20 ms jitter)
+Server input deadline                = the tick's execution moment (no fixed tolerance window)
+  · inputs missing at execution → EmptyCommand · later arrivals → past-tick reject
+  · chronic lateness self-corrects via client lead escalation (no HardToleranceMs knob — see §3.2 note)
 ```
 
 **Key formulas (P2P mode):**
@@ -67,6 +70,7 @@ A genre where a single input frame translates directly to a visible result. **Ro
 | `SyncCheckInterval` | 30 | 30 | Once per second (Mobile ~1.2 s) |
 | `UsePrediction` | `true` | `true` | Required |
 | `SDInputLeadTicks` | — | **2** (2–4) | Keep small under SD |
+| `QuorumMissDropTicks` | **20** (10–40) | — | P2P presumed-drop watchdog (PC only) |
 | `EnableErrorCorrection` | `false` | `true` | Smoother interpolation on mobile |
 | `InterpolationDelayTicks` | 1 | 2 | Short — responsiveness first |
 | `MaxEntities` | 32 | 32 | Sized to characters + projectiles |
@@ -83,24 +87,23 @@ Many entities · responsiveness matters · deterministic simulation (the Brawler
 |---|---|---|---|
 | `Mode` | `ServerDriven` | `ServerDriven` | Cheat prevention |
 | `TickIntervalMs` | **25** (25–33) | **40** (33–50) | PC=40 Hz / Mobile=25 Hz |
-| `InputDelayTicks` | **0** (0–2) | **0** (0–2) | Recommended 0 under SD (Lead absorbs it) |
+| `InputDelayTicks` | **0** (0–4) | **0** (0–4) | 0 lets Lead absorb it; the Brawler sample uses 4 for extra send/receive headroom (additive with Lead) |
 | `MaxRollbackTicks` | **50** (30–60) | **50** (30–60) | Rollback depth ≈ 1.25–2 s |
 | `SyncCheckInterval` | **30** | **30** | |
 | `UsePrediction` | `false` | `false` | SD is server-authoritative — prediction not needed |
 | `SDInputLeadTicks` | **4** (3–6) | **6** (4–10) | Higher on mobile to absorb RTT |
-| `HardToleranceMs` | **0** (auto) | **0** (auto) | Auto reflects RTT |
 | `InputResendIntervalMs` | **150** (100–200) | **150** (100–250) | Unacked-input resend |
 | `MaxUnackedInputs` | 30 | 30 | |
 | `EnableErrorCorrection` | `true` | `true` | Remote-entity correction |
 | `InterpolationDelayTicks` | 2 | 3 | Higher on mobile to absorb jitter |
 | `MaxEntities` | 256 | 128 | Proportional to content scale |
 
-**The Brawler sample (`Samples/Brawler/Server/simulationconfig.json`)** is a real-world PC example for this category.
+**The Brawler sample (`Samples/Brawler/Server/simulationconfig.json`)** is a real-world PC example for this category (`InputDelayTicks=4`, `SDInputLeadTicks=4` — i.e. it opts into the non-zero `InputDelayTicks` end of the range for extra headroom).
 
 **Tuning notes:**
 - For builds with many characters/projectiles, set `MaxEntities` to the measured peak + 25% headroom.
 - In mobile handover environments (LTE↔5G transitions), raise `SDInputLeadTicks` to 8–10.
-- When running P2P, raise `InputDelayTicks` to 3–4 and ignore `SDInputLeadTicks`.
+- When running P2P, raise `InputDelayTicks` to 3–4, ignore `SDInputLeadTicks`, and tune `QuorumMissDropTicks` (default 20, sweet spot 20–40) for presumed-drop recovery.
 
 ### 3.3 MOBA / Co-op Action RPG (PvE)
 
@@ -130,6 +133,7 @@ Many units · low input frequency · rollback impractical (simulation cost too h
 | `SyncCheckInterval` | 10 | 10 | Fast desync detection |
 | `UsePrediction` | `false` | `false` | Required |
 | `SDInputLeadTicks` | **4** | **6** | Only under SD |
+| `QuorumMissDropTicks` | **20** (10–40) | — | P2P watchdog (when PC runs P2P) |
 | `EnableErrorCorrection` | `false` | `false` | Correction unnecessary |
 | `MaxEntities` | 1024+ | 512+ | Sized to unit count |
 
@@ -168,8 +172,7 @@ Each turn is discrete; simulation advances after input arrives. **Slow tick + no
 - PC recommendations work as-is. `TickIntervalMs` can be reduced to 16–17 (60 Hz) for fighting/action games.
 
 ### 4.3 Global Matchmaking (cross-region RTT > 150 ms)
-- Recommend `SDInputLeadTicks` ≥ 8.
-- Keep `HardToleranceMs` at 0 (auto) — it accounts for RTT and is safer.
+- Recommend `SDInputLeadTicks` ≥ 8 (the server has no fixed tolerance window, so cross-region RTT is absorbed entirely by client lead).
 - Add +1–2 to the recommended `InterpolationDelayTicks`.
 
 ---
@@ -183,9 +186,10 @@ Each turn is discrete; simulation advances after input arrives. **Slow tick + no
    - SD `MaxUnackedInputs exceeded` → adjust `InputResendIntervalMs` or raise `SDInputLeadTicks`.
 3. **On desync**: temporarily lower `SyncCheckInterval` (e.g., 10 → 5) for faster detection.
 4. **Interpolation jitter**: raise `InterpolationDelayTicks` one step at a time and enable `EnableErrorCorrection`.
-5. **On `OnMatchAborted(ChainStallTimeout)` false positives**: verify `SessionConfig.ReconnectTimeoutMs` against the recovery floor. Effective threshold = `max(ReconnectTimeoutMs / TickIntervalMs + 100, SessionConfig.MinStallAbortTicks)`. If `ReconnectTimeoutMs < 30s`, `MinStallAbortTicks` (default 600 = 30s @ 50ms) acts as the floor — raise both for high-latency/long-recovery scenarios.
+5. **Reactive escalation ceiling**: `SimulationConfig.Validate()` enforces `ReactiveMax ≤ MaxRollbackTicks / 2`. If you lower `MaxRollbackTicks` (e.g. fighting at 8), `ReactiveMax` is clamped to that half (≤4) with a warning — raise `MaxRollbackTicks` first if you need a wider reactive window.
+6. **On `OnMatchAborted(ChainStallTimeout)` false positives**: verify `SessionConfig.ReconnectTimeoutMs` against the recovery floor. Effective threshold = `max(ReconnectTimeoutMs / TickIntervalMs + 100, SessionConfig.MinStallAbortTicks)`. If `ReconnectTimeoutMs < 30s`, `MinStallAbortTicks` (default 600 = 30s @ 50ms) acts as the floor — raise both for high-latency/long-recovery scenarios.
 
-> **Field placement** — `MinStallAbortTicks`, `LateJoinDelaySafety`, `RttSanityMaxMs` live in `SessionConfig` alongside the other LateJoin/Reconnect/ChainStall service-side knobs. The engine-internal knobs — `CatchupMaxTicksPerFrame`, `ResyncMaxRetries`, `DesyncThresholdForResync`, `CorrectiveResetCooldownMs`, Reactive Dynamic InputDelay 6 (`ReactiveWindowTicks`, `ReactiveEscalateThreshold`, `ReactiveStep`, `ReactiveMax`, `ServerPushGraceTicks`, `ReactiveEscalateCooldownTicks`), and Rollback Burst 2 (`RollbackBurstCount`, `RollbackWindowTicks`) — live in `SimulationConfig`.
+> **Field placement** — `MinStallAbortTicks`, `LateJoinDelaySafety`, `RttSanityMaxMs` live in `SessionConfig` alongside the other LateJoin/Reconnect/ChainStall service-side knobs. The engine-internal knobs — `CatchupMaxTicksPerFrame`, `ResyncMaxRetries`, `DesyncThresholdForResync`, `CorrectiveResetCooldownMs`, `CorrectiveResetMaxAttempts`, `AutoAbortOnRecoveryExhausted`, `ServerSnapshotRetentionTicks`, `QuorumMissDropTicks`, Reactive Dynamic InputDelay 7 (`ReactiveWindowTicks`, `ReactiveEscalateThreshold`, `ReactiveStep`, `ReactiveMax`, `ServerPushGraceTicks`, `ReactiveEscalateCooldownTicks`, `ReactiveDeEscalateStableTicks`), and Rollback Burst 2 (`RollbackBurstCount`, `RollbackWindowTicks`) — live in `SimulationConfig`.
 
 ---
 

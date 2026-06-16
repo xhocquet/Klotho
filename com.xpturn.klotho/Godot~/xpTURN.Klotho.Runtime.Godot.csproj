@@ -1,7 +1,7 @@
 <!--
   xpTURN.Klotho.Runtime.Godot — Godot adapter library (mirror of xpTURN.Klotho.Runtime.Unity).
 
-  Godot counterparts of the Unity adapter layer (Runtime/Unity/**) live here:
+  Godot counterparts of the Unity adapter layer (Unity/**) live here:
   GodotSessionDriver (Node._Process -> Tick) / EntityViewNode (Node3D) / GodotDebugSink (IKLogger) /
   Deterministic/*.Godot.cs (FP64 <-> Godot.Vector3), etc.
 

@@ -26,41 +26,17 @@ namespace xpTURN.Klotho.Tests.Network
             _commandFactory = new CommandFactory();
         }
 
-        // ── #1 ServerInputCollector.HardTolerance ───────────
+        // ── #1 ServerInputCollector.MissingInput ───────────
+        // (Hard-Tolerance rejection removed — the effective deadline is the
+        //  tick's execution moment, covered by the past-tick tests below.)
 
         [Test]
-        public void ServerInputCollector_HardTolerance_ExpiredInputRejected()
+        public void ServerInputCollector_MissingInput_EmptyCommandSubstituted()
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(100, peerMap); // 100ms tolerance
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
-
-            long now = 1000;
-            collector.SetTimeProvider(() => now);
-            collector.BeginTick(0, now);
-
-            // Input within deadline -> accepted
-            var cmd1 = new EmptyCommand(10, 0);
-            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, cmd1));
-
-            // Input past deadline (tick 1, time elapsed after deadline set)
-            collector.BeginTick(1, now);
-            now = 1200; // 200ms elapsed > 100ms tolerance
-            var cmd2 = new EmptyCommand(10, 1);
-            Assert.IsFalse(collector.TryAcceptInput(1, 1, 10, cmd2));
-        }
-
-        [Test]
-        public void ServerInputCollector_HardTolerance_EmptyCommandSubstituted()
-        {
-            var collector = new ServerInputCollector();
-            var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(100, peerMap);
-            collector.AddPlayer(10);
-
-            long now = 1000;
-            collector.SetTimeProvider(() => now);
 
             // CollectTickInputs without input -> substituted with EmptyCommand
             int timeoutCount = 0;
@@ -80,7 +56,7 @@ namespace xpTURN.Klotho.Tests.Network
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
 
             // peerId 1 -> playerId 10 mapping, sent with playerId 99 -> rejected
@@ -93,7 +69,7 @@ namespace xpTURN.Klotho.Tests.Network
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
 
             // peerId 99 (unregistered) -> rejected
@@ -106,7 +82,7 @@ namespace xpTURN.Klotho.Tests.Network
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
 
             // Execute tick 0
@@ -116,6 +92,60 @@ namespace xpTURN.Klotho.Tests.Network
             // Late input for tick 0 -> rejected
             var cmd = new EmptyCommand(10, 0);
             Assert.IsFalse(collector.TryAcceptInput(1, 0, 10, cmd));
+        }
+
+        // ── #2b ServerInputCollector Empty-no-overwrite-real ─────
+        // Server-side backstop: an arriving EmptyCommand must never replace a stored non-Empty
+        // (real) cmd via last-write-wins (which would eat the button). real-over-empty /
+        // real-over-real / empty-over-empty keep the existing last-write behavior.
+
+        [Test]
+        public void ServerInputCollector_EmptyDoesNotOverwriteReal()
+        {
+            var collector = new ServerInputCollector();
+            collector.Configure(new Dictionary<int, int> { { 1, 10 } });
+            collector.AddPlayer(10);
+
+            // Real (non-Empty) stored first, then Empty for the same (tick, player).
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new StopCommand(10, 0)));
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new EmptyCommand(10, 0))); // accepted-as-noop
+
+            var commands = collector.CollectTickInputs(0);
+            Assert.AreEqual(1, commands.Count);
+            Assert.IsInstanceOf<StopCommand>(commands[0],
+                "Arriving Empty must not overwrite the stored real cmd (button kept).");
+        }
+
+        [Test]
+        public void ServerInputCollector_RealOverwritesEmpty()
+        {
+            var collector = new ServerInputCollector();
+            collector.Configure(new Dictionary<int, int> { { 1, 10 } });
+            collector.AddPlayer(10);
+
+            // Empty first (e.g. reordered / proactive), then real -> real wins (last-write allowed).
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new EmptyCommand(10, 0)));
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new StopCommand(10, 0)));
+
+            var commands = collector.CollectTickInputs(0);
+            Assert.AreEqual(1, commands.Count);
+            Assert.IsInstanceOf<StopCommand>(commands[0],
+                "Real over empty must overwrite (reconnect/late real correction).");
+        }
+
+        [Test]
+        public void ServerInputCollector_EmptyOverEmpty_NoRegression()
+        {
+            var collector = new ServerInputCollector();
+            collector.Configure(new Dictionary<int, int> { { 1, 10 } });
+            collector.AddPlayer(10);
+
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new EmptyCommand(10, 0)));
+            Assert.IsTrue(collector.TryAcceptInput(1, 0, 10, new EmptyCommand(10, 0)));
+
+            var commands = collector.CollectTickInputs(0);
+            Assert.AreEqual(1, commands.Count);
+            Assert.IsInstanceOf<EmptyCommand>(commands[0]);
         }
 
         // ── #3 ClientInputMessage.Serialize/Deserialize ─────

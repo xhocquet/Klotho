@@ -10,12 +10,19 @@ namespace xpTURN.Klotho.Network
         // Full state resync rate limit (host side)
         private readonly Dictionary<int, long> _lastResyncResponseTime = new Dictionary<int, long>();
 
+        // Set when this guest sends a FullStateRequest (desync-resync), consumed in
+        // HandleFullStateResponse to flip _lateJoinState to Active. Without it, the resync path
+        // leaves _lateJoinState unchanged and HandleCatchupInputMessage silent-drops the host's
+        // catchup batch for the resync tick — verified chain stalls permanently.
+        private bool _expectingResyncFullState;
+
         // ── Full state resync ─────────────────────────────────────
 
         public void SendFullStateRequest(int currentTick)
         {
             _logger?.KInformation($"[KlothoNetworkService][SendFullStateRequest] Full state request: currentTick={currentTick}");
 
+            _expectingResyncFullState = true;
             var msg = new FullStateRequestMessage { RequestTick = currentTick };
             BroadcastMessagePooled(msg, DeliveryMethod.ReliableOrdered);
         }
@@ -83,6 +90,26 @@ namespace xpTURN.Klotho.Network
 
             _lastResyncResponseTime[peerId] = now;
             OnFullStateRequested?.Invoke(peerId, msg.RequestTick);
+
+            // Register an input catchup for the resyncing peer, mirroring the reconnect
+            // path (HandleReconnectRequest). desync-resync clears the guest's input buffer and seeds
+            // _lastVerifiedTick = servedTick-1, so the guest needs servedTick's other-player inputs
+            // replayed or its verified chain stalls permanently at servedTick. The snapshot is served
+            // at the host's CurrentTick (above, via OnFullStateRequested), NOT msg.RequestTick — so
+            // the catchup starts there: LastSentTick = CurrentTick-1. IsReconnect=true skips the
+            // PlayerJoinCommand insertion (the peer is an existing player).
+            if (_engine != null && _peerToPlayer.TryGetValue(peerId, out int resyncPlayerId))
+            {
+                int currentTick = _engine.CurrentTick;
+                _lateJoinCatchups[peerId] = new LateJoinCatchupInfo
+                {
+                    PeerId = peerId,
+                    PlayerId = resyncPlayerId,
+                    LastSentTick = currentTick - 1,
+                    JoinTick = currentTick + _engine.InputDelay + _engine.RecommendedExtraDelay,
+                    IsReconnect = true,
+                };
+            }
         }
 
         private void HandleFullStateResponse(FullStateResponseMessage msg)
@@ -109,13 +136,33 @@ namespace xpTURN.Klotho.Network
                 _logger?.KInformation($"[KlothoNetworkService][Reconnect] Reconnect complete: tick={msg.Tick}");
             }
 
-            // Late join: FullState received → enter CatchingUp
-            if (_lateJoinState == LateJoinState.WaitingForFullState)
+            // Late join: FullState received → enter CatchingUp.
+            // A CorrectiveReset broadcast is applied via the engine OnFullStateReceived
+            // path above but MUST NOT drive the WaitingForFullState -> CatchingUp transition, else catchup
+            // bookkeeping anchors on the corrective-reset tick instead of the late-join response tick.
+            // Blacklist the known-bad kind (not a Unicast whitelist) so a future revived non-Connection
+            // late-join that seeds via InitialState still completes the join. (Latent: the current
+            // KlothoConnection flow seeds via SeedPlayersFromCatchupPayload and never sets WaitingForFullState.)
+            if (_lateJoinState == LateJoinState.WaitingForFullState
+                && msg.KindEnum != FullStateKind.CorrectiveReset)
             {
                 _lateJoinState = LateJoinState.CatchingUp;
                 Phase = SessionPhase.Playing;
                 _engine.StartCatchingUp();
                 _logger?.KInformation($"[KlothoNetworkService][LateJoin] Catchup start: tick={msg.Tick}");
+            }
+
+            // In-session desync-resync. Unlike reconnect/late-join, this path sets no
+            // handshake state, leaving _lateJoinState unchanged (None on a cold-start guest), so
+            // HandleCatchupInputMessage silent-drops the host's resync catchup batch. Flip to Active
+            // here — mirroring the reconnect branch above — so the batch passes the ingest guard.
+            // Recovery itself proceeds via the engine's normal predict/verify loop (no StartCatchingUp).
+            // Guarded so a concurrent late-join (CatchingUp) is not downgraded.
+            if (_expectingResyncFullState)
+            {
+                _expectingResyncFullState = false;
+                if (_lateJoinState != LateJoinState.CatchingUp && _lateJoinState != LateJoinState.Active)
+                    _lateJoinState = LateJoinState.Active;
             }
         }
 

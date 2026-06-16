@@ -72,7 +72,8 @@ namespace xpTURN.Klotho.Core
 
         /// <summary>
         /// Upper bound (ms) for accepting avgRtt as a sane RTT measurement.
-        /// Values exceeding this fall back to <see cref="LateJoinDelaySafety"/> only.
+        /// Values exceeding this are clamped to this bound (not discarded) before the
+        /// extra-delay computation.
         /// </summary>
         int RttSanityMaxMs { get; }
 

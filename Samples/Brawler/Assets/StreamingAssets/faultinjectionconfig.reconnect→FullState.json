@@ -1,0 +1,22 @@
+{
+  "_comment": "G1(IMP60-13) adjacent-path smoke. NOTE: GC pause is SD-server-only (no-op in P2P) and dropSpawn is symmetric (no desync) — neither triggers G1's desync paths; desyncPeak stays 0 by design. This exercises reconnect→FullState restore (ClearPerPeerDesyncState reset sites) + roster churn under RTT stress.",
+
+  "EmulatedRttMs": 200,
+  "EmulatedRttSchedule": [
+    { "atSec": 10.0, "rttMs": 350 },
+    { "atSec": 20.0, "rttMs": 500 },
+    { "atSec": 35.0, "rttMs": 250 }
+  ],
+
+  "EmulatedDisconnectSchedule": [
+    { "atSec": 25.0, "durationSec": 3.0, "playerId": 2 },
+    { "atSec": 50.0, "durationSec": 12.0, "playerId": 1 }
+  ],
+
+  "DropSpawnCommandPlayerIds": [],
+  "SuppressBootstrapAckPlayerIds": [],
+  "ForceSpawnRetryPlayerIds": [],
+  "ServerGcPauseMs": 0,
+  "ServerGcPauseAtTick": -1,
+  "ForceTickOffsetDelta": 0
+}

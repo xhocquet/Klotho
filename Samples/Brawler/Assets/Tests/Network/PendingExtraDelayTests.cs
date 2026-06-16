@@ -132,6 +132,7 @@ namespace xpTURN.Klotho.Tests.Network
             public FrameRef PredictedPreviousFrame => FrameRef.None(FrameKind.PredictedPrevious);
             public FrameRef PreviousUpdatePredictedFrame => FrameRef.None(FrameKind.PreviousUpdatePredicted);
             public RenderClockState RenderClock => default;
+            public float PredictionAccuracy => 1.0f;
             public bool TryGetFrameAtTick(int tick, out xpTURN.Klotho.ECS.Frame frame) { frame = null; return false; }
 
 #pragma warning disable CS0067
@@ -147,6 +148,7 @@ namespace xpTURN.Klotho.Tests.Network
             public event Action<int, SimulationEvent> OnEventConfirmed;
             public event Action<int, SimulationEvent> OnEventCanceled;
             public event Action<int, SimulationEvent> OnSyncedEvent;
+            public event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
             public event Action<int> OnResyncCompleted;
             public event Action OnResyncFailed;
             public event Action<AbortReason> OnMatchAborted;
@@ -171,6 +173,7 @@ namespace xpTURN.Klotho.Tests.Network
             public void InputCommand(ICommand command, int extraDelay = 0) { }
             public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void EscalateExtraDelay(int step, int max) { }
+            public void DeEscalateExtraDelay(int step) { }
             public void Stop() { }
             public void AbortMatch(AbortReason reason) { }
             public void StartSpectator(SpectatorStartInfo info) { }

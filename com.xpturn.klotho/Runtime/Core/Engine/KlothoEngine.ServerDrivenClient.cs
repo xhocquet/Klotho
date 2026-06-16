@@ -2,6 +2,7 @@ using System;
 using xpTURN.Klotho.Logging;
 using System.Collections.Generic;
 
+using xpTURN.Klotho.Input;
 using xpTURN.Klotho.Network;
 
 namespace xpTURN.Klotho.Core
@@ -16,6 +17,30 @@ namespace xpTURN.Klotho.Core
         private readonly Queue<VerifiedStateEntry> _pendingVerifiedQueue
             = new Queue<VerifiedStateEntry>();
 
+        // Highest tick ever enqueued to _pendingVerifiedQueue. Together with
+        // _lastVerifiedTick this makes the enqueue guard reject same-tick duplicates that are
+        // still queued — the proof that every queued container holds instances no other
+        // container shares, which is what allows DrainPendingVerifiedQueue to Return them.
+        // Reset to the restore tick at the two FullState-restore sites (alongside
+        // _lastVerifiedTick); intentionally NOT touched by the rollback-failure drain, which
+        // does not move _lastVerifiedTick (lowering the watermark there would only weaken
+        // monotonicity). VerifiedState is ReliableOrdered, so this never fires normally.
+        private int _lastEnqueuedVerifiedTick;
+
+        // SD FullState request timeout/retry. The P2P resync ladder
+        // (_resyncState / CheckResyncTimeout) is unreachable on the SD path (KlothoEngine.cs:828-836
+        // returns before that block), so without these the request has no re-arm timer — a lost
+        // response or connection reset leaves _fullStateRequestPending stuck true forever, freezing
+        // ProcessVerifiedBatch. Reuses RESYNC_TIMEOUT_MS / ResyncMaxRetries (no SD-only constants).
+        private float _fullStateRequestElapsedMs;
+        private int _fullStateRequestRetryCount;
+
+        // Per-entry scratch for verified-batch instances the buffer rejected (Dropped*) —
+        // returned to CommandPool at the entry consumption point, after the last
+        // entry.Commands use (RecordTick). In practice always empty (SD has no seals and
+        // same-instance re-entry is closed by the Initialize/enqueue guards) — insurance.
+        private readonly List<ICommand> _rejectedVerifiedCmdsCache = new List<ICommand>();
+
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
         // Per-tick perf measurement. Logs only when an iteration exceeds TickIntervalMs.
         private readonly System.Diagnostics.Stopwatch _perfSw = new System.Diagnostics.Stopwatch();
@@ -24,8 +49,87 @@ namespace xpTURN.Klotho.Core
         private struct VerifiedStateEntry
         {
             public int Tick;
-            public List<ICommand> Commands; // Pooled list. Return after ProcessVerifiedBatch completes.
+            public List<ICommand> Commands; // ListPool container; commands are queue-owned until stored into the InputBuffer — both returned at per-entry consumption / queue drain.
             public long StateHash;
+        }
+
+        // Drains the pending verified queue, returning each entry's ICommand instances and
+        // ListPool container. Provably safe:
+        // queued entries are pre-store (commands enter the InputBuffer only during
+        // ProcessVerifiedBatchCore), so the queue is the sole owner and the drained set is
+        // disjoint from the adjacent buffer cleanups (Clear/ClearBefore) at the call sites;
+        // duplicate containers sharing instances are excluded by the enqueue dedup guard +
+        // the Initialize re-entry guard.
+        private void DrainPendingVerifiedQueue()
+        {
+            while (_pendingVerifiedQueue.Count > 0)
+            {
+                var commands = _pendingVerifiedQueue.Dequeue().Commands;
+                for (int i = 0; i < commands.Count; i++)
+                    CommandPool.Return(commands[i]);
+                ListPool<ICommand>.Return(commands);
+            }
+        }
+
+        // Clears the SD FullState-request gate AND its retry timer in one place.
+        // Every _fullStateRequestPending=false site must go through here so the timer state
+        // (elapsed/retry) never lingers across a completed/abandoned request.
+        private void ClearFullStateRequestState()
+        {
+            _fullStateRequestPending = false;
+            _fullStateRequestElapsedMs = 0f;
+            _fullStateRequestRetryCount = 0;
+        }
+
+        // SD-local terminal for an unrecoverable resync — retry budget
+        // exhausted or a post-apply hash mismatch (non-deterministic deserialize that
+        // re-requesting cannot fix). SD is server-authoritative, so the P2P rung-3 host hand-off
+        // (FullStateResync.cs RegisterDesyncForEscalation) does not apply — the client decides
+        // locally. Mirrors the P2P retry-exhaustion branch (FullStateResync.cs:201-210).
+        private void HandleSdResyncFailure(AbortReason reason)
+        {
+            ClearFullStateRequestState();
+            OnResyncFailed?.Invoke();
+            if (_simConfig.AutoAbortOnRecoveryExhausted)
+                AbortMatch(reason);
+            // else: game layer decides (teardown/reconnect). Engine is left as-is; OnResyncFailed
+            // is the signal. For HashMismatch the state is restored-but-untrusted, for exhaustion
+            // the last request simply went unanswered.
+        }
+
+        // SD FullState-request timeout. While a request is outstanding,
+        // ProcessVerifiedBatch early-returns; without this re-arm a lost response / connection reset
+        // would freeze verified processing forever. Mirrors P2P CheckResyncTimeout, which the SD path
+        // never reaches (KlothoEngine.cs:828-836 returns before that block). Constants shared with P2P.
+        // Returns true if the match was aborted (caller must skip the tick loop).
+        private bool CheckSdFullStateRequestTimeout(float deltaTime)
+        {
+            if (!_fullStateRequestPending)
+                return false;
+
+            _fullStateRequestElapsedMs += deltaTime * 1000f;
+            if (_fullStateRequestElapsedMs >= RESYNC_TIMEOUT_MS)
+            {
+                if (_fullStateRequestRetryCount >= _simConfig.ResyncMaxRetries)
+                {
+                    _logger?.KError(
+                        $"[KlothoEngine][SD] FullState request unanswered after {_fullStateRequestRetryCount} retries — terminating");
+                    HandleSdResyncFailure(AbortReason.StateDivergence);
+                }
+                else
+                {
+                    _fullStateRequestRetryCount++;
+                    _fullStateRequestElapsedMs = 0f;
+                    // Server answers with its own authoritative CurrentTick regardless of the requested
+                    // tick (provider invariant), so the verified frontier is the clearest re-request anchor.
+                    _serverDrivenNetwork.SendFullStateRequest(_lastServerVerifiedTick + 1);
+                    _logger?.KWarning(
+                        $"[KlothoEngine][SD] FullState request timed out, retry {_fullStateRequestRetryCount}/{_simConfig.ResyncMaxRetries}");
+                }
+            }
+
+            // Exhaustion may have aborted the match — signal the caller to skip the prediction loop.
+            return State != KlothoState.Running;
         }
 
         // ── Client tick loop ──────────────────────────
@@ -38,14 +142,21 @@ namespace xpTURN.Klotho.Core
         {
             ClearErrorDeltas();
 
-            // Advance the Verified clock adaptively.
-            AdaptiveClock.Tick(deltaTime, _simConfig.TickIntervalMs, _simConfig.InterpolationDelayTicks);
+            // re-arm timer for an outstanding FullState request. Returns true if the
+            // match was aborted (retry budget exhausted) — skip the tick loop in that case.
+            if (CheckSdFullStateRequestTimeout(deltaTime))
+                return;
 
             // Lead tick control: slow down at the soft threshold, wait at the hard limit.
             int leadTicks = CurrentTick - _lastServerVerifiedTick;
             int targetLead = ComputeSDInputLeadTicks();
-            int softThreshold = targetLead + _simConfig.MaxRollbackTicks / 4;
-            int hardLimit = targetLead + _simConfig.MaxRollbackTicks;
+            // Prediction lead is bounded by what the snapshot ring can restore:
+            // the ring retains GetSnapshotCapacity() (= MaxRollbackTicks + 2) ticks, so a hard
+            // limit above MaxRollbackTicks let the restore target fall off the ring and degraded
+            // every late batch to a FullState resync. targetLead < hardLimit is guaranteed by
+            // the GetEffectiveSDInputLeadTicks clamp.
+            int hardLimit = _simConfig.MaxRollbackTicks;
+            int softThreshold = targetLead + (hardLimit - targetLead) / 2;
 
             if (_consumePendingDeltaTime)
             {
@@ -97,7 +208,10 @@ namespace xpTURN.Klotho.Core
 #endif
 
                 // Pause-grace auto-stop — emit StopCommand instead of game OnPollInput.
+                // gate식을 P2P 와 통일 (latch START + state RELEASE, KlothoEngine.cs 참조).
+                // SD 의 Removed 는 inert 이나 게이트 의미를 일치시킨다.
                 if (_matchEndedDispatched
+                    && _simulation.IsMatchEndedState
                     && _sessionConfig.EndGracePolicy == EndGracePolicy.Pause)
                 {
                     var stop = CommandPool.Get<StopCommand>();
@@ -270,13 +384,17 @@ namespace xpTURN.Klotho.Core
                 _eventBuffer.ClearTick(t, returnToPool: false);
             }
 
+            // Pre-batch dispatched-Synced boundary — captured before the verified
+            // promotion loop raises the watermark. SD batches start above the prior watermark
+            // (firstExecutionTick > old _lastVerifiedTick >= watermark), so the diff's divergence
+            // passes are naturally inert on this path; captured for contract clarity.
+            int dispatchedSyncedMark = _syncedDispatchHighWaterMark;
+
             // Restore state from the nearest verified snapshot.
             bool rollbackPerformed = false;
             if (restoreTick >= 0)
             {
-                int actualRestoreTick = -1;
-                if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
-                    actualRestoreTick = ecsSim.GetNearestSnapshotTick(restoreTick);
+                int actualRestoreTick = _simulation.GetNearestRollbackTick(restoreTick);
 
                 // If no snapshot exists or it is too old, request a FullState and discard this batch.
                 if (actualRestoreTick < 0 || actualRestoreTick < firstExecutionTick - _simConfig.MaxRollbackTicks)
@@ -288,8 +406,9 @@ namespace xpTURN.Klotho.Core
                     {
                         _serverDrivenNetwork.SendFullStateRequest(firstExecutionTick);
                         _fullStateRequestPending = true;
+                        _fullStateRequestElapsedMs = 0f; // arm timeout on first request
                     }
-                    _pendingVerifiedQueue.Clear();
+                    DrainPendingVerifiedQueue();
 
                     for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
                         EventPool.Return(_rollbackOldEventsCache[i]);
@@ -386,8 +505,16 @@ namespace xpTURN.Klotho.Core
                     }
                 }
 #endif
+                _rejectedVerifiedCmdsCache.Clear();
                 for (int i = 0; i < entry.Commands.Count; i++)
-                    _inputBuffer.AddCommand(entry.Commands[i]);
+                {
+                    var storeResult = _inputBuffer.AddCommandChecked(entry.Commands[i], overwriteExisting: true);
+                    // Buffer-rejected instances stay queue-owned — collect for a deferred
+                    // CommandPool.Return at the entry consumption point (after RecordTick,
+                    // the last entry.Commands use). AlreadyStored/Replaced are buffer-owned.
+                    if (storeResult == CommandStoreResult.DroppedDuplicate || storeResult == CommandStoreResult.DroppedSealed)
+                        _rejectedVerifiedCmdsCache.Add(entry.Commands[i]);
+                }
 
                 // Verified resimulation
                 SaveSnapshot(executionTick);
@@ -441,9 +568,17 @@ namespace xpTURN.Klotho.Core
                     {
                         _serverDrivenNetwork.SendFullStateRequest(entry.Tick);
                         _fullStateRequestPending = true;
+                        _fullStateRequestElapsedMs = 0f; // arm timeout on first request
                     }
 
-                    // Leave the remaining batch in the queue to process after FullState restore.
+                    // The remaining queued entries are intentionally left in place; they are
+                    // discarded by the FullState-restore handler (the restore clears the snapshot
+                    // ring, so entries at ticks <= the restore tick have no valid rollback target
+                    // and nothing is lost by dropping them there).
+                    for (int i = 0; i < _rejectedVerifiedCmdsCache.Count; i++)
+                        CommandPool.Return(_rejectedVerifiedCmdsCache[i]);
+                    _rejectedVerifiedCmdsCache.Clear();
+                    ListPool<ICommand>.Return(entry.Commands);
 
                     // Save the desync-point state as a snapshot and synchronize CurrentTick.
                     SaveSnapshot(_simulation.CurrentTick);
@@ -473,6 +608,11 @@ namespace xpTURN.Klotho.Core
 
                 // When executionTick transitions to verified, dispatch the buffered Synced events exactly once.
                 DispatchSyncedEventsForTick(executionTick, _eventBuffer.GetEvents(executionTick));
+
+                for (int i = 0; i < _rejectedVerifiedCmdsCache.Count; i++)
+                    CommandPool.Return(_rejectedVerifiedCmdsCache[i]);
+                _rejectedVerifiedCmdsCache.Clear();
+                ListPool<ICommand>.Return(entry.Commands);
             }
 
             // Save a snapshot of the resulting state so the next ProcessVerifiedBatch can roll back to this tick.
@@ -536,7 +676,7 @@ namespace xpTURN.Klotho.Core
             }
 
             // Reconcile Canceled/Predicted/Confirmed via event diff against the previous prediction.
-            DiffRollbackEvents(firstExecutionTick);
+            DiffRollbackEvents(firstExecutionTick, dispatchedSyncedMark);
 
             for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
                 EventPool.Return(_rollbackOldEventsCache[i]);
@@ -570,6 +710,9 @@ namespace xpTURN.Klotho.Core
             }
 
             _tickCommandsCache.Sort(s_commandComparer);
+            // Open the collector for this gap tick so RaiseEvent stamps evt.Tick correctly and any
+            // stale residue from the prior path is cleared (mirrors every other Tick path).
+            _eventCollector.BeginTick(gapTick);
 #if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(true);
 #endif
@@ -577,6 +720,13 @@ namespace xpTURN.Klotho.Core
 #if DEBUG || DEVELOPMENT_BUILD
             _inputBuffer.SetResimulating(false);
 #endif
+            // Gap-tick events are state-advance only — they fall below both the old-event backup and
+            // the DiffRollbackEvents window (both start at firstExecutionTick), so buffering them would
+            // double-dispatch against the original predicted events. Return them to the pool instead;
+            // without this they leak (the next BeginTick clears _collected with no pool return).
+            for (int ei = 0; ei < _eventCollector.Count; ei++)
+                EventPool.Return(_eventCollector.Collected[ei]);
+            _eventCollector.Clear();
         }
 
         /// <summary>
@@ -668,17 +818,18 @@ namespace xpTURN.Klotho.Core
             if (!_isCatchingUp && State != KlothoState.Running)
                 return;
 
-            // Update the drift/delivery EMA only on the normal SD Client path.
-            // Catchup/spectator have irregular batch intervals that would pollute the EMA, so skip them.
-            if (!_isCatchingUp && !_isSpectatorMode && IsSDClient)
-                AdaptiveClock.OnVerifiedBatchArrived(
-                    System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    _simConfig.TickIntervalMs);
-
             if (_isCatchingUp || _isSpectatorMode)
             {
                 for (int i = 0; i < confirmedInputs.Count; i++)
-                    _inputBuffer.AddCommand(confirmedInputs[i]);
+                {
+                    var storeResult = _inputBuffer.AddCommandChecked(confirmedInputs[i], overwriteExisting: true);
+                    // Buffer-rejected instances are deserialize-born and sole-owned by this
+                    // dispatch — return immediately; element-wise return does not
+                    // disturb the remaining iteration over the shared list. AlreadyStored
+                    // (double-dispatch insurance) is buffer property — never returned.
+                    if (storeResult == CommandStoreResult.DroppedDuplicate || storeResult == CommandStoreResult.DroppedSealed)
+                        CommandPool.Return(confirmedInputs[i]);
+                }
 
                 if (_isCatchingUp)
                     ConfirmCatchupTick(tick - 1);
@@ -687,12 +838,24 @@ namespace xpTURN.Klotho.Core
             }
             else
             {
-                // Discard messages with ticks already confirmed via FullState restore.
-                if (tick <= _lastVerifiedTick)
+                // Discard messages with ticks already confirmed via FullState restore, and
+                // same-tick duplicates still sitting in the queue — the dedup is
+                // what proves queued containers never share instances, enabling the drain's
+                // pool return. The only duplicate vector is a double-dispatched handler
+                // (closed by the Initialize re-entry guard; VerifiedState is ReliableOrdered),
+                // so this never fires on the normal path. Discarded instances are left to GC,
+                // NOT returned: under a (hypothetical, guard-bypassing) duplicate dispatch this
+                // is the one spot whose instances are shared with the queued copy — a Return
+                // here would turn that future bug from a benign leak into pool poisoning.
+                if (tick <= Math.Max(_lastVerifiedTick, _lastEnqueuedVerifiedTick))
                     return;
 
-                // confirmedInputs is a shared list, so copy it into a separate list before enqueueing.
-                var commands = new List<ICommand>(confirmedInputs.Count);
+                // confirmedInputs is a shared list, so copy it into a separate list before
+                // enqueueing. Container from ListPool. The ICommand instances are
+                // queue-owned from here until stored into the InputBuffer: rejected
+                // and drained instances are returned to CommandPool by the queue side; accepted
+                // ones transfer to the buffer, which returns them in cleanup.
+                var commands = ListPool<ICommand>.Get();
                 for (int i = 0; i < confirmedInputs.Count; i++)
                     commands.Add(confirmedInputs[i]);
 
@@ -702,6 +865,7 @@ namespace xpTURN.Klotho.Core
                     Commands = commands,
                     StateHash = stateHash
                 });
+                _lastEnqueuedVerifiedTick = tick;
             }
         }
 
@@ -731,13 +895,19 @@ namespace xpTURN.Klotho.Core
             if (_expectingFullState)
             {
                 _expectingFullState = false;
+                // Defensive: this branch consumes the FullState without falling through
+                // to the determinism path's clear (:835-equiv), so clear the request gate+timer here too.
+                // Unreachable with pending=true today (this branch runs on a fresh engine / pre-subscribe
+                // ExpectFullState no-op), but guards a future in-place reconnect path.
+                ClearFullStateRequestState();
                 ApplyFullState(tick, stateData, stateHash, ApplyReason.LateJoin);
                 SaveSnapshot(tick);
                 _inputBuffer.Clear();
                 _lastServerVerifiedTick = tick;
                 _lastVerifiedTick = tick;
+                _lastEnqueuedVerifiedTick = tick;
                 _serverDrivenNetwork.ClearUnackedInputs();
-                _pendingVerifiedQueue.Clear();
+                DrainPendingVerifiedQueue();
                 _posDeltas.Clear();
                 _yawDeltas.Clear();
                 _teleportedEntities.Clear();
@@ -751,22 +921,54 @@ namespace xpTURN.Klotho.Core
             int previousTick = CurrentTick;
 
             // Determinism failure or Reconnect recovery path.
-            ApplyFullState(tick, stateData, stateHash, ApplyReason.ResyncRequest);
+            var applyResult = ApplyFullState(tick, stateData, stateHash, ApplyReason.ResyncRequest);
+
+            // respect the ApplyFullState contract (P2P mirror, FullStateResync.cs:456-468).
+            // Skipped — retreat guard rejected the state, NOTHING applied. Skip all post-processing
+            // (clearing input history / resim on an unrestored state stalls the chain) and
+            // keep _fullStateRequestPending true so the timer re-requests with a tick that clears
+            // the guard (_lastVerifiedTick >= tick is what tripped it).
+            if (applyResult == FullStateApplyResult.Skipped)
+            {
+                _logger?.KWarning(
+                    $"[KlothoEngine][SD] FullState apply skipped (retreat guard) at tick={tick}; awaiting timeout retry");
+                return;
+            }
+
+            // HashMismatch — state WAS restored (RestoreFromFullState ran before the hash check) but its
+            // hash disagrees with the server's (non-deterministic deserialize). Re-requesting yields the
+            // same bytes → same mismatch = unrecoverable, so signal failure. With AutoAbort (default) the
+            // match ends. With AutoAbort off the game layer owns teardown — fall through to normal
+            // post-processing so the restored (untrusted) state stays bookkeeping-consistent (mirrors P2P,
+            // FullStateResync.cs which proceeds on a restored-but-mismatched state).
+            if (applyResult == FullStateApplyResult.HashMismatch)
+            {
+                _logger?.KError(
+                    $"[KlothoEngine][SD] FullState apply hash mismatch at tick={tick} — unrecoverable");
+                if (_simConfig.AutoAbortOnRecoveryExhausted)
+                {
+                    HandleSdResyncFailure(AbortReason.StateDivergence);
+                    return;
+                }
+                // AutoAbort off: warn the game layer, then fall through to normal post-processing.
+                OnResyncFailed?.Invoke();
+            }
 
             // Preserve local inputs that are not yet confirmed.
             _inputBuffer.ClearBefore(tick);
 
-            _fullStateRequestPending = false;
+            ClearFullStateRequestState();
             _posDeltas.Clear();
             _yawDeltas.Clear();
             _teleportedEntities.Clear();
             _lastServerVerifiedTick = tick;
             _lastVerifiedTick = tick;
+            _lastEnqueuedVerifiedTick = tick;
 
             _serverDrivenNetwork.ClearUnackedInputs();
 
             // After FullState restore the ring buffer is cleared, so any VerifiedState remaining in the queue has no valid snapshot.
-            _pendingVerifiedQueue.Clear();
+            DrainPendingVerifiedQueue();
 
             // On Reconnect, if previousTick is smaller than tick there is no range to resimulate.
             if (tick + 1 < previousTick)
@@ -826,6 +1028,10 @@ namespace xpTURN.Klotho.Core
         private void HandleInitialFullStateReceived(int tick, byte[] stateData, long stateHash)
         {
             _expectingInitialFullState = false;
+            // Defensive: same as the LateJoin branch — clear the request gate+timer so
+            // a FullState consumed here never leaves _fullStateRequestPending stuck
+            // (unreachable with pending=true today, but cheap regression guard).
+            ClearFullStateRequestState();
             ApplyFullState(tick, stateData, stateHash, ApplyReason.InitialFullState);
             _lastServerVerifiedTick = tick;
             _replaySystem.SetInitialStateSnapshot(stateData, stateHash);

@@ -567,6 +567,7 @@ namespace xpTURN.Klotho.Network.Tests
             public FrameRef PredictedPreviousFrame => FrameRef.None(FrameKind.PredictedPrevious);
             public FrameRef PreviousUpdatePredictedFrame => FrameRef.None(FrameKind.PreviousUpdatePredicted);
             public RenderClockState RenderClock => default;
+            public float PredictionAccuracy => 1.0f;
             public bool TryGetFrameAtTick(int tick, out xpTURN.Klotho.ECS.Frame frame) { frame = null; return false; }
 
             public event Action<int> OnTickExecuted;
@@ -580,6 +581,7 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<int, SimulationEvent> OnEventConfirmed;
             public event Action<int, SimulationEvent> OnEventCanceled;
             public event Action<int, SimulationEvent> OnSyncedEvent;
+            public event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
             public event Action<int> OnResyncCompleted;
             public event Action OnResyncFailed;
             public event Action<AbortReason> OnMatchAborted;
@@ -601,6 +603,7 @@ namespace xpTURN.Klotho.Network.Tests
             public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void ApplyExtraDelay(int delay, ExtraDelaySource source) { }
             public void EscalateExtraDelay(int step, int max) { }
+            public void DeEscalateExtraDelay(int step) { }
             public void Stop() { }
             public void AbortMatch(AbortReason reason) { }
             public void StartSpectator(SpectatorStartInfo info) { }
@@ -640,6 +643,7 @@ namespace xpTURN.Klotho.Network.Tests
                 OnEventConfirmed?.Invoke(0, default);
                 OnEventCanceled?.Invoke(0, default);
                 OnSyncedEvent?.Invoke(0, default);
+                OnSyncedEventDivergence?.Invoke(0, default, default);
                 OnResyncCompleted?.Invoke(0);
                 OnResyncFailed?.Invoke();
                 OnCommandRejected?.Invoke(0, 0, default);

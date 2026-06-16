@@ -13,5 +13,6 @@
   "DropSpawnCommandPlayerIds": [],
   "SuppressBootstrapAckPlayerIds": [],
   "ForceSpawnRetryPlayerIds": [],
-  "ForceTickOffsetDelta": 0
+  "ForceTickOffsetDelta": 0,
+  "DropFullStateResponsePlayerIds": []
 }

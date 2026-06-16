@@ -128,7 +128,19 @@ namespace xpTURN.Klotho.Network
         void SetReady(bool ready);
 
         /// <summary>
-        /// Send command (transmit local input to other players)
+        /// Sends a command (transmits local input to other players / server).
+        ///
+        /// <para><b>Ownership contract</b>: the caller transfers sole ownership of <paramref name="command"/>
+        /// to the implementation on entry. The caller MUST NOT retain or reuse the instance after this call
+        /// returns — implementations may store it, return it to CommandPool, or hand it to the transport
+        /// for serialization. Violating this contract risks pool poisoning.</para>
+        ///
+        /// <para>Exception: service-internal cache patterns (e.g. <c>_emptyCommandCache</c> reused across
+        /// SendCommand calls) are safe when the implementation serializes the instance to bytes
+        /// synchronously before this method returns AND does not pool-return the instance — the caller's
+        /// retained reference is then no longer aliased to a buffer-stored or pool-returned instance. This
+        /// holds for the current P2P and SD client implementations but is an implementation property,
+        /// not a contract guarantee.</para>
         /// </summary>
         void SendCommand(ICommand command);
 
@@ -141,6 +153,36 @@ namespace xpTURN.Klotho.Network
         /// Send sync hash
         /// </summary>
         void SendSyncHash(int tick, long hash);
+
+        /// <summary>
+        /// Guest → host (Reliable): reports that determinism recovery is failing on this peer
+        /// (post-apply hash mismatch or resync retries exhausted). Drives recovery ladder
+        /// rungs 3-4 on the host. No-op outside P2P guests.
+        /// </summary>
+        void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash);
+
+        /// <summary>
+        /// Host → guests (ReliableOrdered): broadcast that the match is aborted — recovery
+        /// ladder exhausted. reason maps to Core.AbortReason. No-op outside P2P host.
+        /// </summary>
+        void BroadcastMatchAbort(byte reason);
+
+        /// <summary>
+        /// Invalidates the local peer's stored sync hashes for ticks >= fromTick.
+        /// Called by the engine on rollback: re-simulation may change state at those ticks
+        /// (e.g. presumed-drop empty fills replaced by late real commands), so stale local
+        /// hashes must not be compared against. No-op outside P2P.
+        /// </summary>
+        void InvalidateLocalSyncHashes(int fromTick);
+
+        /// <summary>
+        /// Invalidates ALL peers' stored sync hashes for ticks >= fromTick (local and remote).
+        /// Called by the engine on FullState apply (resync / corrective reset): the post-apply
+        /// re-simulation recomputes hashes that would otherwise be compared against pre-reset
+        /// remote entries straddling the reset boundary, producing a false mismatch.
+        /// No-op outside P2P.
+        /// </summary>
+        void InvalidateSyncHashes(int fromTick);
 
         /// <summary>
         /// Per-frame update
@@ -190,9 +232,28 @@ namespace xpTURN.Klotho.Network
         event Action<int, int, long, long> OnDesyncDetected; // playerId, tick, localHash, remoteHash
 
         /// <summary>
-        /// Frame advantage received event (playerId, senderTick)
+        /// Host-side: a guest reported failing recovery (playerId, tick). Drives the host's
+        /// corrective-reset attempt budget and the rung-4 abort.
         /// </summary>
-        event Action<int, int> OnFrameAdvantageReceived;
+        event Action<int, int> OnResyncFailureReported;
+
+        /// <summary>
+        /// Guest-side: the host broadcast a match abort (reason maps to Core.AbortReason).
+        /// </summary>
+        event Action<int> OnMatchAbortReceived;
+
+        /// <summary>
+        /// Raised for every completed sync-hash comparison, match and mismatch alike.
+        /// Drives event-based promotion of the engine's last-matched sync anchor:
+        /// a matched comparison promotes, absence of comparisons (dropped hashes) skips.
+        /// </summary>
+        event Action<int, int, bool> OnSyncHashCompared; // tick, remotePlayerId, matched
+
+        /// <summary>
+        /// Frame advantage received event (playerId, senderTick, senderAdvantage).
+        /// senderAdvantage is the sender's measured frame-advantage at send time.
+        /// </summary>
+        event Action<int, int, int> OnFrameAdvantageReceived;
 
         /// <summary>
         /// Local player ID assigned event (client: fired after SyncComplete is received)
@@ -203,6 +264,14 @@ namespace xpTURN.Klotho.Network
         /// Set the current local tick (included in CommandMessage.SenderTick)
         /// </summary>
         void SetLocalTick(int tick);
+
+        /// <summary>
+        /// Set the current local frame-advantage (round of CalculateLocalAdvantage), included in
+        /// CommandMessage.SenderAdvantage for the F2 advantage exchange. Pushed each tick from the
+        /// engine OUTSIDE the timesync-enabled guard so a throttle-disabled guest still reports a
+        /// truthful advantage to the host. No-op for server-driven services.
+        /// </summary>
+        void SetLocalAdvantage(int advantage);
 
         /// <summary>
         /// Send a full-state request to the host

@@ -77,11 +77,11 @@ namespace Brawler
 
             if (aliveCount == 0)
             {
-                FireGameOver(ref state, -1, ReasonStocks);
+                FireGameOver(ref frame, ref state, -1, ReasonStocks);
                 return true;
             }
 
-            FireGameOver(ref state, winnerPlayerId, ReasonStocks);
+            FireGameOver(ref frame, ref state, winnerPlayerId, ReasonStocks);
             return true;
         }
 
@@ -112,12 +112,21 @@ namespace Brawler
                 }
             }
 
-            FireGameOver(ref state, winnerPlayerId, ReasonTimeout);
+            FireGameOver(ref frame, ref state, winnerPlayerId, ReasonTimeout);
         }
 
-        void FireGameOver(ref GameTimerStateComponent state, int winnerId, FixedString32 reason)
+        void FireGameOver(ref Frame frame, ref GameTimerStateComponent state, int winnerId, FixedString32 reason)
         {
             state.GameOverFired = true;
+
+            // Persist the terminal state into the engine-read MatchEndStateComponent (its
+            // winner/reason were previously held only on the event, lost on event-buffer wipe/clear). The
+            // engine reads this for the fire-forward backstop and the Pause-grace gate. Single write point
+            // keeps it in sync with the GameOverEvent fields.
+            ref var matchEnd = ref frame.GetSingleton<MatchEndStateComponent>();
+            matchEnd.Ended          = true;
+            matchEnd.WinnerPlayerId = winnerId;
+
             var goEvt = EventPool.Get<GameOverEvent>();
             goEvt.WinnerPlayerId = winnerId;
             goEvt.Reason         = reason;

@@ -114,6 +114,19 @@ namespace xpTURN.Klotho.Core
             var connection = new KlothoConnection(transport, logger);
             connection._onCompleted = onCompleted;
             connection._onFailed = onFailed;
+
+            // Defensive: a reconnect trigger fired with no persisted credentials — e.g. a second
+            // cold-start attempt after the first consumed/cleared them, or a test driver re-firing.
+            // Fail gracefully via onFailed instead of NRE'ing on creds.ReconnectTimeoutMs below.
+            if (creds == null)
+            {
+                logger?.KWarning($"[KlothoConnection] Reconnect called with null credentials — failing gracefully");
+                connection._completed = true;
+                connection.Dispose();
+                onFailed?.Invoke(new ReconnectFailedException(ReconnectRejectReason.Unknown));
+                return connection;
+            }
+
             connection._reconnectCreds = creds;
             connection._connectTimeoutMs = creds.ReconnectTimeoutMs;
 

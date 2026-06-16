@@ -101,6 +101,9 @@ namespace xpTURN.Klotho.Network
         // Seed entries written at CompletePeerSync to avoid redundant first push.
         private readonly Dictionary<int, int> _lastPushedExtraDelay = new Dictionary<int, int>();
         private readonly Dictionary<int, long> _lastPushTimeMs = new Dictionary<int, long>();
+        // Per-peer reported effective extra-delay (client reactive absorption). Folded into
+        // the RTT-based baseline (max). Reset on disconnect / handshake — same lifecycle as above.
+        private readonly Dictionary<int, int> _reportedEffective = new Dictionary<int, int>();
         private const int EXTRA_DELAY_PUSH_THRESHOLD_UP = 2;       // ticks — fast UP response (storm prevention)
         private const int EXTRA_DELAY_PUSH_THRESHOLD_DOWN = 4;     // ticks — conservative DOWN (oscillation buffer)
         private const long MIN_PUSH_INTERVAL_MS = 500;             // per-peer push frequency cap
@@ -179,10 +182,10 @@ namespace xpTURN.Klotho.Network
                 // Snapshot input collector counters per phase (monitoring).
                 if (_inputCollector != null && prevPhase != value)
                 {
-                    _inputCollector.GetAndResetStats(out int accepted, out int pastTick, out int peerMismatch, out int tolerance);
-                    if (accepted > 0 || pastTick > 0 || peerMismatch > 0 || tolerance > 0)
+                    _inputCollector.GetAndResetStats(out int accepted, out int pastTick, out int peerMismatch);
+                    if (accepted > 0 || pastTick > 0 || peerMismatch > 0)
                     {
-                        _logger?.KInformation($"[InputCollector] Phase {prevPhase} stats: accepted={accepted}, rejectedPastTick={pastTick}, rejectedPeerMismatch={peerMismatch}, rejectedToleranceExceeded={tolerance}");
+                        _logger?.KInformation($"[InputCollector] Phase {prevPhase} stats: accepted={accepted}, rejectedPastTick={pastTick}, rejectedPeerMismatch={peerMismatch}");
                     }
                 }
 
@@ -198,6 +201,7 @@ namespace xpTURN.Klotho.Network
                     _rttSmoothers.Clear();
                     _lastPushedExtraDelay.Clear();
                     _lastPushTimeMs.Clear();
+                    _reportedEffective.Clear();
                     // Final flush of any in-progress PastTick bursts before clearing.
                     foreach (var kvp in _pastTickBursts)
                         EmitBurstDuration(kvp.Key, kvp.Value);
@@ -257,7 +261,10 @@ namespace xpTURN.Klotho.Network
         public event Action<IPlayerInfo> OnPlayerLeft;
         public event Action<ICommand> OnCommandReceived;
         public event Action<int, int, long, long> OnDesyncDetected;
-        public event Action<int, int> OnFrameAdvantageReceived;
+        public event Action<int, int, bool> OnSyncHashCompared;
+        public event Action<int, int> OnResyncFailureReported;
+        public event Action<int> OnMatchAbortReceived;
+        public event Action<int, int, int> OnFrameAdvantageReceived;
         public event Action<int> OnLocalPlayerIdAssigned;
         public event Action<int, int> OnFullStateRequested;
         public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -315,7 +322,7 @@ namespace xpTURN.Klotho.Network
             _sessionConfig = new SessionConfig();   // Default. Replaced in SubscribeEngine().
 
             _inputCollector = new ServerInputCollector();
-            _inputCollector.Configure(0, _peerToPlayer);
+            _inputCollector.Configure(_peerToPlayer);
             _inputCollector.SetLogger(logger);
 
             // Layer 1: transport-level rejects originate here — peerId is already in scope, no lookup needed.
@@ -377,19 +384,10 @@ namespace xpTURN.Klotho.Network
             // typecheck local so the engine itself stays agnostic of game-layer SimulationEvent types.
             _engine.OnSyncedEvent += HandleEngineSyncedEvent;
 
-            // Set initial Hard Tolerance. RTT is unknown, so use 60ms (assuming RTT/2) + 20ms (jitter margin).
-            // tickBase = (leadTicks + delayTicks + 1) × T — symmetric with the CompletePeerSync formula.
-            // If HardToleranceMs == 0 (auto), it is recalculated on the first handshake completion (CompletePeerSync)
-            // as (leadTicks + delayTicks + 1) × TickIntervalMs + avgRtt/2 + 20ms.
-            int tolerance = _simConfig.HardToleranceMs;
-            if (tolerance == 0)
-            {
-                int leadTicks  = _simConfig.GetEffectiveSDInputLeadTicks();
-                int delayTicks = _simConfig.InputDelayTicks;
-                int tickBase   = _simConfig.TickIntervalMs * (leadTicks + delayTicks + 1);
-                tolerance = tickBase + 60 + 20;   // RTT unknown → conservative estimate (60ms = assumed RTT/2, 20ms = jitter margin)
-            }
-            _inputCollector.Configure(tolerance, _peerToPlayer);
+            // Input acceptance deadline is the tick's execution moment (past-tick rejection in
+            // ServerInputCollector); chronic lateness self-corrects via lead escalation.
+            // HardToleranceMs is deprecated and has no effect.
+            _inputCollector.Configure(_peerToPlayer);
         }
 
         // ── Session management ───────────────────────────────────────
@@ -480,7 +478,30 @@ namespace xpTURN.Klotho.Network
             // The server is the source of truth for hashes — no-op
         }
 
+        public void InvalidateLocalSyncHashes(int fromTick)
+        {
+            // no-op: P2P-only sync-hash exchange
+        }
+
+        public void InvalidateSyncHashes(int fromTick)
+        {
+            // no-op: P2P-only sync-hash exchange
+        }
+
+        public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash)
+        {
+            // no-op: P2P-only recovery ladder reporting
+        }
+
+        public void BroadcastMatchAbort(byte reason)
+        {
+            // no-op: P2P-only recovery ladder reporting
+        }
+
         public void SetLocalTick(int tick) { _localTick = tick; }
+
+        // Server-driven mode does not piggyback frame-advantage on CommandMessage — no-op.
+        public void SetLocalAdvantage(int advantage) { }
 
         public void ClearOldData(int tick)
         {
@@ -520,6 +541,16 @@ namespace xpTURN.Klotho.Network
 
         public void SendFullStateResponse(int peerId, int tick, byte[] stateData, long stateHash)
         {
+#if KLOTHO_FAULT_INJECTION
+            // Scenario C: drop the desync-resync unicast for the targeted player so its
+            // FullState request stays unanswered, exercising the SD timeout/retry/terminate ladder.
+            if (_peerToPlayer.TryGetValue(peerId, out int fiPlayerId)
+                && xpTURN.Klotho.Diagnostics.FaultInjection.DropFullStateResponsePlayerIds.Contains(fiPlayerId))
+            {
+                _logger?.KWarning($"[FaultInjection][SD] Dropping FullStateResponse: peerId={peerId}, playerId={fiPlayerId}, tick={tick}");
+                return;
+            }
+#endif
             var msg = new FullStateResponseMessage
             {
                 Tick = tick,
@@ -872,7 +903,22 @@ namespace xpTURN.Klotho.Network
                 case PlayerBootstrapReadyMessage bootReady:
                     HandlePlayerBootstrapReady(peerId, bootReady);
                     break;
+
+                case ReactiveExtraDelayReportMessage reactiveReport:
+                    HandleReactiveExtraDelayReport(peerId, reactiveReport);
+                    break;
             }
+        }
+
+        // Client reported its effective extra-delay. Store and re-evaluate the push so the
+        // server baseline absorbs the client's reactive correction (max with RTT-based) on the next tick.
+        private void HandleReactiveExtraDelayReport(int peerId, ReactiveExtraDelayReportMessage msg)
+        {
+            if (Phase != SessionPhase.Playing) return;
+            _reportedEffective[peerId] = msg.EffectiveExtraDelay < 0 ? 0 : msg.EffectiveExtraDelay;
+            _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"sd-server\",\"dir\":\"absorb\",\"peerId\":{peerId},\"reportedEffective\":{_reportedEffective[peerId]}}}");
+            if (_peerToPlayer.TryGetValue(peerId, out int playerId))
+                MaybePushExtraDelayUpdate(playerId, peerId);
         }
 
         private void HandlePlayerBootstrapReady(int peerId, PlayerBootstrapReadyMessage msg)
@@ -1170,6 +1216,15 @@ namespace xpTURN.Klotho.Network
             }
         }
 
+        // A pong older than two ping intervals is a stale measurement, not a latency reading:
+        // newer samples are already in flight, so the value reflects a pump stall / backlog
+        // flush (e.g. a client that stopped polling), not current network conditions —
+        // feeding such a burst shifts the smoother's sliding median wholesale and misfires
+        // DynamicDelayPush. Distinct from RttSanityMaxMs (240ms default), which is
+        // the delay calculator's value clamp and overlaps legitimate long-haul RTT — discarding
+        // at that bound would starve high-RTT players of pushes.
+        internal static bool IsStaleRttSample(long rttMs) => rttMs > PING_INTERVAL_MS * 2;
+
         private void HandlePongMessage(int peerId, PongMessage msg)
         {
             long rtt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - msg.Timestamp;
@@ -1181,7 +1236,9 @@ namespace xpTURN.Klotho.Network
 
                 // Feed short-window smoother (always-on; consumer = push-decision path).
                 // Independent of RttMetricsEnabled (which gates measurement-only emit).
-                if (Phase == SessionPhase.Playing)
+                // Stale samples skip ONLY the smoother/push path — player.Ping above and the
+                // metrics block below keep the raw value (SpikeCount/p99 exist to observe stalls).
+                if (Phase == SessionPhase.Playing && !IsStaleRttSample(rtt))
                 {
                     if (!_rttSmoothers.TryGetValue(playerId, out var smoother))
                     {
@@ -1190,6 +1247,11 @@ namespace xpTURN.Klotho.Network
                     }
                     smoother.OnSample((int)rtt);
                     MaybePushExtraDelayUpdate(playerId, peerId);
+                }
+                else if (Phase == SessionPhase.Playing)
+                {
+                    _logger?.KDebug(
+                        $"[ServerNetworkService][Rtt] Stale pong discarded from push path: playerId={playerId}, rtt={rtt}ms (> 2x ping interval)");
                 }
 
                 if (Phase == SessionPhase.Playing && RttMetricsEnabled)
@@ -1250,12 +1312,18 @@ namespace xpTURN.Klotho.Network
             // [ServerNetworkService][{tag}] + [Metrics][{tag}]) is reserved for 1-shot entry events
             // (Sync / LateJoin / Reconnect). Mid-match emits are limited to actual push events
             // via [Metrics][DynamicDelay] with tag="DynamicDelayPush".
-            var (newExtraDelay, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
+            var (rttBased, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
                 smoothedRtt,
                 _simConfig.TickIntervalMs,
                 _sessionConfig.LateJoinDelaySafety,
                 _sessionConfig.RttSanityMaxMs,
                 _simConfig.MaxRollbackTicks);
+
+            // Fold the client's reported effective extra-delay into the
+            // authoritative baseline so a client's locally-observed reactive correction migrates to the
+            // server. Clamped to the rollback budget (MaxRollbackTicks/2) — same bound as the calculator.
+            int reported = _reportedEffective.TryGetValue(peerId, out int r) ? r : 0;
+            int newExtraDelay = System.Math.Min(System.Math.Max(rttBased, reported), _simConfig.MaxRollbackTicks / 2);
 
             // First entry path is seeded at CompletePeerSync / CompleteLateJoinSync /
             // HandleReconnectRequest, so this lookup normally hits. If absent (race or path
@@ -1345,6 +1413,8 @@ namespace xpTURN.Klotho.Network
                             // peerId changes on reconnect → push state for the old peerId becomes stale.
                             _lastPushedExtraDelay.Remove(peerId);
                             _lastPushTimeMs.Remove(peerId);
+                            _reportedEffective.Remove(peerId); // drop stale reactive report
+
                             // Flush any in-progress PastTick burst for the disconnecting peer.
                             if (_pastTickBursts.TryGetValue(peerId, out var pendingBurst))
                             {
@@ -1520,6 +1590,7 @@ namespace xpTURN.Klotho.Network
             // Seed push baseline with the handshake-time value sent in SyncCompleteMessage so the
             // first MaybePushExtraDelayUpdate compares against the value the client already applied.
             _lastPushedExtraDelay[peerId] = seedExtraDelay;
+            _reportedEffective.Remove(peerId); // seed resets client reactive → drop any stale report
             using (var serialized = _messageSerializer.SerializePooled(syncComplete))
             {
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
@@ -1527,23 +1598,6 @@ namespace xpTURN.Klotho.Network
 
             // Propagate SimulationConfig to SD client (host authority model)
             SendSimulationConfig(peerId);
-
-            // If HardToleranceMs == 0 (auto), recalculate tolerance from the first RTT sample.
-            // deadline = now_at_tick(cmd.Tick) + H. Since cmd.Tick = serverTick+L+D,
-            // the window opens L+D ticks later, reducing the minimum required H.
-            // tickBase = (leadTicks + delayTicks + 1) × T makes L·D explicit in the formula.
-            // Skip recalculation if avgRtt is abnormal (≤ 0 or > 240ms).
-            if (_simConfig != null && _simConfig.HardToleranceMs == 0
-                && avgRtt > 0 && avgRtt <= 240)
-            {
-                int leadTicks = _simConfig.GetEffectiveSDInputLeadTicks();
-                int delayTicks = _simConfig.InputDelayTicks;
-                int tickBase = _simConfig.TickIntervalMs * (leadTicks + delayTicks + 1);
-                int rttBased = tickBase + avgRtt / 2 + 20;
-                _logger?.KInformation($"[ServerNetworkService][CompletePeerSync] HardTolerance recalculated: peerId={peerId}, avgRtt={avgRtt}ms, tolerance={rttBased}ms (lead={leadTicks} delay={delayTicks} tickBase={tickBase} + avgRtt({avgRtt})/2 + 20)");
-
-                _inputCollector.Configure(rttBased, _peerToPlayer);
-            }
 
             // Handshake complete → Synchronized (if no other pending handshakes)
             _peerStates[peerId].State = ServerPeerState.Playing; // Initial connection goes directly to Playing
@@ -1669,7 +1723,10 @@ namespace xpTURN.Klotho.Network
         {
             OnCommandReceived?.Invoke(null);
             OnDesyncDetected?.Invoke(0, 0, 0, 0);
-            OnFrameAdvantageReceived?.Invoke(0, 0);
+            OnSyncHashCompared?.Invoke(0, 0, false);
+            OnResyncFailureReported?.Invoke(0, 0);
+            OnMatchAbortReceived?.Invoke(0);
+            OnFrameAdvantageReceived?.Invoke(0, 0, 0);
             OnLocalPlayerIdAssigned?.Invoke(0);
             OnFullStateReceived?.Invoke(0, null, 0, FullStateKind.Unicast);
             OnReconnecting?.Invoke();

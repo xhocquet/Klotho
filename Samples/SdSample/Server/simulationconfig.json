@@ -3,7 +3,7 @@
   "TickIntervalMs": 16,
   "InputDelayTicks": 2,
   "MaxRollbackTicks": 50,
-  "SyncCheckInterval": 30,
+  "SyncCheckInterval": 20,
   "UsePrediction": false,
   "MaxEntities": 256,
   "SDInputLeadTicks": 2,

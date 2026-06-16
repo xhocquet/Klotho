@@ -175,7 +175,23 @@ namespace xpTURN.Klotho.Core
 
         public void ReceiveConfirmedCommand(ICommand command)
         {
-            _inputBuffer.AddCommand(command);
+            // Spectator: speculative-ahead does not use _pendingCommands (ResetToTick only Clears
+            // it), so the prediction reconcile is neither needed nor correct — keep the bare add.
+            if (_isSpectatorMode)
+            {
+                _inputBuffer.AddCommand(command);
+                return;
+            }
+
+            // P2P reconnect/late-join catchup. The confirmed input is seated, then
+            // reconciled against the peer's speculative prediction exactly like a network arrival
+            // (HandleCommandReceived). Without this, a late real that the peer mispredicted
+            // (empty/repeat-last) was promoted frozen by TryAdvanceVerifiedChain -> per-peer desync.
+            // resyncOnDeepRollback: a rollback target below the snapshot-ring window falls back to
+            // FullStateResync; the command is seated first so resync's buffer Clear disposes it
+            // (no separate pool Return — it is buffer-owned once stored).
+            var storeResult = _inputBuffer.AddCommandChecked(command);
+            ReconcileConfirmedAgainstPrediction(command, storeResult, resyncOnDeepRollback: true);
         }
 
         public void ResetToTick(int tick)
@@ -195,8 +211,6 @@ namespace xpTURN.Klotho.Core
             _pendingCommands.Clear();
             if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
                 ecsSim.ClearSnapshots();
-            else if (_snapshotManager is State.RingSnapshotManager ringMgr)
-                ringMgr.ClearAll();
             SaveSnapshot(tick);
 
             _eventCollector.BeginTick(tick);
@@ -303,6 +317,9 @@ namespace xpTURN.Klotho.Core
                 CurrentTick = rollbackTo;
                 _lastVerifiedTick = rollbackTo - 1;
 
+                // Pre-re-advance dispatched-Synced boundary.
+                int dispatchedSyncedMark = _syncedDispatchHighWaterMark;
+
                 while (CurrentTick <= _spectatorLastConfirmedTick)
                 {
                     SaveSnapshot(CurrentTick);
@@ -320,7 +337,7 @@ namespace xpTURN.Klotho.Core
                     CurrentTick++;
                 }
 
-                DiffRollbackEvents(rollbackTo);
+                DiffRollbackEvents(rollbackTo, dispatchedSyncedMark);
 
                 _logger?.KDebug($"[Spectator] Rollback (ECS) complete: frame.Tick after={_simulation.CurrentTick}, lastVerifiedTick={_lastVerifiedTick}");
 
@@ -332,18 +349,19 @@ namespace xpTURN.Klotho.Core
             }
             else
             {
-                var snapshot = _snapshotManager.GetSnapshot(rollbackTo);
-                if (snapshot == null)
+                // Non-ECS: resolve through the simulation's own snapshot history.
+                int resolved = _simulation.GetNearestRollbackTick(rollbackTo);
+                if (resolved < 0)
                 {
                     _logger?.KWarning($"[Spectator] Rollback skipped (Snapshot): no snapshot at rollbackTo={rollbackTo}, frame.Tick={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}");
                     _spectatorPredictionStartTick = -1;
                     return;
                 }
 
-                _logger?.KDebug($"[Spectator] Rollback (Snapshot): rollbackTo={snapshot.Tick}, frame.Tick before={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}, resimRange=[{snapshot.Tick},{_spectatorLastConfirmedTick}], predictedDepth={CurrentTick - snapshot.Tick}");
+                _logger?.KDebug($"[Spectator] Rollback (Snapshot): rollbackTo={resolved}, frame.Tick before={_simulation.CurrentTick}, confirmedTick={_spectatorLastConfirmedTick}, resimRange=[{resolved},{_spectatorLastConfirmedTick}], predictedDepth={CurrentTick - resolved}");
 
                 _rollbackOldEventsCache.Clear();
-                for (int t = snapshot.Tick; t < CurrentTick; t++)
+                for (int t = resolved; t < CurrentTick; t++)
                 {
                     var oldEvents = _eventBuffer.GetEvents(t);
                     for (int ei = 0; ei < oldEvents.Count; ei++)
@@ -351,9 +369,12 @@ namespace xpTURN.Klotho.Core
                     _eventBuffer.ClearTick(t, returnToPool: false);
                 }
 
-                _simulation.Rollback(snapshot.Tick);
-                CurrentTick = snapshot.Tick;
-                _lastVerifiedTick = snapshot.Tick - 1;
+                _simulation.Rollback(resolved);
+                CurrentTick = resolved;
+                _lastVerifiedTick = resolved - 1;
+
+                // Pre-re-advance dispatched-Synced boundary.
+                int dispatchedSyncedMark = _syncedDispatchHighWaterMark;
 
                 while (CurrentTick <= _spectatorLastConfirmedTick)
                 {
@@ -372,7 +393,7 @@ namespace xpTURN.Klotho.Core
                     CurrentTick++;
                 }
 
-                DiffRollbackEvents(snapshot.Tick);
+                DiffRollbackEvents(resolved, dispatchedSyncedMark);
 
                 _logger?.KDebug($"[Spectator] Rollback (Snapshot) complete: frame.Tick after={_simulation.CurrentTick}, lastVerifiedTick={_lastVerifiedTick}");
 
@@ -386,7 +407,7 @@ namespace xpTURN.Klotho.Core
 
         public int GetNearestSnapshotTickWithinBuffer()
         {
-            int minTick = _inputBuffer.OldestTick + _simConfig.SyncCheckInterval;
+            int minTick = _inputBuffer.OldestTick + _simConfig.GetEffectiveSyncCheckInterval();
             int bestTick = -1;
 
             if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
@@ -400,17 +421,8 @@ namespace xpTURN.Klotho.Core
                         bestTick = t;
                 }
             }
-            else
-            {
-                _savedTicksCache.Clear();
-                _snapshotManager.GetSavedTicks(_savedTicksCache);
-                for (int i = 0; i < _savedTicksCache.Count; i++)
-                {
-                    int t = _savedTicksCache[i];
-                    if (t >= minTick && (bestTick == -1 || t < bestTick))
-                        bestTick = t;
-                }
-            }
+            // else: non-ECS simulations have no engine-side snapshot history —
+            // no catchup start is available (bestTick stays -1).
             return bestTick;
         }
 

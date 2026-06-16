@@ -11,7 +11,8 @@ namespace xpTURN.Klotho.Network
     [KlothoSerializable(MessageTypeId = NetworkMessageType.RecommendedExtraDelayUpdate)]
     public partial class RecommendedExtraDelayUpdateMessage : NetworkMessageBase
     {
-        // Recommended extra InputDelay in ticks. Client applies via ApplyExtraDelay (absolute value).
+        // Recommended extra InputDelay in ticks. Client applies via ApplyExtraDelay(DynamicPush) which
+        // SETs the baseline component only — the client's reactive correction is preserved.
         // ServerCurrentTick intentionally omitted — client's monotonic cmd.Tick clamp uses
         // _lastSentCmdTick alone, so the absolute server tick is not required for correctness.
         [KlothoOrder] public int RecommendedExtraDelay;

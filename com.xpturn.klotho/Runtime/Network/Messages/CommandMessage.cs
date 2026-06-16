@@ -18,6 +18,18 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder]
         public int SenderTick;
 
+        // Sender's measured frame-advantage at send time
+        // (round(CalculateLocalAdvantage)). The receiver feeds -SenderAdvantage into the
+        // remote channel (true GGPO exchange) instead of synthesizing a mirror of its own.
+        [KlothoOrder]
+        public int SenderAdvantage;
+
+        // bit0 = IsProxyTiming: this command was sent on behalf of another player (host proxy
+        // fill / catchup), so its SenderTick/SenderAdvantage carry the SENDING machine's timing,
+        // not the slot owner's — receivers must skip the timing vote.
+        [KlothoOrder]
+        public byte TimingFlags;
+
         [KlothoOrder]
         public byte[] CommandData;
 
@@ -43,7 +55,9 @@ namespace xpTURN.Klotho.Network
 
         public override int GetSerializedSize()
         {
-            return 1 + 4 + 4 + 4 + 4 + CommandDataSpan.Length; // header(1) + Tick(4) + PlayerId(4) + SenderTick(4) + length prefix(4) + data
+            // header(1) + Tick(4) + PlayerId(4) + SenderTick(4) + SenderAdvantage(4)
+            // + TimingFlags(1) + length prefix(4) + data
+            return 1 + 4 + 4 + 4 + 4 + 1 + 4 + CommandDataSpan.Length;
         }
 
         protected override void SerializeData(ref SpanWriter writer)
@@ -51,6 +65,8 @@ namespace xpTURN.Klotho.Network
             writer.WriteInt32(Tick);
             writer.WriteInt32(PlayerId);
             writer.WriteInt32(SenderTick);
+            writer.WriteInt32(SenderAdvantage);
+            writer.WriteByte(TimingFlags);
             var span = CommandDataSpan;
             writer.WriteInt32(span.Length);
             if (span.Length > 0)
@@ -62,6 +78,8 @@ namespace xpTURN.Klotho.Network
             Tick = reader.ReadInt32();
             PlayerId = reader.ReadInt32();
             SenderTick = reader.ReadInt32();
+            SenderAdvantage = reader.ReadInt32();
+            TimingFlags = reader.ReadByte();
             int len = reader.ReadInt32();
             _sourceBuffer = reader.SourceBuffer;
             if (_sourceBuffer != null)

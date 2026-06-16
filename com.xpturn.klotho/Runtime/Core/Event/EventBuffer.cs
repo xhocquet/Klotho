@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using xpTURN.Klotho.Logging;
 
 namespace xpTURN.Klotho.Core
 {
@@ -23,13 +24,38 @@ namespace xpTURN.Klotho.Core
         private readonly int _capacity;
         private readonly List<SimulationEvent>[] _ring;
 
-        public EventBuffer(int capacity)
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+        // Dev guard: last tick written to each slot. Clearing a slot whose occupant
+        // is NEWER than the nominal tick destroys recent live data — the ring-wrap misuse pattern
+        // (a nominal-tick range clear on a reused slot). Occupant OLDER than nominal is normal
+        // wrap reuse and must not trigger.
+        private readonly int[] _slotTick;
+        private readonly IKLogger _logger;
+#endif
+
+        public EventBuffer(int capacity, IKLogger logger = null)
         {
             _capacity = capacity;
             _ring = new List<SimulationEvent>[capacity];
             for (int i = 0; i < capacity; i++)
                 _ring[i] = new List<SimulationEvent>();
+
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            _slotTick = new int[capacity];
+            for (int i = 0; i < capacity; i++)
+                _slotTick[i] = -1;
+            _logger = logger;
+#endif
         }
+
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+        /// <summary>
+        /// Dev-only: the tick last written to the slot that <paramref name="tick"/> maps to,
+        /// or -1 when the slot is empty. Lets the engine detect slot reuse that destroys a
+        /// previous occupant's still-pending events.
+        /// </summary>
+        public int GetSlotOccupantTick(int tick) => _slotTick[tick % _capacity];
+#endif
 
         public List<SimulationEvent> GetEvents(int tick)
         {
@@ -45,10 +71,18 @@ namespace xpTURN.Klotho.Core
         public void AddEvent(int tick, SimulationEvent evt)
         {
             _ring[tick % _capacity].Add(evt);
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            _slotTick[tick % _capacity] = tick;
+#endif
         }
 
         public void ClearTick(int tick, bool returnToPool = true)
         {
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            if (_slotTick[tick % _capacity] > tick)
+                _logger?.KError($"[EventBuffer] ClearTick({tick}) destroys a NEWER occupant (tick {_slotTick[tick % _capacity]}) — nominal-tick clear on a ring-wrapped slot (IMP59 V0-B bug pattern).");
+            _slotTick[tick % _capacity] = -1;
+#endif
             var list = _ring[tick % _capacity];
             if (returnToPool)
             {
@@ -66,8 +100,19 @@ namespace xpTURN.Klotho.Core
 
         public void ClearAll()
         {
+            // Full reset (full-state apply / teardown) — clears slots directly instead of
+            // going through ClearTick: slot indices are not nominal ticks, and the dev-only
+            // newer-occupant guard must not fire on a legitimate whole-buffer reset.
             for (int i = 0; i < _capacity; i++)
-                ClearTick(i);
+            {
+                var list = _ring[i];
+                for (int e = 0; e < list.Count; e++)
+                    EventPool.Return(list[e]);
+                list.Clear();
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+                _slotTick[i] = -1;
+#endif
+            }
         }
     }
 }

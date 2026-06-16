@@ -80,14 +80,25 @@ namespace xpTURN.Klotho.Network
 
         /// <summary>
         /// Path A: pre-insertion — invoked once per frame from Update().
-        /// Sends an empty command at _localTick locally and via broadcast through SendCommand().
+        /// Proactively fills each disconnected player's still-empty slots
+        /// up to the input frontier (currentTick + InputDelay + RecommendedExtraDelay) — the same
+        /// lead the local player's own input lands at — and broadcasts them via SendCommand().
+        /// Previously this filled only the current tick, so the proxy fill trailed the verified
+        /// frontier by `lead`: the guest verified chain sat one tick behind and ChainBreak spammed
+        /// ("host proactive-fill is ~1 tick behind"). Filling ahead lets CanAdvanceTick pass without
+        /// the reactive OnDisconnectedInputNeeded callback.
         /// </summary>
         private void InjectDisconnectedPlayerInputs()
         {
             if (!IsHost || _disconnectedPlayerCount == 0)
                 return;
 
-            int targetTick = _localTick;
+            // Same frontier the engine targets for the local player's own input
+            // (CurrentTick + InputDelayTicks, KlothoEngine.cs) and the reconnect catchup JoinTick.
+            int currentTick = _engine?.CurrentTick ?? _localTick;
+            int frontier = currentTick
+                + (_engine?.InputDelay ?? 0)
+                + (_engine?.RecommendedExtraDelay ?? 0);
 
             for (int i = 0; i < _disconnectedPlayerInfoPool.Length; i++)
             {
@@ -99,8 +110,30 @@ namespace xpTURN.Klotho.Network
                     && info.PredictedTickCount >= DISCONNECT_INPUT_PREDICTION_LIMIT)
                     continue;
 
-                _commandFactory.PopulateEmpty(_emptyCommandCache, info.PlayerId, targetTick);
-                SendCommand(_emptyCommandCache);
+                // Fill every still-empty slot in [currentTick, frontier]. dedup via the public
+                // HasCommand wrapper — proactive fills are NOT sealed (unlike Path B's
+                // ForceInsertEmptyCommandsRange), so IsSealed would never short-circuit and we
+                // would re-broadcast the whole window every frame (O(lead)). In steady state only
+                // the newly-exposed frontier tick is unfilled -> one broadcast/frame/player.
+                // Leaving them unsealed keeps the slot overwritable — a NECESSARY precondition for
+                // the reconnect real-input override, but not sufficient on its own: the host receive
+                // path (HandleCommandReceived) must request the overwrite, which it does for
+                // real-over-unsealed-empty. A sealed slot would hard-block the real even
+                // with overwrite=true (AddCommandChecked seal guard precedes the overwrite branch).
+                for (int t = currentTick; t <= frontier; t++)
+                {
+                    if (_engine != null && _engine.HasCommand(t, info.PlayerId))
+                        continue;
+                    _commandFactory.PopulateEmpty(_emptyCommandCache, info.PlayerId, t);
+                    // _emptyCommandCache reuse: ILockstepNetworkService.SendCommand exception.
+                    // proxy fill — carries host timing, must not vote for info.PlayerId.
+                    _proxyTimingPending = true;
+                    SendCommand(_emptyCommandCache);
+                }
+
+                // PredictedTickCount drives the disconnect timeout and counts FRAMES of proxy fill,
+                // not ticks filled — increment once per frame (not inside the tick loop) so the
+                // wider range fill does not falsely accelerate the timeout.
                 info.PredictedTickCount++;
             }
         }
@@ -120,6 +153,9 @@ namespace xpTURN.Klotho.Network
                 if (_localTick >= injectStartTick)
                 {
                     _commandFactory.PopulateEmpty(_emptyCommandCache, info.PlayerId, _localTick);
+                    // _emptyCommandCache reuse: ILockstepNetworkService.SendCommand exception.
+                    // catchup proxy fill — carries host timing, must not vote for info.PlayerId.
+                    _proxyTimingPending = true;
                     SendCommand(_emptyCommandCache);
                 }
             }
@@ -168,6 +204,9 @@ namespace xpTURN.Klotho.Network
             for (int t = fromTick; t <= toTick; t++)
             {
                 _commandFactory.PopulateEmpty(_emptyCommandCache, playerId, t);
+                // _emptyCommandCache reuse: ILockstepNetworkService.SendCommand exception.
+                // reactive range proxy fill — carries host timing, must not vote for playerId.
+                _proxyTimingPending = true;
                 SendCommand(_emptyCommandCache);
             }
         }
@@ -179,7 +218,7 @@ namespace xpTURN.Klotho.Network
         // Telemetry counters — emitted at match end via EmitPresumedDropMetrics().
         private int _presumedDropFalsePositiveCount;
         private int _presumedDropTrueCount;
-        // Counts cmds dropped from relay due to local seal (Phase 2-1 ②-B). High count
+        // Counts cmds dropped from relay due to local seal. High count
         // signals frequent late retransmits that would have caused cross-peer divergence
         // without the seal guard.
         private int _relaySealDropCount;
@@ -188,16 +227,43 @@ namespace xpTURN.Klotho.Network
         internal int PresumedDropTrueCount => _presumedDropTrueCount;
         internal int RelaySealDropCount => _relaySealDropCount;
 
-        // Each frame: if a remote peer's input is missing at _lastVerifiedTick + 1 for >=
-        // QuorumMissDropTicks, mark them as presumed-dropped so reactive empty-fill activates
+        // Each frame: if a remote peer's input is missing at _lastVerifiedTick + 1 for >= the
+        // adaptive threshold, mark them as presumed-dropped so reactive empty-fill activates
         // before the transport-level DisconnectTimeout fires (~5s).
         private void CheckQuorumMissPresumedDrop()
         {
             if (!IsHost || _engine == null || _simConfig == null)
                 return;
 
-            int threshold = _simConfig.QuorumMissDropTicks;
-            if (threshold <= 0)
+            // QuorumMissDropTicks acts as the floor (and the disable switch when <= 0).
+            int floor = _simConfig.QuorumMissDropTicks;
+            if (floor <= 0)
+                return;
+
+            // Adaptive threshold. The fixed 20-tick floor mis-fired at high RTT —
+            // normal steady-state lag (InputDelay + RecommendedExtraDelay + jitter) routinely
+            // reached it, presuming-dropping merely-delayed players and empty-sealing their real
+            // input into a permanent desync. Raise the threshold above the engine's own delay
+            // compensation, clamped to MaxRollbackTicks: beyond that ceiling the host can no longer
+            // speculatively advance (the chain freezes), so a larger threshold would never fire
+            // before the freeze anyway. QuorumMissMarginTicks lifts the low-extraDelay threshold
+            // above the normal worst-case transient lag: a FullStateResync rollback (e.g. desync@580
+            // → rollback to anchor 560) stalls the chain to lag == rollback distance (~20) while
+            // extraDelay is still at its RTT baseline (~7); margin 8 left the threshold AT that lag
+            // (floor 20 == lag 20 → fp #1, reproduced across runs), so it is raised to 12 (threshold
+            // 23 at extraDelay 7, ~3-tick safety over the measured lag 20).
+            const int QuorumMissMarginTicks = 12;
+            int adaptive = _engine.InputDelay + _engine.RecommendedExtraDelay + QuorumMissMarginTicks;
+            int threshold = System.Math.Max(floor, System.Math.Min(adaptive, _simConfig.MaxRollbackTicks));
+
+            // Window collapse → disable. The useful firing window is
+            // [threshold, MaxRollbackTicks): the host freezes at lag == MaxRollbackTicks (speculative-
+            // advance ceiling), so a threshold at or above that ceiling can never fire before the
+            // freeze — clamping-and-firing there only mis-fires on resync/rollback churn that drives
+            // lag to the ceiling (observed fp #2). When the window has collapsed, do not fire; a real
+            // drop falls back to the transport DisconnectTimeout. Gate on the final threshold (not
+            // adaptive alone) so a floor misconfigured above the ceiling is also caught.
+            if (threshold >= _simConfig.MaxRollbackTicks)
                 return;
 
             int verifiedTick = _engine.LastVerifiedTick;
@@ -256,11 +322,13 @@ namespace xpTURN.Klotho.Network
             }
         }
 
-        // Called from HandleCommandMessage when a real command arrives. If the player was
-        // previously marked as presumed-dropped by the watchdog AND the cmd is AT the current
-        // stall tick (= _lastVerifiedTick + 1), treat as recovery and clear presumed-drop state.
-        // Late inputs for ticks past the stall don't recover the gap — keep presumed-drop active
-        // so empty fill / broadcast continues.
+        // Called from HandleCommandMessage when a real command arrives from the network
+        // (local echoes excluded by the call-site guard). If the player was
+        // previously marked as presumed-dropped by the watchdog AND the cmd is at or beyond
+        // the current dynamic stall tick (= _lastVerifiedTick + 1), treat as recovery: fill
+        // the [stallTick, cmd.Tick) window so the chain cannot stall once the fill paths
+        // deactivate, then clear presumed-drop state. Inputs for ticks before the stall
+        // prove nothing fresh and never recover.
         // Host-only: the disconnected player pool is managed by host only.
         private void OnRealCommandReceivedDuringPresumedDrop(ICommand command)
         {
@@ -271,11 +339,35 @@ namespace xpTURN.Klotho.Network
             if (info == null || !info.IsPresumedDrop)
                 return;
 
-            // Only the exact stall tick is a recovery signal. Use dynamic stall tick from engine
-            // since _lastVerifiedTick may advance between activation and this callback.
+            // Recovery = any unsealed network real input at or beyond the
+            // dynamic stall tick. The old exact-match missed every resync-snap recovery:
+            // with InputDelayTicks the recovered peer's sends land ahead of the stall tick
+            // and advance in parallel with it — the entry stayed latched while the peer
+            // fully participated (keep-first stores its real input), and the wall-clock
+            // timeout then kicked an active player.
             int stallTick = (_engine?.LastVerifiedTick ?? info.LastConfirmedTick) + 1;
-            if (command.Tick != stallTick)
+            if (command.Tick < stallTick)
+                return; // stale input for an already-covered tick proves nothing fresh
+
+            // Sanity bound: reject ticks beyond the prediction window (malicious/skewed
+            // peer) — neither release nor fill. MaxRollbackTicks is the natural ceiling:
+            // legitimate sends (CurrentTick + InputDelayTicks + _recommendedExtraDelay)
+            // always sit far inside it.
+            int currentTick = _engine?.CurrentTick ?? stallTick;
+            if (_simConfig != null && command.Tick > currentTick + _simConfig.MaxRollbackTicks)
                 return;
+
+            // Close the unfilled window BEFORE releasing, so the chain cannot stall once the
+            // fill paths deactivate (presumed-drop clear → player "connected" → disconnect-fill
+            // stops). Fill the ENTIRE presumed window [stallTick, currentTick],
+            // not just [stallTick, command.Tick-1] — command.Tick's own real was DroppedSealed by
+            // the watchdog seal and any hole in the window (incl. ticks >= command.Tick) would
+            // freeze the chain. Filling empty discards this player's reals in the window (localized,
+            // resync-recoverable desync). The Unseal in
+            // ForceInsertEmptyCommandsRange lets this fill restore sealed-but-no-command holes.
+            // Echoes of this fill are blocked by the call-site guard — no re-entry.
+            if (currentTick >= stallTick)
+                FillAndBroadcastDisconnectedRange(playerId, stallTick, currentTick);
 
             int presumedDuration = _engine != null ? _engine.CurrentTick - info.LastConfirmedTick : 0;
 
@@ -286,8 +378,9 @@ namespace xpTURN.Klotho.Network
             // Sync engine state. Without this, _disconnectedPlayerIds stays populated while
             // the pool entry is gone — next watchdog iteration would re-add via RentDisconnectedInfo.
             _engine?.NotifyPlayerReconnected(playerId);
+            BroadcastPlayerState(playerId, PlayerStateChange.Reconnected);
 
-            _logger?.KInformation($"[KlothoNetworkService][PresumedDrop] False positive — real input arrived at stallTick: playerId={playerId}, stallTick={stallTick}, presumedDurationTicks={presumedDuration}");
+            _logger?.KInformation($"[KlothoNetworkService][PresumedDrop] False positive — real input arrived at tick {command.Tick} (stallTick={stallTick}): playerId={playerId}, presumedDurationTicks={presumedDuration}");
         }
 
         // Promote a presumed-drop entry to a confirmed transport disconnect. Called from
@@ -318,6 +411,73 @@ namespace xpTURN.Klotho.Network
             int resyncRequestTotal = engine?.ResyncRequestTotalCount ?? 0;
             int postResyncDesync = engine?.PostResyncDesyncCount ?? 0;
             _logger?.KInformation($"[Metrics][PresumedDrop] role={role} playerId={playerId} falsePositive={_presumedDropFalsePositiveCount} truePositive={_presumedDropTrueCount} ratio={ratio:F3} relaySealDrop={_relaySealDropCount} unexpectedFullStateDrop={unexpectedFullStateDrops} resyncHashMismatch={resyncHashMismatches} desyncPeak={consecutiveDesyncPeak} resyncRequestTotal={resyncRequestTotal} postResyncDesync={postResyncDesync}");
+        }
+
+        #endregion
+
+        #region Player state notification
+
+        // Host-only: broadcast a host-confirmed roster transition to guests so their engine
+        // roster sets (_disconnectedPlayerIds / _activePlayerIds) match the host and a departed
+        // peer is excluded from the timing-advantage vote. Presumed-drop guesses are never sent
+        // — only confirmed disconnect / reconnect / leave.
+        private void BroadcastPlayerState(int playerId, PlayerStateChange state)
+        {
+            if (!IsHost)
+                return;
+            BroadcastMessagePooled(
+                new PlayerStateNotificationMessage { PlayerId = playerId, State = (byte)state },
+                DeliveryMethod.ReliableOrdered);
+        }
+
+        // Guest receiver for the host's PlayerStateNotificationMessage. Mirrors the confirmed
+        // transition into this guest's engine roster sets (timing-vote exclusion)
+        // and into the _players surface (PlayerCount / connection state / events stay consistent
+        // with the host, like HandleLateJoinNotification). Host owns its own roster — reject a
+        // forged guest notification. Idempotent: set Add/Remove and event re-fires are no-ops.
+        private void HandlePlayerStateNotification(PlayerStateNotificationMessage msg)
+        {
+            if (IsHost)
+                return;
+
+            int playerId = msg.PlayerId;
+            var player = _players.Find(p => p.PlayerId == playerId);
+
+            switch ((PlayerStateChange)msg.State)
+            {
+                case PlayerStateChange.Disconnected:
+                    _engine?.NotifyPlayerDisconnected(playerId);
+                    if (player != null)
+                    {
+                        player.ConnectionState = PlayerConnectionState.Disconnected;
+                        OnPlayerDisconnected?.Invoke(player);
+                    }
+                    break;
+
+                case PlayerStateChange.Reconnected:
+                    _engine?.NotifyPlayerReconnected(playerId);
+                    if (player != null)
+                    {
+                        player.ConnectionState = PlayerConnectionState.Connected;
+                        OnPlayerReconnected?.Invoke(player);
+                    }
+                    break;
+
+                case PlayerStateChange.Left:
+                    _engine?.NotifyPlayerLeft(playerId);
+                    if (player != null)
+                    {
+                        int prevPlayerCount = _players.Count;
+                        bool prevAllReady = AllPlayersReady;
+                        _players.Remove(player);
+                        OnPlayerLeft?.Invoke(player);
+                        RaisePlayerCountIfChanged(prevPlayerCount);
+                        RaiseAllPlayersReadyIfChanged(prevAllReady);
+                    }
+                    break;
+            }
+
+            _logger?.KInformation($"[KlothoNetworkService][HandlePlayerStateNotification] playerId={playerId}, state={(PlayerStateChange)msg.State}");
         }
 
         #endregion
@@ -354,6 +514,25 @@ namespace xpTURN.Klotho.Network
                     OnPlayerLeft?.Invoke(player);
                     RaisePlayerCountIfChanged(prevPlayerCount);
                     RaiseAllPlayersReadyIfChanged(prevAllReady);
+                    BroadcastPlayerState(playerId, PlayerStateChange.Left);
+
+                    // A presumed-drop entry can reach this timeout with its
+                    // transport still alive (the quorum-miss watchdog never saw transport
+                    // loss). Cut the peer: otherwise the removed player keeps sending — every
+                    // cmd would re-insert a fresh _remoteTicks entry and keep flowing into the
+                    // buffer/relay — and the client never learns it was removed (the cut lets
+                    // it enter its reconnect flow). Removal first, then cut: the re-entrant
+                    // HandlePeerDisconnected finds no player and only cleans peer mappings.
+                    if (IsHost)
+                    {
+                        int alivePeerId = -1;
+                        foreach (var kvp in _peerToPlayer)
+                        {
+                            if (kvp.Value == playerId) { alivePeerId = kvp.Key; break; }
+                        }
+                        if (alivePeerId != -1)
+                            _transport?.DisconnectPeer(alivePeerId);
+                    }
                 }
             }
         }
@@ -384,6 +563,27 @@ namespace xpTURN.Klotho.Network
         #endregion
 
         #region Reconnect: Guest transport reconnect
+
+        /// <summary>
+        /// Fault-injection only — forces in-session reconnect arming on a guest, mirroring the
+        /// eligible branch of <see cref="HandleDisconnected"/> but without its
+        /// Phase==Playing / reason==NetworkFailure gate. The harness severs the guest with
+        /// DisconnectPeer (→ LocalDisconnect, not reconnect-eligible), so the natural arm never
+        /// fires; calling this drives the same self-reconnect state machine
+        /// (<see cref="UpdateReconnect"/> → <see cref="TryReconnectTransport"/>) the production
+        /// NetworkFailure path uses. Sets the timer fields too, else UpdateReconnect's elapsed
+        /// math would immediately time out.
+        /// </summary>
+        internal void ArmInSessionReconnectForFaultInjection()
+        {
+            if (IsHost) return;
+
+            _reconnectState = ReconnectState.WaitingForTransport;
+            _reconnectStartTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _reconnectRetryCount = 0;
+            OnReconnecting?.Invoke();
+            _engine?.PauseForReconnect();
+        }
 
         private void TryReconnectTransport()
         {
@@ -605,6 +805,7 @@ namespace xpTURN.Klotho.Network
             info.Reset();
             _disconnectedPlayerCount--;
             _engine?.NotifyPlayerReconnected(msg.PlayerId);
+            BroadcastPlayerState(msg.PlayerId, PlayerStateChange.Reconnected);
 
             // 6. Send SimulationConfig (always sent regardless of cold-start vs warm reconnect).
             SendSimulationConfig(peerId);

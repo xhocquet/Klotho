@@ -80,6 +80,19 @@ namespace xpTURN.Klotho.Core
         event Action<SyncTestFailure> OnSyncError;
 
         /// <summary>
+        /// Consecutive failed checks that trigger auto-disable via <see cref="OnSyncTestDisabled"/>.
+        /// A pass resets the streak. Default 3.
+        /// </summary>
+        int ConsecutiveFailLimit { get; set; }
+
+        /// <summary>
+        /// Raised when the consecutive-failure limit is reached. The engine responds by calling
+        /// DisableSyncTest — persistent non-determinism would only repeat the same signal while
+        /// paying the per-tick validation cost.
+        /// </summary>
+        event Action OnSyncTestDisabled;
+
+        /// <summary>
         /// Notifies the runner of an externally-triggered rollback (e.g. from KlothoEngine).
         /// Resets the internal ring buffer so verification restarts cleanly.
         /// </summary>

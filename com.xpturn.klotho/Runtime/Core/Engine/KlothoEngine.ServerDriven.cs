@@ -71,10 +71,8 @@ namespace xpTURN.Klotho.Core
 #endif
 
             var inputCollector = _serverNetwork.InputCollector;
-            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            // 1. Collect inputs (apply Hard Tolerance).
-            inputCollector.BeginTick(CurrentTick, now);
+            // 1. Collect inputs (missing players are substituted with EmptyCommand at execution).
             var commands = inputCollector.CollectTickInputs(CurrentTick);
 
             // Also store commands in InputBuffer (for compatibility with CleanupOldData, HasCommand, etc.).
@@ -92,7 +90,7 @@ namespace xpTURN.Klotho.Core
             _simulation.Tick(commands);
             _logger?.KDebug($"[KlothoEngine][SD] ServerTick: frame.Tick after={_simulation.CurrentTick}");
 
-            // Collect events (no-op for NullEventCollector).
+            // Collect events (SyncedOnlyEventCollector keeps only Synced; Regular are returned to the pool at RaiseEvent).
             _eventBuffer.ClearTick(CurrentTick);
             for (int ei = 0; ei < _eventCollector.Count; ei++)
                 _eventBuffer.AddEvent(CurrentTick, _eventCollector.Collected[ei]);

@@ -58,7 +58,7 @@ Direct dependencies on any engine API (`MonoBehaviour` / `UnityEngine.*`, `Node`
 **Implementation Principles**:
 
 - The engine core (`KlothoEngine`, `ISimulation`, `InputBuffer`, `FP64`, `Frame`, etc.) is pure C# — references to the `UnityEngine` namespace are forbidden
-- Engine integration (rendering, input collection, MonoBehaviour / Node lifecycle) is handled in separate **adapter/bridge layers** — `Runtime/Unity/` for Unity, `Godot~/Adapters/` for Godot
+- Engine integration (rendering, input collection, MonoBehaviour / Node lifecycle) is handled in separate **adapter/bridge layers** — `Unity/` for Unity, `Godot~/Adapters/` for Godot
 - External dependencies such as `INetworkTransport` and `ILogger` are isolated behind interface abstractions
 
 ### Network Layer Separation
@@ -158,18 +158,23 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │   │                   FPStaticCollider, FPStaticBVH, FPStaticColliderSerializer,
 │   │   │                   FPNavMesh, FPNavMeshSerializer, NavAgentComponent, FPNavAgentSystem,
 │   │   │                   DeterministicRandom, FPAnimationCurve, etc.
-│   │   ├── Unity/          Unity adapter — USimulationConfig, USessionConfig, EcsDebugBridge,
-│   │   │                   View/ (EntityView, EntityViewComponent, EntityViewFactory,
-│   │   │                          EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
-│   │   │                          BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
-│   │   │                          UpdatePositionParameter, ErrorVisualState)
-│   │   │                   FPStaticColliderOverride, FPStaticColliderVisualizer,
-│   │   │                   Logging/ (UnityDebugSink, KLogBuilderUnityExtensions)
 │   │   ├── LiteNetLib/     LiteNetLibTransport — INetworkTransport implementation
 │   │   │                   (xpTURN.Klotho.LiteNetLib, noEngineReferences)
 │   │   └── ThirdParty/     vendored: LiteNetLib.v2.1.4 (UDP networking),
 │   │                       K4os.Compression.LZ4.v1.3.8 (replay compression),
 │   │                       System.Runtime.CompilerServices.Unsafe.v6.1.2 (Span primitives)
+│   ├── Unity/              Unity adapter — USimulationConfig, USessionConfig, EcsDebugBridge,
+│   │                       View/ (EntityView, EntityViewComponent, EntityViewFactory,
+│   │                              EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
+│   │                              BindBehaviour, ViewFlags, VerifiedFrameInterpolator,
+│   │                              UpdatePositionParameter, ErrorVisualState)
+│   │                       FPStaticColliderOverride, FPStaticColliderVisualizer,
+│   │                       Logging/ (UnityDebugSink, KLogBuilderUnityExtensions)
+│   │   └── Editor/         NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
+│   │                       Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
+│   │                       ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)
+│   │                       FSM/ (HFSMVisualizerWindow)
+│   │                       DataAsset/ (JsonToBytesConverter)
 │   ├── Godot~/             Godot (.NET) adapter — Adapters/ (EntityViewNode, EntityViewUpdaterNode,
 │   │                       GodotSessionDriver, GodotConnectionAsync, GodotSessionFlowAsync,
 │   │                       GodotFlowSetupBuilderExtensions (WithGodotDefaults),
@@ -178,11 +183,9 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │                       GodotReconnectCredentialsStore,
 │   │                       Deterministic/ FPRay3·FPPlane·FPBounds3 Godot conversion helpers)
 │   │                       · Packaging/ · plugin.cfg/plugin.gd
-│   ├── Editor/             NavMesh/ (FPNavMeshExporter, Visualizer Window/Overlay/Simulator/Interaction)
-│   │                       Physics/ (FPStaticColliderExporterWindow, FPStaticColliderConverter)
-│   │                       ECS/ (EntityComponentVisualizerWindow, FrameHeapBenchmarkWindow)
-│   │                       FSM/ (HFSMVisualizerWindow)
-│   │                       DataAsset/ (JsonToBytesConverter)
+│   │   └── Adapters/Editor/  Godot editor tools — NavMesh (GodotFPNavMeshExporter, Visualizer/Dock/Overlay/Simulator/Interaction),
+│   │                       StaticCollider (GodotFPStaticColliderExporter/Converter/Viewer),
+│   │                       DataAsset (KlothoDataAssetConvertTool, KlothoJsonContextMenu) · plugin.gd EditorPlugin
 │   ├── Plugins/Analyzers/  KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
 │   ├── Prefabs/            debug/visualization prefabs (EcsDebugBridge,
 │   │                       FPPhysicsWorldVisualizer, FPStaticColliderVisualizer)
@@ -263,18 +266,18 @@ Configuration is split into two layers.
 | ---- | ---- | ---- | ---- |
 | TickIntervalMs | 25 | ms | Tick interval (= 40 ticks/sec). Range: 1 or greater (typically 16~50ms) |
 | InputDelayTicks | 4 | ticks | Local-input delay shift. Effective input delay = TickIntervalMs × InputDelayTicks (= 100 ms). Range: 0 or greater (typically 2~6) |
-| MaxRollbackTicks | 50 | ticks | Maximum rollback range. Determines snapshot ring buffer + input-buffer retention. Must be ≥ SyncCheckInterval |
-| SyncCheckInterval | 30 | ticks | State-hash verification period. Must be ≤ MaxRollbackTicks |
+| MaxRollbackTicks | 50 | ticks | Maximum rollback range. Determines snapshot ring buffer + input-buffer retention. Must be ≥ SyncCheckInterval (≥ 2× recommended) |
+| SyncCheckInterval | 20 | ticks | State-hash verification period. ≤ MaxRollbackTicks/2 recommended — values above are clamped to the effective interval at runtime so a desync rollback to the last matched anchor stays within the rollback window |
 | UsePrediction | true | bool | Whether input prediction is enabled. False → engine waits for all inputs (Paused) |
 | MaxEntities | 256 | entities | ECS entity capacity (EntityManager array size) |
 | Mode | P2P | NetworkMode | Network topology (P2P / ServerDriven). Discriminator for SD-only fields |
-| HardToleranceMs | 0 | ms | (SD) Server cmd-acceptance wall-clock deadline. **0 = auto** ((effectiveLeadTicks + InputDelayTicks + 1) × TickIntervalMs + RTT/2 + 20ms jitter); manual values for advanced tuning |
+| HardToleranceMs | 0 | ms | (SD) **Deprecated — no effect (IMP59 V0-C).** The effective server deadline is the tick's execution moment: inputs missing at execution are substituted with `EmptyCommand`, later arrivals are past-tick rejected, and chronic lateness self-corrects via client lead escalation. Property and wire fields retained for serialized-asset / message compatibility only |
 | InputResendIntervalMs | 25 | ms | (SD) Interval at which the client resends unacknowledged inputs |
 | MaxUnackedInputs | 30 | count | (SD) Cap on accumulated unacknowledged inputs (warning emitted on overflow) |
 | ServerSnapshotRetentionTicks | 0 | ticks | (SD) Server snapshot ring-buffer slots. **0 = auto** (TickRate × 10). Independent of MaxRollbackTicks — used for FullStateRequest replies |
-| SDInputLeadTicks | 0 | ticks | (SD) Initial client lead ticks at game start. **0 = auto (default 10)**. Reused on LateJoin/Reconnect. Additive with InputDelayTicks; reflected in HardToleranceMs auto-calc |
+| SDInputLeadTicks | 0 | ticks | (SD) Initial client lead ticks at game start. **0 = auto (default 10)**. Reused on LateJoin/Reconnect. Additive with InputDelayTicks |
 | EnableErrorCorrection | false | bool | Enable Error Correction (default off). Enable selectively in high-latency / multiplayer scenarios |
-| InterpolationDelayTicks | 3 | ticks | View-layer snapshot interpolation delay (used by RenderClock.VerifiedBaseTick = LastVerifiedTick - InterpolationDelayTicks). Recommended [1, 3]. SD: upper bound for AdaptiveRenderClock |
+| InterpolationDelayTicks | 3 | ticks | View-layer snapshot interpolation delay (used by RenderClock.VerifiedBaseTick = LastVerifiedTick - InterpolationDelayTicks). Recommended [1, 3]. Fixed value — applied as-is by the live render clock, no dynamic adjustment |
 | LateJoinDelaySafety | 2 | ticks | Safety margin added to RTT-based extra-delay computation on Sync / LateJoin / Reconnect. Also used as the standalone fallback when avgRtt is invalid / out of the sane range |
 | RttSanityMaxMs | 240 | ms | Upper bound for accepting avgRtt as a sane measurement. Samples exceeding this fall back to `LateJoinDelaySafety` only |
 | QuorumMissDropTicks | 20 | ticks | (P2P) Quorum-miss watchdog threshold. If a remote peer's input is missing at `_lastVerifiedTick + 1` for at least this many ticks, the peer is presumed-dropped and reactive empty-fill activates before the transport-level DisconnectTimeout. 0 disables. Safe range 10~80 |
@@ -299,6 +302,8 @@ Configuration is split into two layers.
 | ResyncMaxRetries | 3 | tries | Max resync attempts |
 | DesyncThresholdForResync | 3 | count | Desync count that triggers resync |
 | CorrectiveResetCooldownMs | 5000 | ms | (P2P, host-only) Minimum interval between consecutive corrective-reset broadcasts. Prevents broadcast storms when persistent hash divergence fires `OnHashMismatch` repeatedly |
+| CorrectiveResetMaxAttempts | 2 | tries | (P2P, host-only) Corrective-reset attempts the host spends per divergence episode (recovery ladder rung 3), fed by guest `ResyncFailureReport` messages. Attempts decay to zero after a quiet period of `CorrectiveResetCooldownMs × 2` without failure reports. Host-local — not propagated via `SimulationConfigMessage` |
+| AutoAbortOnRecoveryExhausted | true | bool | (P2P, host-only) When corrective-reset attempts are exhausted (rung 4), the host broadcasts `MatchAbort` and aborts locally with `AbortReason.StateDivergence`. `false` logs an error and leaves the decision to the game layer. Host-local |
 | CountdownDurationMs | 3000 | ms | Game-start countdown length |
 | CatchupMaxTicksPerFrame | 200 | ticks | Max ticks per frame during catchup |
 | AbortGraceMs | 1500 | ms | Post-match grace duration on abort. Time between `OnMatchAborted` fire and `Room.State` transition to `Draining`, giving clients time to display the error dialog and the server side time for abort logging |
@@ -1077,7 +1082,7 @@ The same SessionConfig payload is also propagated via `LateJoinAcceptMessage` an
 ### 9.4 Desync Detection
 
 ```text
-Every SyncCheckInterval (30 ticks):
+Every SyncCheckInterval (20 ticks):
 ├─ compute local state hash (ISimulation.GetStateHash → FNV-1a 64-bit)
 ├─ _localHashes[tick] = hash
 ├─ broadcast SyncHashMessage (Unreliable)

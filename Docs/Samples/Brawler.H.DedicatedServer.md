@@ -107,7 +107,7 @@ The actual file, verbatim:
   "TickIntervalMs": 25,
   "InputDelayTicks": 4,
   "MaxRollbackTicks": 50,
-  "SyncCheckInterval": 30,
+  "SyncCheckInterval": 20,
   "UsePrediction": false,
   "MaxEntities": 256,
 

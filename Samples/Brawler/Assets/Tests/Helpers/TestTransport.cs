@@ -279,6 +279,18 @@ namespace xpTURN.Klotho.Helper.Tests
         }
 
         /// <summary>
+        /// Discards all queued incoming messages (test helper). Models a resync-snap resume:
+        /// a stalled peer's queued send sweep contains the exact-stall-tick cmd, which would
+        /// mask the frontier-ahead-landing recovery shape.
+        /// </summary>
+        public int DrainIncomingMessages()
+        {
+            int count = _incomingMessages.Count;
+            _incomingMessages.Clear();
+            return count;
+        }
+
+        /// <summary>
         /// Blocks message send/receive for a specific peer (for fault injection).
         /// </summary>
         public static void BlockPeer(int peerId) => _blockedPeers.Add(peerId);

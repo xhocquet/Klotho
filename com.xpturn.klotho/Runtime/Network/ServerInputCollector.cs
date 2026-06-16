@@ -7,19 +7,17 @@ using xpTURN.Klotho.Core;
 namespace xpTURN.Klotho.Network
 {
     /// <summary>
-    /// Server-side input collection, validation, and Hard Tolerance management (section 3.6.1).
-    /// Filters inputs received from clients by peerId-PlayerId validation, tick validity, and the Hard Tolerance deadline,
-    /// and substitutes EmptyCommand for inputs that have not arrived by tick execution time.
+    /// Server-side input collection and validation.
+    /// Filters inputs received from clients by peerId-PlayerId validation and tick validity
+    /// (the effective deadline is the tick's execution moment — later arrivals are past-tick
+    /// rejected and the client self-corrects via lead escalation), and substitutes EmptyCommand
+    /// for inputs that have not arrived by tick execution time.
     /// </summary>
     public class ServerInputCollector
     {
         // tick -> (playerId -> command)
         private readonly Dictionary<int, Dictionary<int, ICommand>> _inputs
             = new Dictionary<int, Dictionary<int, ICommand>>();
-
-        // tick -> deadline (UTC ms)
-        private readonly Dictionary<int, long> _deadlines
-            = new Dictionary<int, long>();
 
         private readonly List<ICommand> _resultCache = new List<ICommand>();
         private readonly List<int> _cleanupCache = new List<int>();
@@ -30,7 +28,6 @@ namespace xpTURN.Klotho.Network
         private readonly SortedSet<int> _activePlayerIds = new SortedSet<int>();
 
         private int _lastExecutedTick = -1;
-        private int _hardToleranceMs;
         private IKLogger _logger;
 
         // First scheduled tick — kept in sync with KlothoEngine.Start() setting CurrentTick = 0.
@@ -46,10 +43,6 @@ namespace xpTURN.Klotho.Network
         private int _acceptedCount;
         private int _rejectedPastTickCount;
         private int _rejectedPeerMismatchCount;
-        private int _rejectedToleranceExceededCount;
-
-        // Time provider (injectable for tests)
-        private Func<long> _nowMs = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         /// <summary>
         /// Raised when a player's input has not arrived by tick execution time and is substituted with EmptyCommand.
@@ -58,7 +51,7 @@ namespace xpTURN.Klotho.Network
         public event Action<int> OnPlayerInputTimeout;
 
         /// <summary>
-        /// Raised when a transport-level command rejection occurs (peer mismatch, past tick, tolerance exceeded).
+        /// Raised when a transport-level command rejection occurs (peer mismatch, past tick).
         /// Consumers (ServerNetworkService) unicast a CommandRejectedMessage hint to the originating peer.
         /// Parameters: peerId, tick, commandTypeId, reason
         /// </summary>
@@ -67,13 +60,11 @@ namespace xpTURN.Klotho.Network
         public int LastExecutedTick => _lastExecutedTick;
 
         /// <summary>
-        /// Configures Hard Tolerance and the peerId-PlayerId mapping.
+        /// Configures the peerId-PlayerId mapping.
         /// </summary>
-        /// <param name="hardToleranceMs">Input reception deadline (ms). If 0, deadline checks are skipped.</param>
         /// <param name="peerToPlayer">peerId → playerId mapping (reference to an externally owned Dictionary)</param>
-        public void Configure(int hardToleranceMs, Dictionary<int, int> peerToPlayer)
+        public void Configure(Dictionary<int, int> peerToPlayer)
         {
-            _hardToleranceMs = hardToleranceMs;
             _peerToPlayer = peerToPlayer;
         }
 
@@ -85,28 +76,11 @@ namespace xpTURN.Klotho.Network
         /// </summary>
         public void SetBootstrapPending(bool pending) => _bootstrapPending = pending;
 
-        /// <summary>
-        /// Replaces the time provider (for tests).
-        /// </summary>
-        public void SetTimeProvider(Func<long> nowMs)
-        {
-            _nowMs = nowMs ?? throw new ArgumentNullException(nameof(nowMs));
-        }
-
         public void AddPlayer(int playerId) => _activePlayerIds.Add(playerId);
 
         public void RemovePlayer(int playerId) => _activePlayerIds.Remove(playerId);
 
         public int ActivePlayerCount => _activePlayerIds.Count;
-
-        /// <summary>
-        /// Opens the input collection window for the tick. The deadline is tickStartTimeMs + HardToleranceMs.
-        /// </summary>
-        public void BeginTick(int tick, long tickStartTimeMs)
-        {
-            if (_hardToleranceMs > 0)
-                _deadlines[tick] = tickStartTimeMs + _hardToleranceMs;
-        }
 
         /// <summary>
         /// Validates and stores a client input on receipt.
@@ -143,34 +117,33 @@ namespace xpTURN.Klotho.Network
                 {
                     _rejectedPastTickCount++;
                     _logger?.KWarning($"[InputCollector] Rejected (past tick): tick={tick}, lastExec={_lastExecutedTick}, playerId={playerId}, cmd={command.GetType().Name}");
-                    long arrivalDelayPast = _deadlines.TryGetValue(tick, out long dlPast) ? _nowMs() - dlPast : -1;
-                    _logger?.KDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=past_tick arrivalDelayMs={arrivalDelayPast} cmdTypeId={command.CommandTypeId}");
+                    _logger?.KDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=past_tick arrivalDelayMs=-1 cmdTypeId={command.CommandTypeId}");
                     OnCommandRejected?.Invoke(peerId, tick, command.CommandTypeId, RejectionReason.PastTick);
                     return false;
                 }
             }
 
-            // 3. Hard Tolerance exceeded
-            if (_deadlines.TryGetValue(tick, out long deadline))
-            {
-                if (_nowMs() > deadline)
-                {
-                    _rejectedToleranceExceededCount++;
-                    _logger?.KWarning($"[InputCollector] Rejected (tolerance exceeded): tick={tick}, playerId={playerId}, cmd={command.GetType().Name}");
-                    _logger?.KDebug($"[InputCollector][Reject] tick={tick} peerId={peerId} playerId={playerId} reason=tolerance_exceeded arrivalDelayMs={_nowMs() - deadline} cmdTypeId={command.CommandTypeId}");
-                    OnCommandRejected?.Invoke(peerId, tick, command.CommandTypeId, RejectionReason.ToleranceExceeded);
-                    return false;
-                }
-            }
-
-            // 4. Store
+            // 3. Store
             if (!_inputs.TryGetValue(tick, out var tickInputs))
             {
                 tickInputs = DictionaryPoolHelper.GetIntDictionary<ICommand>();
                 _inputs[tick] = tickInputs;
             }
 
-            bool overwrite = tickInputs.ContainsKey(playerId);
+            bool overwrite = tickInputs.TryGetValue(playerId, out var existing);
+
+            // Empty-no-overwrite-real backstop. A client's own auto-inject empty that
+            // collided with a real cmd is already suppressed client-side (send gating); this is the
+            // server-side invariant guarding any future sender / regression. Never let an arriving
+            // EmptyCommand replace a stored non-Empty (real) cmd — last-write-wins would eat the button.
+            // real-over-empty / real-over-real / empty-over-empty keep the existing last-write behavior.
+            // The skipped empty is left to GC, matching how a displaced cmd is handled on overwrite.
+            if (overwrite && command is EmptyCommand && !(existing is EmptyCommand))
+            {
+                _logger?.KDebug($"[Server][DIAG] Empty-no-overwrite-real: tick={tick}, pid={playerId}, kept={existing.GetType().Name}, droppedEmpty");
+                return true;
+            }
+
             tickInputs[playerId] = command;
             if (!overwrite)
                 _acceptedCount++;
@@ -181,17 +154,15 @@ namespace xpTURN.Klotho.Network
         /// <summary>
         /// Snapshot and reset rejection/acceptance counters for phase-tagged monitoring.
         /// </summary>
-        public void GetAndResetStats(out int accepted, out int rejectedPastTick, out int rejectedPeerMismatch, out int rejectedToleranceExceeded)
+        public void GetAndResetStats(out int accepted, out int rejectedPastTick, out int rejectedPeerMismatch)
         {
             accepted = _acceptedCount;
             rejectedPastTick = _rejectedPastTickCount;
             rejectedPeerMismatch = _rejectedPeerMismatchCount;
-            rejectedToleranceExceeded = _rejectedToleranceExceededCount;
 
             _acceptedCount = 0;
             _rejectedPastTickCount = 0;
             _rejectedPeerMismatchCount = 0;
-            _rejectedToleranceExceededCount = 0;
         }
 
         /// <summary>
@@ -237,7 +208,6 @@ namespace xpTURN.Klotho.Network
             _lastExecutedTick = tick;
 
             // Clean up data for the executed tick
-            _deadlines.Remove(tick);
             if (tickInputs != null)
             {
                 tickInputs.Clear();
@@ -249,7 +219,7 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
-        /// Cleans up stale inputs and deadline data older than lastExecutedTick.
+        /// Cleans up stale inputs older than lastExecutedTick.
         /// Late-arriving inputs are already rejected in TryAcceptInput, so this is called
         /// when future-tick data has accumulated without going through CollectTickInputs.
         /// </summary>
@@ -273,15 +243,6 @@ namespace xpTURN.Klotho.Network
                 }
                 _inputs.Remove(t);
             }
-
-            _cleanupCache.Clear();
-            foreach (var kvp in _deadlines)
-            {
-                if (kvp.Key < tick)
-                    _cleanupCache.Add(kvp.Key);
-            }
-            for (int i = 0; i < _cleanupCache.Count; i++)
-                _deadlines.Remove(_cleanupCache[i]);
         }
 
         public void Reset()
@@ -294,7 +255,6 @@ namespace xpTURN.Klotho.Network
                 DictionaryPoolHelper.ReturnIntDictionary(dict);
             }
             _inputs.Clear();
-            _deadlines.Clear();
             _activePlayerIds.Clear();
             _lastExecutedTick = -1;
             _bootstrapPending = false;
@@ -302,7 +262,6 @@ namespace xpTURN.Klotho.Network
             _acceptedCount = 0;
             _rejectedPastTickCount = 0;
             _rejectedPeerMismatchCount = 0;
-            _rejectedToleranceExceededCount = 0;
         }
     }
 }

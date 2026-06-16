@@ -60,7 +60,9 @@ namespace xpTURN.Klotho.Diagnostics
                 $"dropSpawn=[{string.Join(",", FaultInjection.DropSpawnCommandPlayerIds)}], " +
                 $"suppressAck=[{string.Join(",", FaultInjection.SuppressBootstrapAckPlayerIds)}], " +
                 $"forceSpawnRetry=[{string.Join(",", FaultInjection.ForceSpawnRetryPlayerIds)}], " +
-                $"forceTickOffsetDelta={FaultInjection.ForceTickOffsetDelta}");
+                $"forceTickOffsetDelta={FaultInjection.ForceTickOffsetDelta}, " +
+                $"dropFullState=[{string.Join(",", FaultInjection.DropFullStateResponsePlayerIds)}], " +
+                $"forceClientDesync={FaultInjection.ForceClientDesyncAtTick}@[{string.Join(",", FaultInjection.ForceClientDesyncPlayerIds)}]");
             return true;
 #else
             return false;
@@ -80,6 +82,9 @@ namespace xpTURN.Klotho.Diagnostics
             [JsonProperty] public List<int> SuppressBootstrapAckPlayerIds { get; set; }
             [JsonProperty] public List<int> ForceSpawnRetryPlayerIds { get; set; }
             [JsonProperty] public int? ForceTickOffsetDelta { get; set; }
+            [JsonProperty] public List<int> DropFullStateResponsePlayerIds { get; set; }
+            [JsonProperty] public int? ForceClientDesyncAtTick { get; set; }
+            [JsonProperty] public List<int> ForceClientDesyncPlayerIds { get; set; }
         }
 
         [JsonObject(MemberSerialization.OptIn)]
@@ -133,6 +138,7 @@ namespace xpTURN.Klotho.Diagnostics
             if (s.ServerGcPauseMs.HasValue)      FaultInjection.ServerGcPauseMs = s.ServerGcPauseMs.Value;
             if (s.ServerGcPauseAtTick.HasValue)  FaultInjection.ServerGcPauseAtTick = s.ServerGcPauseAtTick.Value;
             if (s.ForceTickOffsetDelta.HasValue) FaultInjection.ForceTickOffsetDelta = s.ForceTickOffsetDelta.Value;
+            if (s.ForceClientDesyncAtTick.HasValue) FaultInjection.ForceClientDesyncAtTick = s.ForceClientDesyncAtTick.Value;
 
             if (s.EmulatedRttSchedule != null)
             {
@@ -168,6 +174,18 @@ namespace xpTURN.Klotho.Diagnostics
                 FaultInjection.ForceSpawnRetryPlayerIds.Clear();
                 foreach (int id in s.ForceSpawnRetryPlayerIds)
                     FaultInjection.ForceSpawnRetryPlayerIds.Add(id);
+            }
+            if (s.DropFullStateResponsePlayerIds != null)
+            {
+                FaultInjection.DropFullStateResponsePlayerIds.Clear();
+                foreach (int id in s.DropFullStateResponsePlayerIds)
+                    FaultInjection.DropFullStateResponsePlayerIds.Add(id);
+            }
+            if (s.ForceClientDesyncPlayerIds != null)
+            {
+                FaultInjection.ForceClientDesyncPlayerIds.Clear();
+                foreach (int id in s.ForceClientDesyncPlayerIds)
+                    FaultInjection.ForceClientDesyncPlayerIds.Add(id);
             }
         }
 #endif

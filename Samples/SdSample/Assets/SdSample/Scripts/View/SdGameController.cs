@@ -46,7 +46,7 @@ namespace xpTURN.Samples.SdSample
         private void Awake()
         {
             _logger = KlothoLogger.CreateDefault(level: _logLevel, filePrefix: "Client", categoryName: "Client");
-            _logger?.KInformation($"SdSample logger started.");
+            _logger?.KInformation($"SdSample logger started : LogLevel={_logLevel}");
 
             _sessionDriver.PreSessionUpdate += OnPreSessionUpdate;
         }

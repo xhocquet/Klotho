@@ -7,7 +7,6 @@ using xpTURN.Klotho.Logging;
 
 using xpTURN.Klotho.Helper.Tests;
 using xpTURN.Klotho.Network;
-using xpTURN.Klotho.State;
 
 namespace xpTURN.Klotho.Core.Tests
 {
@@ -75,22 +74,11 @@ namespace xpTURN.Klotho.Core.Tests
 
         // ── (a) KlothoEngine OnSyncedEvent single dispatch ──
 
-        private sealed class StubSnapshot : IStateSnapshot
-        {
-            public int Tick { get; set; }
-            public byte[] Serialize() => Array.Empty<byte>();
-            public void Deserialize(byte[] data) { }
-            public ulong CalculateHash() => 0;
-        }
 
         private static readonly FieldInfo _engineEventCollectorField = typeof(KlothoEngine)
             .GetField("_eventCollector", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static readonly FieldInfo _engineSnapshotManagerField = typeof(KlothoEngine)
-            .GetField("_snapshotManager", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static IStateSnapshotManager ReadSnapshotManager(KlothoEngine engine)
-            => (IStateSnapshotManager)_engineSnapshotManagerField.GetValue(engine);
 
         private IKLogger _logger;
         private KlothoTestHarness _harness;
@@ -229,10 +217,7 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.GreaterOrEqual(dispatches.Count, 1, "Initial verified-tick dispatch");
 
             // Trigger the Rollback.cs outer-loop ClearTick path. Resim re-runs Tick(raiseAtTick),
-            // raising the event again through the same BeginTick(t) / AddEvent(t) machinery.
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
-            _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
+            // raising the event again through the same BeginTick(t) / AddEvent(t) machinery.            _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
             _harness.AdvanceAllToTick(raiseAtTick + 10);
 
             Assert.GreaterOrEqual(dispatches.Count, 1, "Dispatches should still be observable post-rollback");
@@ -274,9 +259,6 @@ namespace xpTURN.Klotho.Core.Tests
             int predictedAfterInitial = predictedCount;
             int confirmedAfterInitial = confirmedCount;
             int canceledAfterInitial = canceledCount;
-
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
             _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
             _harness.AdvanceAllToTick(raiseAtTick + 10);
 
@@ -320,10 +302,7 @@ namespace xpTURN.Klotho.Core.Tests
             int canceledAfterInitial = canceledCount;
 
             // Diverge: resim raises Payload=2 → different content hash → unmatched in DiffRollbackEvents.
-            currentPayload = 2;
-            ReadSnapshotManager(_harness.Host.Engine)
-                .SaveSnapshot(raiseAtTick - 1, new StubSnapshot { Tick = raiseAtTick - 1 });
-            _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
+            currentPayload = 2;            _harness.Host.Engine.RequestRollback(raiseAtTick - 1);
             _harness.AdvanceAllToTick(raiseAtTick + 10);
 
             // Old-only (Payload=1) → OnEventCanceled. New-only (Payload=2) → OnEventConfirmed or

@@ -13,8 +13,11 @@ namespace xpTURN.Klotho.Core
 
         private readonly Dictionary<int, Func<ICommand>> _creators = new Dictionary<int, Func<ICommand>>();
         
-        // Cached list (avoids GC)
-        private readonly List<ICommand> _commandListCache = new List<ICommand>();
+        // Cached lists (avoid GC) — receive and send directions are kept separate:
+        // a single shared cache made every consumer of a DeserializeCommands result depend on
+        // the implicit "do not serialize through this factory before you finish reading" order.
+        private readonly List<ICommand> _deserializeListCache = new List<ICommand>();
+        private readonly List<ICommand> _serializeStagingCache = new List<ICommand>();
 
         public CommandFactory()
         {
@@ -86,12 +89,12 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public int GetSerializedCommandsSize(List<ICommand> commands)
         {
-            _commandListCache.Clear();
+            _serializeStagingCache.Clear();
             int totalSize = 4; // count
             for (int i = 0; i < commands.Count; i++)
             {
                 var cmd = commands[i];
-                _commandListCache.Add(cmd);
+                _serializeStagingCache.Add(cmd);
                 totalSize += 4 + cmd.GetSerializedSize(); // size prefix + data
             }
             return totalSize;
@@ -104,14 +107,14 @@ namespace xpTURN.Klotho.Core
         public int SerializeCommandsTo(Span<byte> destination)
         {
             var writer = new SpanWriter(destination);
-            writer.WriteInt32(_commandListCache.Count);
+            writer.WriteInt32(_serializeStagingCache.Count);
 
-            for (int i = 0; i < _commandListCache.Count; i++)
+            for (int i = 0; i < _serializeStagingCache.Count; i++)
             {
                 int sizePos = writer.Position;
                 writer.WriteInt32(0); // placeholder
                 int cmdStart = writer.Position;
-                _commandListCache[i].Serialize(ref writer);
+                _serializeStagingCache[i].Serialize(ref writer);
                 int cmdSize = writer.Position - cmdStart;
                 System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(
                     destination.Slice(sizePos), cmdSize);
@@ -126,7 +129,7 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public List<ICommand> DeserializeCommands(ReadOnlySpan<byte> data)
         {
-            _commandListCache.Clear();
+            _deserializeListCache.Clear();
 
             var reader = new SpanReader(data);
             int count = reader.ReadInt32();
@@ -135,10 +138,10 @@ namespace xpTURN.Klotho.Core
             {
                 ICommand cmd = DeserializeCommand(ref reader);
                 if (cmd != null)
-                    _commandListCache.Add(cmd);
+                    _deserializeListCache.Add(cmd);
             }
 
-            return _commandListCache;
+            return _deserializeListCache;
         }
 
         /// <summary>

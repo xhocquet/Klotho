@@ -220,13 +220,28 @@ namespace xpTURN.Klotho.Network
 
         private int _localTick;
 
+        // Sender's measured frame-advantage (round(CalculateLocalAdvantage)), pushed
+        // each tick from the engine and stamped into CommandMessage.SenderAdvantage.
+        private int _localAdvantage;
+
+        // Set immediately before a proxy-fill SendCommand (host filling for a
+        // disconnected / catching-up player) so the broadcast carries IsProxyTiming and receivers
+        // skip the timing vote. Consumed (cleared) inside SendCommand.
+        private bool _proxyTimingPending;
+
+        // CommandMessage.TimingFlags bit0.
+        private const byte TIMING_FLAG_PROXY = 1;
+
         public event Action OnGameStart;
         public event Action<long> OnCountdownStarted;
         public event Action<IPlayerInfo> OnPlayerJoined;
         public event Action<IPlayerInfo> OnPlayerLeft;
         public event Action<ICommand> OnCommandReceived;
         public event Action<int, int, long, long> OnDesyncDetected;
-        public event Action<int, int> OnFrameAdvantageReceived;
+        public event Action<int, int, bool> OnSyncHashCompared;
+        public event Action<int, int> OnResyncFailureReported;
+        public event Action<int> OnMatchAbortReceived;
+        public event Action<int, int, int> OnFrameAdvantageReceived;
         public event Action<int> OnLocalPlayerIdAssigned;
         public event Action<int, int> OnFullStateRequested;
         public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -258,6 +273,8 @@ namespace xpTURN.Klotho.Network
 
         public void SetLocalTick(int tick) { _localTick = tick; }
 
+        public void SetLocalAdvantage(int advantage) { _localAdvantage = advantage; }
+
         public void SubscribeEngine(IKlothoEngine engine)
         {
             _engine = engine;
@@ -266,6 +283,7 @@ namespace xpTURN.Klotho.Network
             engine.OnVerifiedInputBatchReady += HandleVerifiedInputBatchReady;
             engine.OnDisconnectedInputNeeded += HandleDisconnectedInputNeeded;
             engine.OnCatchupComplete += HandleCatchupComplete;
+            engine.OnExtraDelayChanged += HandleEngineExtraDelayChanged;
 
             // Flush any extra-delay seed buffered during InitializeFromConnection (guest path).
             // Single-slot — re-entry (e.g. warm reconnect re-running InitializeFromConnection) refills with the new value.
@@ -618,6 +636,11 @@ namespace xpTURN.Klotho.Network
             msg.Tick = command.Tick;
             msg.PlayerId = command.PlayerId;
             msg.SenderTick = _localTick;
+            // Stamp the measured advantage + proxy-timing flag. Both are set on every
+            // send (the cache is reused) so a stale flag/value never leaks across calls.
+            msg.SenderAdvantage = _localAdvantage;
+            msg.TimingFlags = _proxyTimingPending ? TIMING_FLAG_PROXY : (byte)0;
+            _proxyTimingPending = false; // one-shot — consumed by this send
             msg.CommandData = cmdBuf;
             msg.CommandDataLength = cmdWriter.Position;
 
@@ -636,12 +659,88 @@ namespace xpTURN.Klotho.Network
 
         public void SendSyncHash(int tick, long hash)
         {
+            // Store our own hash so arriving remote hashes can be compared against it —
+            // the transport does not loop back and SyncHashMessage is not relayed.
+            _syncHashes[(tick, LocalPlayerId)] = hash;
+
+            // Compare against remote hashes that arrived before ours was computed
+            // (faster peers, or our deferred send after speculative execution).
+            foreach (var kvp in _syncHashes)
+            {
+                if (kvp.Key.tick != tick || kvp.Key.playerId == LocalPlayerId)
+                    continue;
+                CompareAndReportSyncHash(tick, kvp.Key.playerId, hash, kvp.Value);
+            }
+
             var msg = _syncHashMessageCache;
             msg.Tick = tick;
             msg.Hash = hash;
             msg.PlayerId = LocalPlayerId;
 
             BroadcastMessagePooled(msg, DeliveryMethod.Unreliable);
+        }
+
+        public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash)
+        {
+            if (IsHost) return; // host handles its own state locally — reports are guest → host
+            var msg = new ResyncFailureReportMessage
+            {
+                PlayerId = LocalPlayerId,
+                Tick = tick,
+                Reason = (byte)reason,
+                LocalHash = localHash,
+                RemoteHash = remoteHash,
+            };
+            _logger?.KWarning($"[KlothoNetworkService][ResyncFailure] report → host: tick={tick}, reason={reason}");
+            BroadcastMessagePooled(msg, DeliveryMethod.ReliableOrdered); // star topology — reaches the host only
+        }
+
+        public void BroadcastMatchAbort(byte reason)
+        {
+            if (!IsHost) return;
+            var msg = new MatchAbortMessage { Reason = reason };
+            _logger?.KWarning($"[KlothoNetworkService][MatchAbort] broadcast: reason={reason}");
+            BroadcastMessagePooled(msg, DeliveryMethod.ReliableOrdered);
+        }
+
+        private void HandleResyncFailureReportMessage(ResyncFailureReportMessage msg)
+        {
+            if (!IsHost) return;
+            _logger?.KWarning($"[KlothoNetworkService][ResyncFailure] received: playerId={msg.PlayerId}, tick={msg.Tick}, reason={(ResyncFailureReason)msg.Reason}, local=0x{msg.LocalHash:X16}, remote=0x{msg.RemoteHash:X16}");
+            OnResyncFailureReported?.Invoke(msg.PlayerId, msg.Tick);
+        }
+
+        private void HandleMatchAbortMessage(MatchAbortMessage msg)
+        {
+            if (IsHost) return;
+            _logger?.KWarning($"[KlothoNetworkService][MatchAbort] received: reason={msg.Reason}");
+            OnMatchAbortReceived?.Invoke(msg.Reason);
+        }
+
+        public void InvalidateLocalSyncHashes(int fromTick)
+        {
+            _hashKeysToRemoveCache.Clear();
+            foreach (var key in _syncHashes.Keys)
+            {
+                if (key.playerId == LocalPlayerId && key.tick >= fromTick)
+                    _hashKeysToRemoveCache.Add(key);
+            }
+            for (int i = 0; i < _hashKeysToRemoveCache.Count; i++)
+                _syncHashes.Remove(_hashKeysToRemoveCache[i]);
+        }
+
+        public void InvalidateSyncHashes(int fromTick)
+        {
+            // Drop ALL peers' entries (local + remote) >= fromTick so a post-apply
+            // recompute is not compared against a pre-reset remote hash across the reset boundary.
+            _hashKeysToRemoveCache.Clear();
+            foreach (var key in _syncHashes.Keys)
+            {
+                if (key.tick >= fromTick)
+                    _hashKeysToRemoveCache.Add(key);
+            }
+            for (int i = 0; i < _hashKeysToRemoveCache.Count; i++)
+                _syncHashes.Remove(_hashKeysToRemoveCache[i]);
         }
 
         public void Update()
@@ -778,6 +877,14 @@ namespace xpTURN.Klotho.Network
                     HandleSyncHashMessage(hashMsg);
                     break;
 
+                case ResyncFailureReportMessage resyncFailMsg:
+                    HandleResyncFailureReportMessage(resyncFailMsg);
+                    break;
+
+                case MatchAbortMessage matchAbortMsg:
+                    HandleMatchAbortMessage(matchAbortMsg);
+                    break;
+
                 case GameStartMessage startMsg:
                     HandleGameStartMessage(startMsg);
                     break;
@@ -834,6 +941,10 @@ namespace xpTURN.Klotho.Network
                     HandleLateJoinNotification(lateJoinNotification);
                     break;
 
+                case PlayerStateNotificationMessage playerStateMsg:
+                    HandlePlayerStateNotification(playerStateMsg);
+                    break;
+
                 case SpectatorInputMessage catchupMsg:
                     HandleCatchupInputMessage(catchupMsg);
                     break;
@@ -841,7 +952,37 @@ namespace xpTURN.Klotho.Network
                 case RecommendedExtraDelayUpdateMessage extraDelayMsg:
                     HandleRecommendedExtraDelayUpdate(extraDelayMsg);
                     break;
+
+                case ReactiveExtraDelayReportMessage reactiveReport:
+                    HandleReactiveExtraDelayReport(peerId, reactiveReport);
+                    break;
             }
+        }
+
+        // Guest reports its effective extra-delay to the host so the host folds
+        // the locally-observed reactive correction (rollback-burst) into the broadcast baseline. Host is
+        // excluded (no reactive). Star topology: BroadcastMessagePooled from a guest reaches only peerId 0
+        // (the host). Changes are sparse (escalate cooldown / decay dwell) — dedupe on unchanged value.
+        private int _lastReportedEffective = -1;
+        private void HandleEngineExtraDelayChanged(int effective)
+        {
+            if (IsHost) return;
+            if (effective == _lastReportedEffective) return;
+            _lastReportedEffective = effective;
+            BroadcastMessagePooled(new ReactiveExtraDelayReportMessage { EffectiveExtraDelay = effective },
+                DeliveryMethod.ReliableOrdered);
+            _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"p2p-guest\",\"dir\":\"send\",\"effective\":{effective}}}");
+        }
+
+        // Guest reports its effective extra-delay; the host folds it into the
+        // per-peer target baseline and re-evaluates the max-over-peers broadcast. Host-only.
+        private void HandleReactiveExtraDelayReport(int peerId, ReactiveExtraDelayReportMessage msg)
+        {
+            if (!IsHost) return;
+            _reportedEffective[peerId] = msg.EffectiveExtraDelay < 0 ? 0 : msg.EffectiveExtraDelay;
+            _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"p2p-host\",\"dir\":\"absorb\",\"peerId\":{peerId},\"reportedEffective\":{_reportedEffective[peerId]}}}");
+            if (_peerToPlayer.TryGetValue(peerId, out int playerId))
+                MaybePushExtraDelayUpdate(playerId, peerId);
         }
 
         // ── Gameplay messages ────────────────────
@@ -862,7 +1003,7 @@ namespace xpTURN.Klotho.Network
                 // an empty placeholder and chain advanced past it), suppress relay so other peers
                 // keep the same empty placeholder. Without this guard, a late real packet from
                 // the source peer reaches guests un-sealed and overwrites their empty → host vs
-                // guest InputBuffer divergence (silent desync, no fallback at P1 stage).
+                // guest InputBuffer divergence (silent desync, no fallback at this stage).
                 bool isSealedHere = _engine != null && _engine.IsCommandSealed(msg.Tick, msg.PlayerId);
                 if (isSealedHere)
                 {
@@ -892,26 +1033,52 @@ namespace xpTURN.Klotho.Network
 
             // Quorum-miss watchdog false-positive: real input arrived for a player that was
             // presumed-dropped → remove from pool + rollback to restore real command path.
-            OnRealCommandReceivedDuringPresumedDrop(command);
+            // Network arrivals only — the watchdog's own activation fill echoes back here
+            // synchronously (SendCommand self-dispatch, fromPeerId == -1) with PlayerId=X, and
+            // the echo at the chain-stop tick lands exactly on the dynamic stall tick — the
+            // presumed-drop would self-release in the very call stack that armed it. Path B's
+            // per-tick fill echo matches the stall tick too, so every fill source must be
+            // excluded here.
+            if (fromPeerId != -1)
+                OnRealCommandReceivedDuringPresumedDrop(command);
 
             OnCommandReceived?.Invoke(command);
-            OnFrameAdvantageReceived?.Invoke(msg.PlayerId, msg.SenderTick);
+
+            // Frame advantage is remote timing info — local echoes (SendCommand self-dispatch,
+            // fromPeerId == -1) must not feed this machine's tick into the remote-tick median.
+            // Guarding on PlayerId is NOT equivalent: host proxy-fills (Reconnect/Catchup) echo
+            // with another player's PlayerId but our own SenderTick.
+            // A proxy-timing broadcast (host filling for a disconnected/catching-up
+            // player) carries the SENDING machine's tick/advantage, not the slot owner's — skip
+            // the vote so it does not pollute _remoteTicks[that player] (wire-side bias source).
+            if (fromPeerId != -1 && (msg.TimingFlags & TIMING_FLAG_PROXY) == 0)
+                OnFrameAdvantageReceived?.Invoke(msg.PlayerId, msg.SenderTick, msg.SenderAdvantage);
         }
 
         private void HandleSyncHashMessage(SyncHashMessage msg)
         {
-            // Store the hash and compare
             _syncHashes[(msg.Tick, msg.PlayerId)] = msg.Hash;
 
-            // Compare against the local hash
+            // Compare when the local hash for this tick has already been computed;
+            // otherwise SendSyncHash performs the comparison once it is (deferred send path).
             if (_syncHashes.TryGetValue((msg.Tick, LocalPlayerId), out long localHash))
+                CompareAndReportSyncHash(msg.Tick, msg.PlayerId, localHash, msg.Hash);
+        }
+
+        /// <summary>
+        /// Single comparison point for local vs remote sync hashes. Fires OnDesyncDetected on
+        /// mismatch and always fires OnSyncHashCompared — the engine promotes its last-matched
+        /// sync anchor on matched comparisons (event-based promotion, no grace window).
+        /// </summary>
+        private void CompareAndReportSyncHash(int tick, int remotePlayerId, long localHash, long remoteHash)
+        {
+            bool matched = localHash == remoteHash;
+            if (!matched)
             {
-                if (localHash != msg.Hash)
-                {
-                    _logger?.KWarning($"[KlothoNetworkService][SyncHash] Desync at tick {msg.Tick}: local=0x{localHash:X16}, remote(player{msg.PlayerId})=0x{msg.Hash:X16}");
-                    OnDesyncDetected?.Invoke(msg.PlayerId, msg.Tick, localHash, msg.Hash);
-                }
+                _logger?.KWarning($"[KlothoNetworkService][SyncHash] Desync at tick {tick}: local=0x{localHash:X16}, remote(player{remotePlayerId})=0x{remoteHash:X16}");
+                OnDesyncDetected?.Invoke(remotePlayerId, tick, localHash, remoteHash);
             }
+            OnSyncHashCompared?.Invoke(tick, remotePlayerId, matched);
         }
 
         private void HandleGameStartMessage(GameStartMessage msg)

@@ -23,7 +23,7 @@ namespace xpTURN.Klotho.Core.Tests
     ///
     /// The SD-Client UpdateServerDrivenClient loop is bypassed — the test wires
     /// ProcessVerifiedBatch directly via reflection because driving it through
-    /// engine.Update would require a full IServerDrivenNetworkService + AdaptiveClock
+    /// engine.Update would require a full IServerDrivenNetworkService + render clock
     /// + handshake setup. Direct invocation exercises the same code path with a minimal
     /// surface (only the happy-path entries: snapshot resolution + hash match).
     ///
@@ -69,6 +69,21 @@ namespace xpTURN.Klotho.Core.Tests
             }
         }
 
+        // Raises on every Tick while Armed — frame.Tick-agnostic, so a single direct
+        // SimulateGapTickWithEmptyFallback invocation reliably produces one raise without
+        // tick-alignment math (used by the gap-tick leak test).
+        private sealed class ArmedRaiserSystem : ISystem
+        {
+            public bool Armed;
+            public Func<SimulationEvent> Factory;
+
+            public void Update(ref Frame frame)
+            {
+                if (!Armed || Factory == null || frame.EventRaiser == null) return;
+                frame.EventRaiser.RaiseEvent(Factory());
+            }
+        }
+
         // ── Reflection handles ──────────────────────────────────────────
 
         private static readonly Type _engineType = typeof(KlothoEngine);
@@ -85,6 +100,10 @@ namespace xpTURN.Klotho.Core.Tests
 
         private static readonly MethodInfo _processVerifiedBatchMethod =
             _engineType.GetMethod("ProcessVerifiedBatch",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+
+        private static readonly MethodInfo _simulateGapTickMethod =
+            _engineType.GetMethod("SimulateGapTickWithEmptyFallback",
                 BindingFlags.NonPublic | BindingFlags.Instance);
 
         private static readonly MethodInfo _handleVerifiedStateReceivedMethod =
@@ -136,7 +155,10 @@ namespace xpTURN.Klotho.Core.Tests
             public event Action<IPlayerInfo> OnPlayerLeft;
             public event Action<ICommand> OnCommandReceived;
             public event Action<int, int, long, long> OnDesyncDetected;
-            public event Action<int, int> OnFrameAdvantageReceived;
+            public event Action<int, int, bool> OnSyncHashCompared;
+            public event Action<int, int> OnResyncFailureReported;
+            public event Action<int> OnMatchAbortReceived;
+            public event Action<int, int, int> OnFrameAdvantageReceived;
             public event Action<int> OnLocalPlayerIdAssigned;
             public event Action<int, int> OnFullStateRequested;
             public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -163,10 +185,15 @@ namespace xpTURN.Klotho.Core.Tests
             public void SendCommand(ICommand c) { }
             public void RequestCommandsForTick(int tick) { }
             public void SendSyncHash(int tick, long hash) { }
+            public void InvalidateLocalSyncHashes(int fromTick) { }
+            public void InvalidateSyncHashes(int fromTick) { }
+            public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash) { }
+            public void BroadcastMatchAbort(byte reason) { }
             public void Update() { }
             public void FlushSendQueue() { }
             public void ClearOldData(int tick) { }
             public void SetLocalTick(int tick) { }
+            public void SetLocalAdvantage(int advantage) { }
             public void SendFullStateRequest(int currentTick) { }
             public void SendFullStateResponse(int peerId, int tick, byte[] data, long hash) { }
             public void BroadcastFullState(int tick, byte[] data, long hash, FullStateKind k = FullStateKind.Unicast) { }
@@ -749,26 +776,25 @@ namespace xpTURN.Klotho.Core.Tests
 
         // ── SD-Client Reconnect/Resync resim stale event leakage ───────────
         //
-        // Tests the stale event leakage + tick mismatch + double-fire cascade when the
-        // Reconnect/Resync resim loop adds events at ring-wrap-colliding ticks (T_a and
-        // T_b = T_a + capacity).
+        // Regression: the `.Tick` dispatch guard prevents stale-event leakage
+        // (over-dispatch + tick mismatch) when the Reconnect/Resync resim loop adds events at
+        // ring-wrap-colliding ticks (T_a and T_b = T_a + capacity).
         //
-        // Mechanism:
+        // Mechanism (pre-fix bug this guards against):
         //   - HandleServerDrivenFullStateReceived (Resync branch) calls ApplyFullState.ClearAll
         //     to wipe the event buffer, then enters a resim loop [tick+1, previousTick) that
         //     calls AddEvent inside the loop with NO ClearTick — so two ticks mapping to the
         //     same slot append into the same list.
         //   - If T_a and T_b = T_a + capacity are both in the resim range, slot[T_a % capacity]
         //     ends up holding [evtA, evtB] (both Synced events, distinct evt.Tick values).
-        //   - Subsequent chain-advance fires DispatchSyncedEventsForTick(T_a, slot) → dispatches
-        //     BOTH events with callback tick=T_a (evtB.Tick=T_b ≠ T_a → TICK MISMATCH). Watermark
-        //     advances to T_a. Then DispatchSyncedEventsForTick(T_b, slot) → tick=T_b > watermark
-        //     → proceeds → dispatches BOTH again → 4 total dispatches.
-        //
-        // The current _syncedDispatchHighWaterMark is tick-level — it cannot detect that the
-        // events in the slot are stale from another tick. This test pins down the gap.
+        //   - Pre-fix, DispatchSyncedEventsForTick(T_a, slot) dispatched BOTH events under callback
+        //     tick=T_a (evtB.Tick=T_b ≠ T_a → tick mismatch); then (T_b, slot) dispatched BOTH
+        //     again → 4 dispatches. The tick-level _syncedDispatchHighWaterMark cannot detect the
+        //     cross-tick contamination.
+        //   - Post-fix, the `if (evt.Tick != tick) continue;` guard makes each event fire exactly
+        //     once at its own tick: 2 dispatches total, zero tick mismatches.
         [Test]
-        public void SDClientReconnectResym_RingWrap_StaleEventLeakageDoubleDispatch()
+        public void SDClientReconnectResym_RingWrap_TickGuard_DispatchesExactlyOnce()
         {
             const int maxRollbackTicks = 50;     // SnapshotCapacity = 52
             const int ecsMaxRollback = 150;
@@ -861,21 +887,83 @@ namespace xpTURN.Klotho.Core.Tests
             var slotEventsB = eventBuffer.GetEvents(resimEvtTickB);
             InvokeDispatchSyncedEventsForTick(engine, resimEvtTickB, slotEventsB);
 
-            // OVER-DISPATCH signature: in correct semantics, 2 events at distinct ticks
-            // should fire exactly 2 times total. Stale event leakage causes both events to fire
-            // under both callback ticks → 4 dispatches. The current watermark (tick-level)
-            // cannot detect the cross-tick contamination.
-            Assert.Greater(dispatchedCount, 2,
-                $"OVER-DISPATCH regression: stale event leakage causes each Synced event " +
-                $"in the shared slot to fire under both callback ticks ({resimEvtTickA} and {resimEvtTickB}). " +
-                $"Got {dispatchedCount} dispatches, expected > 2 (correct: 1 per event = 2 total).");
+            // EXACTLY-ONCE: the `.Tick` dispatch guard in
+            // DispatchSyncedEventsForTick skips any event whose stamped evt.Tick != the dispatch
+            // tick. So at tick resimEvtTickA only evtA (evt.Tick==A) fires, and at tick
+            // resimEvtTickB only evtB (evt.Tick==B) fires — 2 events, 2 dispatches total, each at
+            // its own tick. The pre-fix bug (each event firing under BOTH callback ticks → 4
+            // dispatches) is gone.
+            Assert.AreEqual(2, dispatchedCount,
+                $"Exactly-once: with the .Tick guard, each Synced event fires once at its own tick " +
+                $"(evtA at {resimEvtTickA}, evtB at {resimEvtTickB}) = 2 total. " +
+                $"A count > 2 would be the stale-event-leakage over-dispatch (pre-fix bug).");
 
-            // TICK MISMATCH signature: at least one dispatch must show callback tick != evt.Tick.
-            // The watermark only tracks max dispatched tick, not which events were dispatched.
-            Assert.Greater(tickMismatchCount, 0,
-                $"TICK MISMATCH regression: at least one OnSyncedEvent dispatch must show " +
-                $"callback tick != evt.Tick (a stale event from another slot fired under wrong tick). " +
-                $"Got {tickMismatchCount} mismatches. This is the watermark gap signature.");
+            // NO TICK MISMATCH: the guard ensures every dispatch has callback tick == evt.Tick —
+            // a wrapped slot's stale event is never fired under the wrong tick.
+            Assert.AreEqual(0, tickMismatchCount,
+                $"No tick mismatch: the .Tick guard skips events whose evt.Tick != dispatch tick, " +
+                $"so a stale event from another slot never fires under the wrong tick. " +
+                $"Got {tickMismatchCount} mismatches (pre-fix bug would show > 0).");
+        }
+
+        // ── Gap-tick event pool leak ───────────────────────
+        //
+        // SimulateGapTickWithEmptyFallback fills [restoreTick, firstExecutionTick) ticks to advance
+        // state for server-hash parity. Pre-fix it called _simulation.Tick with NO BeginTick and NO
+        // drain, so any event raised during a gap tick accumulated in _eventCollector and was dropped
+        // (without EventPool.Return) by the next path's BeginTick.Clear → permanent pool leak.
+        //
+        // Gap-tick events fall below both the old-event backup and the DiffRollbackEvents window (both
+        // start at firstExecutionTick), so they are intentionally dropped — but must be returned to the
+        // pool, not leaked. This test invokes the helper directly with a pool-acquired event raised on
+        // the gap tick and asserts the pool's outstanding count is unchanged (delta 0). Full-path
+        // gap-fill triggering (restoreTick < firstExecutionTick) is exercised by integration; this
+        // unit test pins the helper's pool hygiene directly.
+        [Test]
+        public void SDClient_GapTickResim_RaisedEvent_ReturnedToPool_NoLeak()
+        {
+            var raiser = new ArmedRaiserSystem
+            {
+                Armed = false,
+                Factory = () => EventPool.Get<TestSyncedEvent>(), // pool-acquired so GetOutstandingCount tracks it
+            };
+
+            var sim = new EcsSimulation(maxEntities: 16, maxRollbackTicks: 8, deltaTimeMs: 25);
+            sim.AddSystem(raiser, SystemPhase.Update);
+
+            var engine = new KlothoEngine(MakeSDClientConfig(), new SessionConfig());
+            engine.Initialize(sim, _logger);
+            InjectDispatcher(engine, _logger);
+            SetEngineState(engine, KlothoState.Running);
+
+            // Arm the raiser so the single gap Tick produces exactly one pool-acquired event, then
+            // measure the outstanding count strictly around the gap call.
+            raiser.Armed = true;
+            int before = EventPool.GetOutstandingCount();
+
+            _simulateGapTickMethod.Invoke(engine, new object[] { 0 });
+
+            raiser.Armed = false;
+
+            int after = EventPool.GetOutstandingCount();
+            Assert.AreEqual(before, after,
+                $"Gap-tick leak (E-5a): a pool-acquired event raised during SimulateGapTickWithEmptyFallback " +
+                $"must be returned to the pool (delta 0). Pre-fix the event leaked (delta +1): " +
+                $"outstanding before={before}, after={after}.");
+
+            // Drop semantics: the gap-tick event must NOT be buffered (buffering would double-dispatch
+            // against the original predicted events, since the gap range is below the diff window).
+            var eventBuffer = (EventBuffer)_eventBufferField.GetValue(engine);
+            int bufferedSynced = 0;
+            for (int t = 0; t <= 2; t++)
+            {
+                var events = eventBuffer.GetEvents(t);
+                for (int i = 0; i < events.Count; i++)
+                    if (events[i] is TestSyncedEvent) bufferedSynced++;
+            }
+            Assert.AreEqual(0, bufferedSynced,
+                "Gap-tick events are state-advance only and must be dropped, not buffered " +
+                $"(buffering would double-dispatch). Found {bufferedSynced} in the buffer.");
         }
     }
 }

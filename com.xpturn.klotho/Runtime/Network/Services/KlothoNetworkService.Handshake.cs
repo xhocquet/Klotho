@@ -323,6 +323,10 @@ namespace xpTURN.Klotho.Network
                                     promotedSyncState.GetBestSample(out promoted.LastAvgRtt, out _);
                             }
                             OnPlayerDisconnected?.Invoke(player);
+                            // Confirmed disconnect via presumed→transport promote. The
+                            // engine was already notified at the watchdog (:251, not propagated),
+                            // so this is the first point guests learn the confirmed drop.
+                            BroadcastPlayerState(playerId, PlayerStateChange.Disconnected);
                         }
                         else
                         {
@@ -337,6 +341,7 @@ namespace xpTURN.Klotho.Network
                                 OnPlayerLeft?.Invoke(player);
                                 RaisePlayerCountIfChanged(prevPlayerCount);
                                 RaiseAllPlayersReadyIfChanged(prevAllReady);
+                                BroadcastPlayerState(playerId, PlayerStateChange.Left);
                             }
                             else
                             {
@@ -354,6 +359,7 @@ namespace xpTURN.Klotho.Network
                                 _disconnectedPlayerCount++;
                                 _engine?.NotifyPlayerDisconnected(playerId);
                                 OnPlayerDisconnected?.Invoke(player);
+                                BroadcastPlayerState(playerId, PlayerStateChange.Disconnected);
                                 // Do not remove from _players — keep the slot
                             }
                         }
@@ -374,6 +380,9 @@ namespace xpTURN.Klotho.Network
             }
             _peerSyncStates.Remove(peerId);
             _peerDeviceIds.Remove(peerId);
+            // Drop the departed peer's dynamic-delay state (aggregate hygiene).
+            _reportedEffective.Remove(peerId);
+            _peerTargetBaseline.Remove(peerId);
 
             for (int i = _spectators.Count - 1; i >= 0; i--)
             {
@@ -387,10 +396,17 @@ namespace xpTURN.Klotho.Network
             if (_peerToPlayer.Count == 0 && _peerSyncStates.Count == 0
                 && _pendingPeers.Count == 0 && _disconnectedPlayerCount == 0)
             {
-                // Guest: when Playing, reconnect is started in HandleDisconnected, so do not change Phase
-                if (!IsHost && Phase == SessionPhase.Playing)
+                // During Playing the phase is owned by match end/abort logic — an empty-room
+                // reset here would silently drop a live match. Guests start reconnect in
+                // HandleDisconnected; hosts keep playing (matches the dead-transport
+                // timeout-leave behavior, where this block never runs). The
+                // timeout-leave transport cut removes the player and resets the pool entry
+                // BEFORE disconnecting the peer, so every count above is zero when the cut's
+                // disconnect event lands — previously only the pool-exhaustion immediate
+                // leave could reach here while Playing.
+                if (Phase == SessionPhase.Playing)
                 {
-                    // Skip — reconnect is handled in HandleDisconnected
+                    // Skip — see above.
                 }
                 else
                 {

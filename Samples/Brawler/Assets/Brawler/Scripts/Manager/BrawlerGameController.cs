@@ -89,6 +89,19 @@ namespace Brawler
         private IKlothoSession _session;
         private KlothoSessionFlow _flow;
         private LiteNetLibTransport _transport;
+
+#if KLOTHO_FAULT_INJECTION
+        // Per-process-unique device id for fault-injection smoke runs: stable across this process's
+        // join+reconnect (so the host's credential matching still recognizes it), but distinct
+        // between co-located instances (so they don't collide on the shared machine id).
+        private sealed class FaultInjectionDeviceIdProvider : IDeviceIdProvider
+        {
+            private static readonly string _id =
+                $"{SystemInfo.deviceUniqueIdentifier}-fi-{Guid.NewGuid():N}";
+            public string GetDeviceId() => _id;
+        }
+#endif
+
         private Camera _mainCamera;
         private IReconnectCredentialsStore _credentialsStore;
         private IKlothoModeStrategy _modeStrategy;
@@ -109,7 +122,13 @@ namespace Brawler
                 level: _logLevel,
                 filePrefix: "Client",
                 categoryName: "Client");
-            _logger?.KInformation($"Brawler logging started!");
+
+#if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
+            CommandPool.SetDiagnosticLogger(_logger);
+            EventPool.SetDiagnosticLogger(_logger);
+#endif
+
+            _logger?.KInformation($"Brawler logging started : LogLevel={_logLevel}");
         }
 
         private void Awake()
@@ -182,6 +201,13 @@ namespace Brawler
                 .WithLifecycleObserver(this)
                 .WithReplaySave(_replayPath, dumpJson: true)
                 .WithUnityDefaults()
+#if KLOTHO_FAULT_INJECTION
+                // Co-located fault-injection clients share SystemInfo.deviceUniqueIdentifier (same
+                // machine), which collides on the host's reconnect credential matching → reconnect
+                // rejected. Override with a per-process-unique id (stable across this process's
+                // join+reconnect, distinct between instances) so the reconnect smoke is meaningful.
+                .WithHandshake(Application.version, new FaultInjectionDeviceIdProvider())
+#endif
                 .WithReconnect(_credentialsStore)
                 .WithAutoPlayerConfig(() => new BrawlerPlayerConfig { SelectedCharacterClass = _brawlerSettings._characterClass })
                 .WithSpectator(() => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY))
@@ -579,7 +605,6 @@ namespace Brawler
                 xpTURN.Klotho.Diagnostics.FaultInjectionRuntime.AttachToSession(
                     session, _transport, _logger,
                     roleLabel,
-                    ct => { _ = ReconnectAsync(ct); },
                     _sessionDriver);
                 _faultInjectionHotkey?.Attach(session, _logger);
             }

@@ -11,13 +11,13 @@ using xpTURN.Klotho.Network;
 namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
-    /// P2P caller post-processing cascade lock-in (F-9 a/b/c/d).
+    /// P2P caller post-processing cascade lock-in (a/b/c/d).
     ///   (a) HandleFullStateReceived Resync matched — buffers clear + verified = tick-1
     ///   (b) HandleFullStateReceived Resync mismatched — buffers clear + mid-match desync state preserved
     ///   (c) HandleFullStateReceived unexpected drop — entry guard skips cascade
     ///   (d) ApplyP2PLateJoinFullState — buffers clear + verified = tick + StartCatchingUp
-    /// Sibling: SDFullStateCallerCascadeTests for SD (e)/(f) paths. F-8 covers
-    /// ApplyFullState internal cascade — this fixture focuses on caller-side cascade only.
+    /// Sibling: SDFullStateCallerCascadeTests for SD (e)/(f) paths. ApplyFullState internal
+    /// cascade is covered separately — this fixture focuses on caller-side cascade only.
     /// </summary>
     [TestFixture]
     public class P2PFullStateCallerCascadeTests
@@ -48,8 +48,11 @@ namespace xpTURN.Klotho.Core.Tests
         private static readonly FieldInfo _lastMatchedSyncTickField = typeof(KlothoEngine)
             .GetField("_lastMatchedSyncTick", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        private static readonly FieldInfo _consecutiveDesyncCountField = typeof(KlothoEngine)
-            .GetField("_consecutiveDesyncCount", BindingFlags.NonPublic | BindingFlags.Instance);
+        // _consecutiveDesyncCount was replaced by per-peer _desyncCountByPeer. The
+        // post-apply self-state-mismatch bridge accounts under SelfDesyncPeerKey (-1).
+        private static readonly FieldInfo _desyncCountByPeerField = typeof(KlothoEngine)
+            .GetField("_desyncCountByPeer", BindingFlags.NonPublic | BindingFlags.Instance);
+        private const int SelfDesyncPeerKey = -1;
 
         private static readonly FieldInfo _resyncRetryCountField = typeof(KlothoEngine)
             .GetField("_resyncRetryCount", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -89,7 +92,16 @@ namespace xpTURN.Klotho.Core.Tests
             => (int)_lastMatchedSyncTickField.GetValue(engine);
 
         private static int ReadConsecutiveDesyncCount(KlothoEngine engine)
-            => (int)_consecutiveDesyncCountField.GetValue(engine);
+        {
+            var dict = (Dictionary<int, int>)_desyncCountByPeerField.GetValue(engine);
+            return dict.TryGetValue(SelfDesyncPeerKey, out int v) ? v : 0;
+        }
+
+        private static void SetSelfDesyncCount(KlothoEngine engine, int count)
+        {
+            var dict = (Dictionary<int, int>)_desyncCountByPeerField.GetValue(engine);
+            dict[SelfDesyncPeerKey] = count;
+        }
 
         private static int ReadResyncRetryCount(KlothoEngine engine)
             => (int)_resyncRetryCountField.GetValue(engine);
@@ -101,12 +113,19 @@ namespace xpTURN.Klotho.Core.Tests
         private static void SetResyncState(KlothoEngine engine, int value)
             => _resyncStateField.SetValue(engine, Enum.ToObject(_resyncStateEnum, value));
 
+        private static int ReadResyncState(KlothoEngine engine)
+            => Convert.ToInt32(_resyncStateField.GetValue(engine));
+
         private static void SetExpectingFullState(KlothoEngine engine, bool value)
             => _expectingFullStateField.SetValue(engine, value);
 
         private static void PopulatePendingCommands(KlothoEngine engine, int count)
         {
+            // Clear residue first: non-ECS rollback resolves against
+            // TestSimulation's own history and succeeds — harness advancement can leave
+            // re-simulation predictions in _pendingCommands. Tests assert exact counts.
             var pending = ReadPendingCommands(engine);
+            pending.Clear();
             for (int i = 0; i < count; i++)
                 pending.Add(new EmptyCommand(playerId: 1, tick: 100 + i));
         }
@@ -179,19 +198,20 @@ namespace xpTURN.Klotho.Core.Tests
                 "Match path must emit success log");
         }
 
-        // ── (b) Resync mismatched — silent-accept cascade + mid-match desync state preserved ──
+        // ── (b) Resync mismatched — silent-accept cascade + desync escalation accounting ──
+        //    (A post-apply hash mismatch now feeds RegisterDesyncForEscalation —
+        //     the old "bridge" fired an external event and never re-entered the pipeline.)
 
         [Test]
-        public void HandleFullStateReceived_ResyncMismatched_StillClearsBuffersButPreservesDesyncState()
+        public void HandleFullStateReceived_ResyncMismatched_BelowThreshold_AccumulatesDesyncCount()
         {
             var guest = _harness.Guests[0]; // FullState 수신 측 (non-host) — corrective reset cascade 회피
 
             PopulatePendingCommands(guest.Engine, count: 5);
             SetResyncState(guest.Engine, value: 1); // Requested
 
-            // Seed mid-match desync state via reflection to verify preservation.
             _lastMatchedSyncTickField.SetValue(guest.Engine, 42);
-            _consecutiveDesyncCountField.SetValue(guest.Engine, 3);
+            SetSelfDesyncCount(guest.Engine, 1); // below threshold(3) after +1
             _resyncRetryCountField.SetValue(guest.Engine, 2);
 
             int onResyncCompletedFireCount = 0;
@@ -208,16 +228,48 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.AreEqual(applyTick - 1, guest.Engine.LastVerifiedTick,
                 "_lastVerifiedTick = tick - 1 on mismatch path too");
 
-            // Mid-match desync state preservation (silent-accept policy lock-in).
             Assert.AreEqual(42, ReadLastMatchedSyncTick(guest.Engine),
                 "Mismatch path must preserve _lastMatchedSyncTick (mid-match desync recovery)");
-            Assert.AreEqual(3, ReadConsecutiveDesyncCount(guest.Engine),
-                "Mismatch path must preserve _consecutiveDesyncCount");
+            Assert.AreEqual(2, ReadConsecutiveDesyncCount(guest.Engine),
+                "Post-apply mismatch counts toward escalation: 1 + 1 = 2 (IMP59 V1-E2)");
             Assert.AreEqual(2, ReadResyncRetryCount(guest.Engine),
-                "Mismatch path must preserve _resyncRetryCount");
+                "Below threshold — no re-request, _resyncRetryCount preserved");
+            Assert.AreEqual(0, ReadResyncState(guest.Engine),
+                "Below threshold — resync state returns to None");
 
             Assert.IsTrue(_log.Contains(KLogLevel.Error, "hash mismatch"),
                 "Mismatch must emit diagnostic error log");
+            Assert.AreEqual(0, onResyncCompletedFireCount,
+                "OnResyncCompleted must NOT fire on mismatch path");
+        }
+
+        [Test]
+        public void HandleFullStateReceived_ResyncMismatched_AtThreshold_EscalatesToRetry()
+        {
+            var guest = _harness.Guests[0];
+
+            PopulatePendingCommands(guest.Engine, count: 5);
+            SetResyncState(guest.Engine, value: 1); // Requested
+
+            _lastMatchedSyncTickField.SetValue(guest.Engine, 42);
+            SetSelfDesyncCount(guest.Engine, 2); // reaches threshold(3) after +1
+            _resyncRetryCountField.SetValue(guest.Engine, 1);
+
+            int onResyncCompletedFireCount = 0;
+            guest.Engine.OnResyncCompleted += _ => onResyncCompletedFireCount++;
+
+            const int applyTick = 60;
+            byte[] stateData = guest.Simulation.SerializeFullState();
+            long wrongHash = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
+
+            InvokeHandleFullStateReceived(guest.Engine, applyTick, stateData, wrongHash, FullStateKind.Unicast);
+
+            Assert.AreEqual(0, ReadConsecutiveDesyncCount(guest.Engine),
+                "Escalation resets the consecutive counter");
+            Assert.AreEqual(2, ReadResyncRetryCount(guest.Engine),
+                "Escalation issues a new resync request — retry count increments");
+            Assert.AreEqual(1, ReadResyncState(guest.Engine),
+                "Escalation re-enters Requested state");
             Assert.AreEqual(0, onResyncCompletedFireCount,
                 "OnResyncCompleted must NOT fire on mismatch path");
         }

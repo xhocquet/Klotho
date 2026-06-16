@@ -92,6 +92,9 @@ namespace xpTURN.Klotho.Network
             {
                 int tick = currentTick + i;
                 _commandFactory.PopulateEmpty(_emptyCommandCache, LocalPlayerId, tick);
+                // Service-internal cache pattern — relies on SendCommand serializing the instance to
+                // bytes synchronously and not pool-returning it. Interface ownership contract exception
+                // (ILockstepNetworkService.SendCommand XML doc).
                 SendCommand(_emptyCommandCache);
             }
 

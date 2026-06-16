@@ -32,7 +32,7 @@ namespace xpTURN.Klotho.Tests.Network
             // a stray negative-tick input is rerouted to FIRST_SCHEDULED_TICK (= 0) instead of rejected.
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
             collector.SetBootstrapPending(true);
 
@@ -49,7 +49,7 @@ namespace xpTURN.Klotho.Tests.Network
             // silently relabeling an already-executed tick destroys determinism. Belt-and-suspenders guard.
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
             collector.SetBootstrapPending(true);
 
@@ -66,7 +66,7 @@ namespace xpTURN.Klotho.Tests.Network
             // Steady-state path: _bootstrapPending=false → past-tick always rejected.
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
             // _bootstrapPending defaults to false
 
@@ -82,7 +82,7 @@ namespace xpTURN.Klotho.Tests.Network
             // a subsequent session reuse does not inherit stale redirect behavior (matches matrix row 4).
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
             collector.SetBootstrapPending(true);
             collector.Reset();

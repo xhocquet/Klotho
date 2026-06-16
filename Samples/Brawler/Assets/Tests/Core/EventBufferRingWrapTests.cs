@@ -100,6 +100,11 @@ namespace xpTURN.Klotho.Core.Tests
                 harness.CreateHost(2);
                 var guest = harness.AddGuest();
                 harness.StartPlaying();
+                // The throttle slows the host to 1 tick / 10 tick-times against a
+                // frozen remote (until the staleness gate expires the entry at ~50 ticks),
+                // overrunning the helper's safety limit (target * 10). Timing policy is
+                // irrelevant to this prediction/ring scenario — switch it off.
+                harness.Host.Engine.DisableTimeSync();
                 WireEventRaiserFromEngine(harness.Host);
 
                 int dispatchedCount = 0;

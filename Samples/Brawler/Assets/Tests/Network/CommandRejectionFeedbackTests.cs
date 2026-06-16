@@ -30,7 +30,7 @@ namespace xpTURN.Klotho.Tests.Network
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
 
             (int peerId, int tick, int typeId, RejectionReason reason)? captured = null;
@@ -51,7 +51,7 @@ namespace xpTURN.Klotho.Tests.Network
         {
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
 
             collector.CollectTickInputs(0); // _lastExecutedTick → 0
@@ -64,27 +64,9 @@ namespace xpTURN.Klotho.Tests.Network
             Assert.AreEqual(RejectionReason.PastTick, capturedReason);
         }
 
-        [Test]
-        public void InputCollector_ToleranceExceeded_FiresOnCommandRejected()
-        {
-            var collector = new ServerInputCollector();
-            var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(100, peerMap); // 100ms tolerance
-            collector.AddPlayer(10);
-
-            long now = 1000;
-            collector.SetTimeProvider(() => now);
-            collector.BeginTick(0, now);
-
-            now = 1200; // 200ms elapsed > 100ms tolerance
-
-            RejectionReason? capturedReason = null;
-            collector.OnCommandRejected += (_, _, _, r) => capturedReason = r;
-
-            var cmd = new EmptyCommand(10, 0);
-            Assert.IsFalse(collector.TryAcceptInput(1, 0, 10, cmd));
-            Assert.AreEqual(RejectionReason.ToleranceExceeded, capturedReason);
-        }
+        // (ToleranceExceeded rejection test removed — the reason is no longer
+        //  emitted; ReliableCommandTrackerTests keeps covering the handler branch for the
+        //  retained enum member.)
 
         [Test]
         public void InputCollector_BootstrapRedirect_DoesNotFireOnCommandRejected()
@@ -92,7 +74,7 @@ namespace xpTURN.Klotho.Tests.Network
             // Bootstrap redirect path *accepts* the input (returns true) — must NOT fire OnCommandRejected.
             var collector = new ServerInputCollector();
             var peerMap = new Dictionary<int, int> { { 1, 10 } };
-            collector.Configure(0, peerMap);
+            collector.Configure(peerMap);
             collector.AddPlayer(10);
             collector.SetBootstrapPending(true);
 

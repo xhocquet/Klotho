@@ -108,7 +108,11 @@ namespace xpTURN.Klotho.ECS
 
         public int GetNearestAvailableTick(int targetTick, int currentTick)
         {
-            int oldest = Math.Max(0, currentTick - _capacity + 1);
+            // Scan bound from the ring's actual retention state (same source as HasFrame):
+            // the oldest retained tick is _latestSavedTick - _capacity + 1. Deriving it from
+            // currentTick was off by one (latest saved is currentTick - 1 at rollback time),
+            // which excluded the oldest retained tick and killed deep-rollback clamping.
+            int oldest = Math.Max(0, _latestSavedTick - _capacity + 1);
             for (int t = targetTick; t >= oldest; t--)
             {
                 if (HasFrame(t, currentTick))
@@ -119,7 +123,9 @@ namespace xpTURN.Klotho.ECS
 
         public void GetSavedTicks(int currentTick, System.Collections.Generic.IList<int> output)
         {
-            int oldest = Math.Max(0, currentTick - _capacity + 1);
+            // Same retention-state bound as GetNearestAvailableTick — the
+            // currentTick-derived bound dropped the oldest retained tick from the list.
+            int oldest = Math.Max(0, _latestSavedTick - _capacity + 1);
             for (int t = oldest; t <= currentTick; t++)
             {
                 if (HasFrame(t, currentTick))

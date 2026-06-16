@@ -11,6 +11,12 @@ namespace xpTURN.Klotho.Network
         // 0..9 reserved for transport-level reasons.
         PeerMismatch = 0,
         PastTick = 1,
+        /// <summary>
+        /// Deprecated — no longer emitted. The effective input deadline is the
+        /// tick's execution moment, covered by <see cref="PastTick"/>. Member retained:
+        /// wire-stable byte values must never be renumbered, and handler branches /
+        /// recorded replays may still reference it.
+        /// </summary>
         ToleranceExceeded = 2,
 
         // Game-layer (application) — receiver updates game-layer state (latch clear / UI / cooldown).

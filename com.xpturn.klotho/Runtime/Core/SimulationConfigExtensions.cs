@@ -16,9 +16,37 @@ namespace xpTURN.Klotho.Core
 
         /// <summary>
         /// Returns the effective input-lead tick count, substituting <see cref="SDInputLeadTicksDefault"/> when the configured value is 0.
+        /// Clamped below <see cref="ISimulationConfig.MaxRollbackTicks"/>: the SD client's hard
+        /// prediction throttle equals MaxRollbackTicks (snapshot-ring bound), so a target lead at or
+        /// above it would park the client at the throttle before ever reaching its target.
         /// </summary>
         public static int GetEffectiveSDInputLeadTicks(this ISimulationConfig config)
-            => config.SDInputLeadTicks > 0 ? config.SDInputLeadTicks : SDInputLeadTicksDefault;
+        {
+            int lead = config.SDInputLeadTicks > 0 ? config.SDInputLeadTicks : SDInputLeadTicksDefault;
+            int max = config.MaxRollbackTicks - 1;
+            return lead < max ? lead : max;
+        }
+
+        /// <summary>
+        /// Snapshot/event ring capacity: MaxRollbackTicks + 2 headroom (one-tick prediction lead
+        /// and event-diff timing). Single source for the engine snapshot ring, the EventBuffer,
+        /// and the ECS frame ring.
+        /// </summary>
+        public static int GetSnapshotCapacity(this ISimulationConfig config)
+            => config.MaxRollbackTicks + 2;
+
+        /// <summary>
+        /// Effective sync-check interval, clamped to MaxRollbackTicks / 2: the last matched anchor
+        /// can be up to 2×interval − 1 ticks old at desync time, so 2×interval ≤ MaxRollbackTicks
+        /// must hold for the first rung-1 rollback to stay inside the rollback window.
+        /// Clamp instead of hard-throw validation: 30/50 ships in serialized assets and user
+        /// projects, and tests use degenerate 1/1 configs — a throw would break them all.
+        /// </summary>
+        public static int GetEffectiveSyncCheckInterval(this ISimulationConfig config)
+        {
+            int max = Math.Max(1, config.MaxRollbackTicks / 2);
+            return config.SyncCheckInterval < max ? config.SyncCheckInterval : max;
+        }
 
         /// <summary>
         /// Validates SimulationConfig for substantively-broken conditions; throws on violation.

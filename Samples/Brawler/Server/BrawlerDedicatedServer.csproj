@@ -8,6 +8,13 @@
     <Nullable>disable</Nullable>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <PublishReadyToRun>true</PublishReadyToRun>
+    <!-- Fault-injection diagnostics (KLOTHO_FAULT_INJECTION): OFF by default. This is the shipped
+         package server mirror, so it must not compile in the test-only fault hooks gated by
+         #if KLOTHO_FAULT_INJECTION (EmulatedRtt/latency, GC pauses, drop/desync injection, etc.).
+         To run a local fault-injection smoke (e.g. the IMP60 RTT-schedule T-F4/T-F7 reproduction),
+         prepend "KLOTHO_FAULT_INJECTION;" to DefineConstants below; revert when done. The Brawler
+         sample server (Samples/Brawler/Server/BrawlerDedicatedServer.csproj) and the Unity Standalone
+         player carry the same toggle. -->
     <DefineConstants>$(DefineConstants);</DefineConstants>
   </PropertyGroup>
 

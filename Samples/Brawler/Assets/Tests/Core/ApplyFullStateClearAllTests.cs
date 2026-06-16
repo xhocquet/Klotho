@@ -12,7 +12,7 @@ namespace xpTURN.Klotho.Core.Tests
     ///   (a) Hash matched         — ClearAll executes + watermark cascade 3 branches
     ///   (b) Hash mismatched      — ClearAll still executes (silent-accept) + emit cascade
     ///   (c) Retreat early return — ClearAll skipped + all internal state unchanged
-    /// Companion to ApplyFullStateHashGateTests (F-1 / F-1.5) — sibling fixture, hash check
+    /// Companion to ApplyFullStateHashGateTests — sibling fixture, hash check
     /// and event emission concerns covered there; this fixture focuses on the ClearAll-side
     /// observable effects (event buffer wipe, watermark reset, retreat guard).
     /// </summary>
@@ -65,8 +65,10 @@ namespace xpTURN.Klotho.Core.Tests
             _harness.Reset();
         }
 
-        private bool InvokeApplyFullState(int tick, byte[] stateData, long stateHash, ApplyReason reason)
-            => (bool)_applyFullStateMethod.Invoke(_harness.Host.Engine, new object[] { tick, stateData, stateHash, reason });
+        // ApplyFullState returns the private enum FullStateApplyResult:
+        // "Applied" / "Skipped" / "HashMismatch" — compared by name since the type is private.
+        private string InvokeApplyFullState(int tick, byte[] stateData, long stateHash, ApplyReason reason)
+            => _applyFullStateMethod.Invoke(_harness.Host.Engine, new object[] { tick, stateData, stateHash, reason }).ToString();
 
         private static EventBuffer ReadEventBuffer(KlothoEngine engine)
             => (EventBuffer)_eventBufferField.GetValue(engine);
@@ -124,9 +126,9 @@ namespace xpTURN.Klotho.Core.Tests
 
             byte[] stateData = host.Simulation.SerializeFullState();
             long matchingHash = host.Simulation.GetStateHash();
-            bool result = InvokeApplyFullState(applyTick, stateData, matchingHash, ApplyReason.LateJoin);
+            string result = InvokeApplyFullState(applyTick, stateData, matchingHash, ApplyReason.LateJoin);
 
-            Assert.IsTrue(result, "Hash matched path must return true");
+            Assert.AreEqual("Applied", result, "Hash matched path must return Applied");
             Assert.AreEqual(applyTick, host.Engine.CurrentTick, "CurrentTick must equal applyTick after restore");
             Assert.AreEqual(verifiedBefore, host.Engine.LastVerifiedTick,
                 "ApplyFullState internal must not modify _lastVerifiedTick (caller post-processing is §F-9 territory)");
@@ -168,9 +170,9 @@ namespace xpTURN.Klotho.Core.Tests
 
             byte[] stateData = host.Simulation.SerializeFullState();
             long wrongHash = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
-            bool result = InvokeApplyFullState(10, stateData, wrongHash, ApplyReason.LateJoin);
+            string result = InvokeApplyFullState(10, stateData, wrongHash, ApplyReason.LateJoin);
 
-            Assert.IsFalse(result, "Hash mismatched path must return false");
+            Assert.AreEqual("HashMismatch", result, "Hash mismatched path must return HashMismatch (state still applied)");
             Assert.AreEqual(10, host.Engine.CurrentTick, "State application still happens on mismatch (silent-accept)");
             Assert.AreEqual(verifiedBefore, host.Engine.LastVerifiedTick,
                 "ApplyFullState internal must not modify _lastVerifiedTick (mismatch path too)");
@@ -217,9 +219,10 @@ namespace xpTURN.Klotho.Core.Tests
 
             int mismatchCountBefore = ReadResyncHashMismatchCount(host.Engine);
 
-            bool result = InvokeApplyFullState(applyTick, BitConverter.GetBytes(0L), 0L, reason);
+            string result = InvokeApplyFullState(applyTick, BitConverter.GetBytes(0L), 0L, reason);
 
-            Assert.IsTrue(result, "Retreat guard early-return path returns true");
+            Assert.AreEqual("Skipped", result,
+                "Retreat guard early-return must report Skipped — no longer disguised as success (IMP59 V1-E1)");
             Assert.AreEqual(currentTickBefore, host.Engine.CurrentTick,
                 "Early-return path must not modify CurrentTick");
             Assert.AreEqual(verifiedBefore, host.Engine.LastVerifiedTick,
@@ -241,6 +244,71 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.AreEqual(0, desyncDetectedFireCount, "OnDesyncDetected must not fire on early-return");
             Assert.AreEqual(0, ReadResyncHashMismatchCount(host.Engine) - mismatchCountBefore,
                 "_resyncHashMismatchCount must be unchanged on early-return");
+        }
+
+        // ── ApplyFullState must not wipe the process-global EventPool ──
+
+        // A pool-rentable test event (parameterless ctor for EventPool.Get<T>).
+        private sealed class TestPoolEvent : SimulationEvent
+        {
+            public override int EventTypeId => 9_999_810;
+        }
+
+        // EventPool is a process-global static pool shared across engines. Another
+        // engine's pool-rented events ("B") are tracked in EventPool._outstanding. Pre-fix, engine A's
+        // ApplyFullState called EventPool.ClearAll() and wiped that tracking, so B's later legitimate
+        // Return was flagged as an ownership violation (KError + pool-insert skip = leak). With the
+        // fix (ClearAll removed) B's _outstanding survives and its Return is clean.
+        [Test]
+        public void ApplyFullState_DoesNotWipeOtherEnginesPooledEvents_IMP60_30_E3()
+        {
+            var host = _harness.Host;
+
+            // "Engine B" holdings — pool-rented, tracked in the shared EventPool._outstanding.
+            const int held = 4;
+            var rented = new TestPoolEvent[held];
+            for (int i = 0; i < held; i++)
+                rented[i] = EventPool.Get<TestPoolEvent>();
+
+            // Engine A applies a full state (matched hash → Applied path runs the event-buffer clear).
+            byte[] stateData = host.Simulation.SerializeFullState();
+            long matchingHash = host.Simulation.GetStateHash();
+            string result = InvokeApplyFullState(50, stateData, matchingHash, ApplyReason.LateJoin);
+            Assert.AreEqual("Applied", result, "Setup: matched-hash LateJoin must run the apply (event-buffer clear) path");
+
+            // Spy only B's post-apply Returns for ownership violations.
+            EventPool.SetDiagnosticLogger(_log);
+            _log.Clear();
+            for (int i = 0; i < held; i++)
+                EventPool.Return(rented[i]);
+            EventPool.SetDiagnosticLogger(null);
+
+            Assert.IsFalse(_log.Contains(KLogLevel.Error, "[EventPool] Return called on non-pool"),
+                "E-3: ApplyFullState must not wipe another engine's EventPool._outstanding — " +
+                "B's legitimate Return must not be flagged as an ownership violation (pre-fix: KError + leak).");
+        }
+
+        // removing EventPool.ClearAll() must not surface a masked leak. Repeated
+        // ApplyFullState with no ticks between must not accumulate outstanding pool instances
+        // (the per-apply _eventBuffer.ClearAll() returns this engine's buffered events each time).
+        [Test]
+        public void ApplyFullState_RepeatedApply_NoOutstandingGrowth_IMP60_30_E3()
+        {
+            var host = _harness.Host;
+            byte[] stateData = host.Simulation.SerializeFullState();
+            long hash = host.Simulation.GetStateHash();
+
+            // Warm up one apply, then measure the outstanding delta across repeated applies.
+            InvokeApplyFullState(50, stateData, hash, ApplyReason.LateJoin);
+            int baseline = EventPool.GetOutstandingCount();
+
+            for (int i = 0; i < 20; i++)
+                InvokeApplyFullState(50, stateData, hash, ApplyReason.LateJoin);
+
+            int delta = EventPool.GetOutstandingCount() - baseline;
+            Assert.LessOrEqual(delta, 0,
+                $"E-3 NoLeak: repeated ApplyFullState must not accumulate outstanding pool events (delta={delta}). " +
+                "A positive delta would indicate a pre-existing leak that EventPool.ClearAll() was masking.");
         }
     }
 }

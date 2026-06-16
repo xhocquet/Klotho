@@ -8,7 +8,38 @@ using xpTURN.Klotho.Serialization;
 namespace xpTURN.Klotho.Input
 {
     /// <summary>
-    /// Input buffer implementation
+    /// Storage outcome of <see cref="InputBuffer.AddCommandChecked"/>.
+    /// Ownership contract: the buffer owns accepted instances (Stored/Replaced) and returns
+    /// them to CommandPool only in cleanup (Clear/ClearBefore/ClearAfter); it never returns a
+    /// rejected arrival — disposal of Dropped* instances (CommandPool.Return or GC) is the
+    /// caller's responsibility, and AlreadyStored arrivals are buffer property that callers
+    /// must NOT return.
+    /// </summary>
+    public enum CommandStoreResult
+    {
+        /// <summary>Accepted into an empty slot — the buffer takes ownership.</summary>
+        Stored,
+        /// <summary>Accepted, replacing a different stored instance (overwrite path). The buffer
+        /// owns the new instance; the displaced one is left to GC (ownership unprovable).</summary>
+        Replaced,
+        /// <summary>The arriving instance IS the stored instance (ReferenceEquals — e.g. a
+        /// double-dispatched arrival re-entering AddCommand). Buffer property: never Return.</summary>
+        AlreadyStored,
+        /// <summary>Dropped: a different instance already occupies (tick, playerId) and overwrite
+        /// was not requested (keep-first).</summary>
+        DroppedDuplicate,
+        /// <summary>Dropped: (tick, playerId) is sealed by a range-fill placeholder.</summary>
+        DroppedSealed,
+        /// <summary>Dropped: the command was null.</summary>
+        DroppedNull,
+    }
+
+    /// <summary>
+    /// Input buffer implementation.
+    /// Ownership rule: the buffer owns only the instances it accepted and returns
+    /// them to CommandPool exclusively in cleanup (Clear/ClearBefore/ClearAfter). It never
+    /// returns a rejected arrival — callers that can prove sole ownership handle it via the
+    /// AddCommandChecked result; result-discarding paths (void AddCommand) leave rejects to GC.
     /// </summary>
     public class InputBuffer : IInputBuffer
     {
@@ -57,10 +88,29 @@ namespace xpTURN.Klotho.Input
         public int OldestTick => _oldestTick == int.MaxValue ? 0 : _oldestTick;
         public int NewestTick => _newestTick == int.MinValue ? 0 : _newestTick;
 
-        public void AddCommand(ICommand command)
+        public void AddCommand(ICommand command) => AddCommandChecked(command, overwriteExisting: false);
+
+        /// <summary>
+        /// SD client verified-batch variant: the verified command must replace the stored
+        /// predicted/issued local input even when content differs — e.g. the server substituted
+        /// EmptyCommand for a late input; keeping the local real input would diverge the resim
+        /// from the server's verified state. The displaced instance is intentionally NOT returned
+        /// to the pool: its ownership cannot be proven (aliasing), and a GC'd leak is safer than
+        /// a poisoned pool. Result-discarding wrapper — callers that manage
+        /// instance ownership use AddCommandChecked.
+        /// </summary>
+        public void AddCommandOverwrite(ICommand command) => AddCommandChecked(command, overwriteExisting: true);
+
+        /// <summary>
+        /// Adds a command and reports the storage outcome — see <see cref="CommandStoreResult"/>
+        /// for the ownership contract. The buffer never returns a rejected arrival to
+        /// CommandPool; checked callers dispose Dropped* instances themselves when they can prove
+        /// sole ownership, and must never Return an AlreadyStored arrival (buffer property).
+        /// </summary>
+        public CommandStoreResult AddCommandChecked(ICommand command, bool overwriteExisting = false)
         {
             if (command == null)
-                return;
+                return CommandStoreResult.DroppedNull;
 
 #if DEBUG || DEVELOPMENT_BUILD
             if (_resimulating)
@@ -75,7 +125,7 @@ namespace xpTURN.Klotho.Input
             if (command is ISystemCommand)
             {
                 AddSystemCommand(command);
-                return;
+                return CommandStoreResult.Stored;
             }
 
             int tick = command.Tick;
@@ -83,12 +133,24 @@ namespace xpTURN.Klotho.Input
 
             // Seal guard: if this (tick, playerId) was filled with an empty placeholder by the
             // range fill path and chain has already advanced past it, silently drop the late
-            // real command to keep InputBuffer and simulation state consistent.
+            // real command to keep InputBuffer and simulation state consistent. No pool return
+            // here: disposal moved to checked callers that own the arrival.
             long sealKey = ((long)tick << 32) | (uint)playerId;
             if (_sealedTickPlayer.Contains(sealKey))
             {
-                CommandPool.Return(command);
-                return;
+#if DEBUG || DEVELOPMENT_BUILD
+                // The arrival must not be the stored placeholder itself — a caller returning
+                // DroppedSealed rejects to the pool would hand back a buffer-owned instance.
+                // ClearAfter removes commands but keeps seals, so an empty slot is legitimate;
+                // compare only when an entry exists.
+                if (_commands.TryGetValue(tick, out var sealedTickCommands)
+                    && sealedTickCommands.TryGetValue(playerId, out var sealedStored))
+                {
+                    System.Diagnostics.Debug.Assert(!ReferenceEquals(sealedStored, command),
+                        "DroppedSealed arrival is the buffer-owned placeholder — caller-side Return would poison the pool.");
+                }
+#endif
+                return CommandStoreResult.DroppedSealed;
             }
 
             if (!_commands.TryGetValue(tick, out var tickCommands))
@@ -98,9 +160,38 @@ namespace xpTURN.Klotho.Input
                 _commands[tick] = tickCommands;
             }
 
+            if (tickCommands.TryGetValue(playerId, out var existing))
+            {
+                // Same arrival instance re-entering AddCommand (double-dispatch insurance — the
+                // engine's Initialize re-entry guard removes the known vector).
+                // Checked regardless of overwrite mode: the instance is buffer property in both,
+                // and reporting it as a Dropped* would let a checked caller Return it — the
+                // exact pool poisoning this closed.
+                if (ReferenceEquals(existing, command))
+                    return CommandStoreResult.AlreadyStored;
+
+                if (overwriteExisting)
+                {
+                    // Verified overwrite: the displaced instance is left to GC (see
+                    // AddCommandOverwrite — ownership unprovable).
+                    tickCommands[playerId] = command;
+                    UpdateBounds(tick);
+                    return CommandStoreResult.Replaced;
+                }
+
+                // Keep-first on duplicate (tick, playerId): receive-path duplicates are reliable
+                // resends with identical content, so keep-first and last-wins are semantically
+                // equal — but the stored instance may be aliased (replay record, diff caches),
+                // making last-wins an instance swap under live references. Dropped
+                // without a buffer-side pool return; checked callers may Return it when they can
+                // prove sole ownership of the arrival.
+                return CommandStoreResult.DroppedDuplicate;
+            }
+
             tickCommands[playerId] = command;
 
             UpdateBounds(tick);
+            return CommandStoreResult.Stored;
         }
 
         // Mark (tick, playerId) as sealed by an empty range-fill placeholder. Any subsequent
@@ -111,6 +202,17 @@ namespace xpTURN.Klotho.Input
         {
             long sealKey = ((long)tick << 32) | (uint)playerId;
             _sealedTickPlayer.Add(sealKey);
+        }
+
+        // Remove a seal previously set by SealEmpty. The range-fill authority
+        // uses this to restore its own empty placeholder after a rollback (ClearAfter) cleared
+        // the command but kept the seal — without it the slot is a sealed-but-no-command hole
+        // that no path can repopulate (AddCommand, even overwrite, is rejected by the seal guard),
+        // freezing the chain. Pairs with SealEmpty; not for clearing seals on live real input.
+        public void Unseal(int tick, int playerId)
+        {
+            long sealKey = ((long)tick << 32) | (uint)playerId;
+            _sealedTickPlayer.Remove(sealKey);
         }
 
         // Returns true if (tick, playerId) was previously sealed via SealEmpty and not yet
@@ -247,14 +349,21 @@ namespace xpTURN.Klotho.Input
 #endif
 
         /// <summary>
-        /// Checks whether commands from all players have arrived
+        /// Checks whether commands from all active players have arrived. Membership check, not a
+        /// count: leftover future-tick commands from departed players must not satisfy the quorum.
+        /// GC-free — iterates the caller-owned id list against ContainsKey.
         /// </summary>
-        public bool HasAllCommands(int tick, int playerCount)
+        public bool HasAllCommands(int tick, List<int> playerIds)
         {
             if (!_commands.TryGetValue(tick, out var tickCommands))
                 return false;
 
-            return tickCommands.Count >= playerCount;
+            for (int i = 0; i < playerIds.Count; i++)
+            {
+                if (!tickCommands.ContainsKey(playerIds[i]))
+                    return false;
+            }
+            return true;
         }
 
         public void ClearBefore(int tick)
@@ -510,15 +619,11 @@ namespace xpTURN.Klotho.Input
             return empty;
         }
 
-        public void UpdateAccuracy(ICommand predicted, ICommand actual)
+        public void UpdateAccuracy(bool wasCorrect)
         {
             _totalPredictions++;
-
-            // Simple comparison: considered accurate if same type
-            if (predicted.CommandTypeId == actual.CommandTypeId)
-            {
+            if (wasCorrect)
                 _correctPredictions++;
-            }
         }
     }
 }

@@ -29,6 +29,12 @@ namespace xpTURN.Klotho.Network.Tests
 
             public void Initialize() { CurrentTick = 0; }
             public void Tick(List<ICommand> commands) { CurrentTick++; TickCallCount++; }
+            // Engine per-tick save trigger — no-op: this mock keeps no restorable history.
+            public void SaveSnapshot() { }
+
+            // No internal snapshot history — engine rollback resolve always fails (escalation paths under test).
+            public int GetNearestRollbackTick(int targetTick) => -1;
+
             public void Rollback(int targetTick) { CurrentTick = targetTick; }
             public long GetStateHash() => StateHash;
             public void Reset() { CurrentTick = 0; TickCallCount = 0; }
@@ -138,6 +144,7 @@ namespace xpTURN.Klotho.Network.Tests
             public FrameRef PredictedPreviousFrame => FrameRef.None(FrameKind.PredictedPrevious);
             public FrameRef PreviousUpdatePredictedFrame => FrameRef.None(FrameKind.PreviousUpdatePredicted);
             public RenderClockState RenderClock => default;
+            public float PredictionAccuracy => 1.0f;
             public bool TryGetFrameAtTick(int tick, out xpTURN.Klotho.ECS.Frame frame) { frame = null; return false; }
 
             public event Action<int> OnTickExecuted;
@@ -151,6 +158,7 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<int, SimulationEvent> OnEventConfirmed;
             public event Action<int, SimulationEvent> OnEventCanceled;
             public event Action<int, SimulationEvent> OnSyncedEvent;
+            public event Action<int, SimulationEvent, SyncedDivergenceKind> OnSyncedEventDivergence;
             public event Action<int> OnResyncCompleted;
             public event Action OnResyncFailed;
             public event Action<AbortReason> OnMatchAborted;
@@ -170,6 +178,7 @@ namespace xpTURN.Klotho.Network.Tests
             public IReliableCommandHandle IssueOnce(System.Func<ICommand> commandFactory, ReliabilityPolicy policy = null) => null;
             public void ApplyExtraDelay(int delay, ExtraDelaySource source) { }
             public void EscalateExtraDelay(int step, int max) { }
+            public void DeEscalateExtraDelay(int step) { }
             public void Stop() { }
             public void AbortMatch(AbortReason reason) { }
 
@@ -227,6 +236,7 @@ namespace xpTURN.Klotho.Network.Tests
                 OnEventConfirmed?.Invoke(0, null);
                 OnEventCanceled?.Invoke(0, null);
                 OnSyncedEvent?.Invoke(0, null);
+                OnSyncedEventDivergence?.Invoke(0, null, default);
                 OnResyncCompleted?.Invoke(0);
                 OnResyncFailed?.Invoke();
                 OnCommandRejected?.Invoke(0, 0, default);
@@ -270,7 +280,10 @@ namespace xpTURN.Klotho.Network.Tests
             public event Action<IPlayerInfo> OnPlayerLeft;
             public event Action<ICommand> OnCommandReceived;
             public event Action<int, int, long, long> OnDesyncDetected;
-            public event Action<int, int> OnFrameAdvantageReceived;
+            public event Action<int, int, bool> OnSyncHashCompared;
+            public event Action<int, int> OnResyncFailureReported;
+            public event Action<int> OnMatchAbortReceived;
+            public event Action<int, int, int> OnFrameAdvantageReceived;
             public event Action<int> OnLocalPlayerIdAssigned;
             public event Action<int, int> OnFullStateRequested;
             public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
@@ -292,10 +305,15 @@ namespace xpTURN.Klotho.Network.Tests
             public void SendCommand(ICommand command) { }
             public void RequestCommandsForTick(int tick) { }
             public void SendSyncHash(int tick, long hash) { }
+            public void InvalidateLocalSyncHashes(int fromTick) { }
+            public void InvalidateSyncHashes(int fromTick) { }
+            public void SendResyncFailureReport(int tick, ResyncFailureReason reason, long localHash, long remoteHash) { }
+            public void BroadcastMatchAbort(byte reason) { }
             public void Update() { }
             public void FlushSendQueue() { }
             public void ClearOldData(int tick) { }
             public void SetLocalTick(int tick) { }
+            public void SetLocalAdvantage(int advantage) { }
             public void SendFullStateRequest(int currentTick) { }
             public void SendFullStateResponse(int peerId, int tick, byte[] stateData, long stateHash) { }
             public void BroadcastFullState(int tick, byte[] stateData, long stateHash, FullStateKind kind = FullStateKind.Unicast) { }
@@ -310,7 +328,10 @@ namespace xpTURN.Klotho.Network.Tests
                 OnPlayerJoined?.Invoke(null);
                 OnPlayerLeft?.Invoke(null);
                 OnDesyncDetected?.Invoke(0, 0, 0, 0);
-                OnFrameAdvantageReceived?.Invoke(0, 0);
+                OnFrameAdvantageReceived?.Invoke(0, 0, 0);
+                OnSyncHashCompared?.Invoke(0, 0, false);
+                OnResyncFailureReported?.Invoke(0, 0);
+                OnMatchAbortReceived?.Invoke(0);
                 OnLocalPlayerIdAssigned?.Invoke(0);
                 OnFullStateRequested?.Invoke(0, 0);
                 OnFullStateReceived?.Invoke(0, null, 0, FullStateKind.Unicast);
@@ -326,7 +347,7 @@ namespace xpTURN.Klotho.Network.Tests
         private MessageSerializer _messageSerializer;
 
         IKLogger _logger = null;
-        
+
         [OneTimeSetUp]
         public void OneTimeSetUp()
         {
@@ -737,7 +758,7 @@ namespace xpTURN.Klotho.Network.Tests
             hostTransport.Listen("localhost", 7777, 4);
             hostService.CreateRoom("test", 4);
 
-            // Force host to Playing phase so a spectator joining receives GameStartMessage [F-4]
+            // Force host to Playing phase so a spectator joining receives GameStartMessage
             typeof(KlothoNetworkService)
                 .GetField("_phase", BindingFlags.NonPublic | BindingFlags.Instance)
                 .SetValue(hostService, SessionPhase.Playing);
@@ -793,7 +814,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #15: Spectator connection during Playing → _phase unchanged [F-1]
+        /// #15: Spectator connection during Playing → _phase unchanged
         /// </summary>
         [Test]
         public void SpectatorJoin_DuringPlaying_PhaseUnchanged()
@@ -822,7 +843,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #16: Spectator connection during Countdown → _phase unchanged [F-1]
+        /// #16: Spectator connection during Countdown → _phase unchanged
         /// </summary>
         [Test]
         public void SpectatorJoin_DuringCountdown_PhaseUnchanged()
@@ -855,7 +876,7 @@ namespace xpTURN.Klotho.Network.Tests
         #region Tests 17–21: KlothoEngine
 
         /// <summary>
-        /// #17: After rollback and resim, OnVerifiedInputBatchReady must not fire twice at the same batch boundary [F-2]
+        /// #17: After rollback and resim, OnVerifiedInputBatchReady must not fire twice at the same batch boundary
         /// Advances 8 ticks → batch fires exactly 4 times (SPECTATOR_INPUT_INTERVAL=2: ticks 1,3,5,7), not more.
         /// </summary>
         [Test]
@@ -886,7 +907,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #18: On ExecuteRollback, _lastBatchedTick is updated only via Math.Min — no advance [F-2]
+        /// #18: On ExecuteRollback, _lastBatchedTick is updated only via Math.Min — no advance
         /// </summary>
         [Test]
         public void BatchReady_LastBatchedTick_MinOnRollback()
@@ -927,7 +948,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #19: No NPE when Initialize(simulation, logger) is called [F-3]
+        /// #19: No NPE when Initialize(simulation, logger) is called
         /// </summary>
         [Test]
         public void SpectatorInitialize_NoNPE()
@@ -940,7 +961,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #20: After StartSpectator() CurrentTick=0, LastVerifiedTick=-1, State=Running [F-3]
+        /// #20: After StartSpectator() CurrentTick=0, LastVerifiedTick=-1, State=Running
         /// </summary>
         [Test]
         public void StartSpectator_DirectInit()
@@ -958,7 +979,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #21: InputDelay EmptyCommand pre-fill is not run in spectator mode [F-3]
+        /// #21: InputDelay EmptyCommand pre-fill is not run in spectator mode
         /// Verify: no pre-filled command at tick 0 → HasAllCommands(0) = false → tick does not advance
         /// </summary>
         [Test]
@@ -986,7 +1007,7 @@ namespace xpTURN.Klotho.Network.Tests
         #region Tests 22–32: Late Join / Message Processing
 
         /// <summary>
-        /// #22: On SpectatorAccept reception → _state stays Synchronizing, engine.StartSpectator() not called [F-4]
+        /// #22: On SpectatorAccept reception → _state stays Synchronizing, engine.StartSpectator() not called
         /// </summary>
         [Test]
         public void SpectatorJoin_BeforeGameStart_StaysInSynchronizing()
@@ -1003,7 +1024,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #23: On GameStartMessage reception → OnSpectatorStarted fires with _pendingStartInfo, _state = Watching [F-4]
+        /// #23: On GameStartMessage reception → OnSpectatorStarted fires with _pendingStartInfo, _state = Watching
         /// </summary>
         [Test]
         public void GameStartMessage_Received_TransitionsToWatching()
@@ -1022,7 +1043,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #24: At game start, GameStartMessage is sent to spectators whose LastSentTick == -1 [F-4]
+        /// #24: At game start, GameStartMessage is sent to spectators whose LastSentTick == -1
         /// </summary>
         [Test]
         public void HostBroadcast_GameStart_IncludesPreJoinSpectators()
@@ -1068,7 +1089,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #25: ProcessSpectatorInput → fires with Action&lt;int, ICommand&gt; signature [F-5]
+        /// #25: ProcessSpectatorInput → fires with Action&lt;int, ICommand&gt; signature
         /// </summary>
         [Test]
         public void OnConfirmedInputReceived_SingleCommandSignature()
@@ -1097,7 +1118,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #26: TrySerializeVerifiedInputRange not called when SpectatorCount == 0 [F-6]
+        /// #26: TrySerializeVerifiedInputRange not called when SpectatorCount == 0
         /// </summary>
         [Test]
         public void SerializeVerifiedInput_SkippedWhenNoSpectators()
@@ -1121,7 +1142,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #27: fromTick &lt; OldestTick → TrySerializeVerifiedInputRange returns false [F-7]
+        /// #27: fromTick &lt; OldestTick → TrySerializeVerifiedInputRange returns false
         /// </summary>
         [Test]
         public void TrySerializeVerifiedInput_ReturnsFalse_WhenTickOutOfRange()
@@ -1140,7 +1161,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #28: GetNearestSnapshotTickWithinBuffer → snapshot.Tick >= OldestTick + SyncCheckInterval [F-7]
+        /// #28: GetNearestSnapshotTickWithinBuffer → snapshot.Tick >= OldestTick + SyncCheckInterval
         /// Returns -1 if no suitable snapshot exists.
         /// </summary>
         [Test]
@@ -1174,7 +1195,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #29: When the second SpectatorInputMessage arrives, the first queued item's data is preserved [N-3]
+        /// #29: When the second SpectatorInputMessage arrives, the first queued item's data is preserved
         /// MessageSerializer._messageCache reuses a single instance per type → SpectatorService must copy the data
         /// </summary>
         [Test]
@@ -1221,7 +1242,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #30: Catchup message arrives before FullStateResponse → buffered during Synchronizing → applied normally after drain [N-5 Case A]
+        /// #30: Catchup message arrives before FullStateResponse → buffered during Synchronizing → applied normally after drain (Case A)
         /// </summary>
         [Test]
         public void LateJoin_CatchupBeforeFullState_Buffered_ThenDrained()
@@ -1262,7 +1283,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #31: Catchup message arrives after FullStateResponse → processed directly in Watching state [N-5 Case B]
+        /// #31: Catchup message arrives after FullStateResponse → processed directly in Watching state (Case B)
         /// </summary>
         [Test]
         public void LateJoin_CatchupAfterFullState_DirectProcess()
@@ -1295,7 +1316,7 @@ namespace xpTURN.Klotho.Network.Tests
         }
 
         /// <summary>
-        /// #32: Partial overlap batch → InputBuffer.AddCommand harmlessly handles past ticks [N-5 edge case]
+        /// #32: Partial overlap batch → InputBuffer.AddCommand harmlessly handles past ticks (edge case)
         /// startTick=3, tickCount=4 (ticks 3..6), snapshotTick=5: 3+4-1=6 > 5 → passes filter → all 4 ticks dispatched
         /// </summary>
         [Test]

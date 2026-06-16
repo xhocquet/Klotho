@@ -59,6 +59,7 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int ReactiveMax;
         [KlothoOrder] public int ServerPushGraceTicks;
         [KlothoOrder] public int ReactiveEscalateCooldownTicks;
+        [KlothoOrder] public int ReactiveDeEscalateStableTicks;
         [KlothoOrder] public int RollbackBurstCount;
         [KlothoOrder] public int RollbackWindowTicks;
         [KlothoOrder] public int EventDispatchWarnMs;
@@ -112,6 +113,7 @@ namespace xpTURN.Klotho.Network
             ReactiveMax = config.ReactiveMax;
             ServerPushGraceTicks = config.ServerPushGraceTicks;
             ReactiveEscalateCooldownTicks = config.ReactiveEscalateCooldownTicks;
+            ReactiveDeEscalateStableTicks = config.ReactiveDeEscalateStableTicks;
             RollbackBurstCount = config.RollbackBurstCount;
             RollbackWindowTicks = config.RollbackWindowTicks;
             EventDispatchWarnMs = config.EventDispatchWarnMs;
@@ -150,6 +152,7 @@ namespace xpTURN.Klotho.Network
                 ReactiveMax = ReactiveMax,
                 ServerPushGraceTicks = ServerPushGraceTicks,
                 ReactiveEscalateCooldownTicks = ReactiveEscalateCooldownTicks,
+                ReactiveDeEscalateStableTicks = ReactiveDeEscalateStableTicks,
                 RollbackBurstCount = RollbackBurstCount,
                 RollbackWindowTicks = RollbackWindowTicks,
                 EventDispatchWarnMs = EventDispatchWarnMs,

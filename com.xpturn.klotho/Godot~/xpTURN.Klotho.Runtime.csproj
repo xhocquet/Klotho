@@ -6,7 +6,8 @@
 
   Single unified compilation of the engine-agnostic core for a Godot net8 host.
   Mirrors the dedicated-server source-linking pattern, with two differences:
-    - Excludes only Unity/** (Json/** is included — the Godot client uses DataAsset JSON serialization).
+    - Compiles the entire ..\Runtime tree with no exclusions (the Unity adapter now lives outside
+      ..\Runtime; Json/** is included — the Godot client uses DataAsset JSON serialization).
     - EnableDynamicLoading=true (assembly is loaded on Godot editor hot-reload / export).
 
   Core sources are source-linked from ..\Runtime only (single source of truth, no forked copies).
@@ -40,10 +41,9 @@
   </ItemGroup>
 
   <!-- Runtime tree (engine-agnostic core + Logging + Gameplay + LiteNetLib transport + ThirdParty + DataAsset.Json).
-       Excludes: Unity/** (engine-coupled). Json/** is INCLUDED (client-side DataAsset JSON). -->
+       No exclusions — the Unity adapter now lives outside ..\Runtime. Json/** is INCLUDED (client-side DataAsset JSON). -->
   <ItemGroup>
     <Compile Include="$(KlothoRuntimeRoot)\**\*.cs"
-             Exclude="$(KlothoRuntimeRoot)\Unity\**\*.cs"
              Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

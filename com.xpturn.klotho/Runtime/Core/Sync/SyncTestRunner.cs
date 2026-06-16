@@ -23,6 +23,13 @@ namespace xpTURN.Klotho.Core
         // Statistics
         private int _totalChecks;
         private int _failedChecks;
+        private int _consecutiveFails;
+
+        // Post-forward state side buffer: the ring stores pre-tick snapshots only,
+        // so a failed check needs this copy to restore the forward branch — otherwise the
+        // diverged resim branch stays live and the tool injects the desync it should detect.
+        private Frame _forwardFrame;
+        private byte[] _forwardSystemState;
 
         public float SuccessRate => _totalChecks > 0
             ? (float)(_totalChecks - _failedChecks) / _totalChecks
@@ -31,6 +38,10 @@ namespace xpTURN.Klotho.Core
         public int FailedChecks => _failedChecks;
 
         public event Action<SyncTestFailure> OnSyncError;
+        public event Action OnSyncTestDisabled;
+
+        /// <inheritdoc />
+        public int ConsecutiveFailLimit { get; set; } = 3;
 
         // Cache (GC prevention)
         private readonly List<ICommand> _resimCommandsCache = new List<ICommand>();
@@ -59,6 +70,9 @@ namespace xpTURN.Klotho.Core
 
             _totalChecks = 0;
             _failedChecks = 0;
+            _consecutiveFails = 0;
+
+            _forwardFrame = new Frame(_simulation.Frame.MaxEntities, null);
         }
 
         // Tracks the tick from which validation should resume after an external rollback
@@ -111,6 +125,9 @@ namespace xpTURN.Klotho.Core
             if (_resumeFromTick >= 0 && tick >= _resumeFromTick)
                 _resumeFromTick = -1;
 
+            // -- 5.5. Keep the post-forward state (restored on check failure) --
+            _simulation.CaptureStateTo(_forwardFrame, ref _forwardSystemState);
+
             // -- 6. Rollback validation --
             int rollbackTo = tick - _checkDistance;
 
@@ -157,7 +174,17 @@ namespace xpTURN.Klotho.Core
                     EntityCount = _simulation.Frame.Entities.Count
                 };
 
+                // Restore the forward branch — the diverged resim branch must not stay live.
+                // Ring slots in [rollbackTo, tick] still hold resim-branch
+                // pre-tick saves; skip checks until forward saves repopulate the window so the
+                // next comparison does not roll back into polluted history.
+                _simulation.RestoreStateFrom(_forwardFrame, _forwardSystemState);
+                _resumeFromTick = tick + _checkDistance + 1;
+
+                _consecutiveFails++;
                 OnSyncError?.Invoke(failure);
+                if (_consecutiveFails >= ConsecutiveFailLimit)
+                    OnSyncTestDisabled?.Invoke();
 
                 return new SyncTestResult
                 {
@@ -171,6 +198,7 @@ namespace xpTURN.Klotho.Core
             }
 
             // 6d. Validation passed
+            _consecutiveFails = 0;
             return new SyncTestResult
             {
                 Status = SyncTestStatus.Pass,

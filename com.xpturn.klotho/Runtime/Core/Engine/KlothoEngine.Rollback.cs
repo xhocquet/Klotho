@@ -3,7 +3,6 @@ using xpTURN.Klotho.Logging;
 using System.Collections.Generic;
 
 using xpTURN.Klotho.Input;
-using xpTURN.Klotho.State;
 
 #if KLOTHO_FAULT_INJECTION
 using xpTURN.Klotho.Diagnostics;
@@ -47,7 +46,7 @@ namespace xpTURN.Klotho.Core
     {
         // Engine-layer snapshots for rollback (separate from simulation Frame).
         // MAX_PREDICTION + 2
-        private int SnapshotCapacity => _simConfig.MaxRollbackTicks + 2;
+        private int SnapshotCapacity => _simConfig.GetSnapshotCapacity();
         private EngineStateSnapshot[] _engineSnapshots;
 
         // Deferred rollback merging.
@@ -56,7 +55,9 @@ namespace xpTURN.Klotho.Core
 
         internal struct EngineStateSnapshot
         {
-            public int[] ActivePlayerIds;
+            // Slot-owned, reused in place across ring wraps.
+            // null = never-written slot — restore paths rely on this sentinel.
+            public List<int> ActivePlayerIds;
         }
 
 #if DEBUG
@@ -94,6 +95,24 @@ namespace xpTURN.Klotho.Core
         }
 
         /// <summary>
+        /// Rollback request that falls back to FullStateResync when the target is below
+        /// the snapshot-ring window. Used by the catchup reconcile path (resyncOnDeepRollback): a
+        /// late mispredicted input whose tick is older than CurrentTick - MaxRollbackTicks cannot be
+        /// corrected by ResolveRollbackTick's clamp (it clamps to the window edge and re-sims from
+        /// there, leaving the mispredicted gap tick frozen — clamp-without-resync). Resync instead.
+        /// The normal arrival path passes allowResync=false to keep the existing clamp behavior.
+        /// </summary>
+        private void RequestRollbackOrResync(int targetTick, bool allowResync)
+        {
+            if (allowResync && targetTick < CurrentTick - _simConfig.MaxRollbackTicks)
+            {
+                RequestFullStateResync();
+                return;
+            }
+            RequestRollback(targetTick);
+        }
+
+        /// <summary>
         /// Flushes pending rollback requests (called at frame end).
         /// </summary>
         private void FlushPendingRollback()
@@ -119,12 +138,9 @@ namespace xpTURN.Klotho.Core
             if (targetTick >= CurrentTick)
                 return;
 
-            // Resolve snapshot tick (ECS / non-ECS branch).
-            int resolvedTick;
-            if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
-                resolvedTick = ResolveRollbackTick_Ecs(ecsSim, ref targetTick);
-            else
-                resolvedTick = ResolveRollbackTick_Default(ref targetTick);
+            // Resolve the snapshot tick through the simulation's own history:
+            // simulations own their rollback snapshots, the engine only queries availability.
+            int resolvedTick = ResolveRollbackTick(ref targetTick);
 
             if (resolvedTick < 0)
                 return;
@@ -146,6 +162,21 @@ namespace xpTURN.Klotho.Core
             // Clear pending predictions (actual commands in InputBuffer are preserved during rollback).
             _pendingCommands.Clear();
 
+            // Invalidate local sync hashes in the rolled-back range — re-simulation may change
+            // them when inputs changed (e.g. presumed-drop empty fills replaced by late real
+            // commands). Re-simulation and chain re-advance recompute and re-send them.
+            for (int t = resolvedTick; t < CurrentTick; t++)
+            {
+                _localHashes.Remove(t);
+                _deferredHashSendTicks.Remove(t);
+            }
+            _networkService?.InvalidateLocalSyncHashes(resolvedTick);
+
+            // The host's serialized FullState cache keys only on CurrentTick, which
+            // rollback+resim leaves unchanged while the same-tick state bytes may differ. Invalidate
+            // so the next unicast serve / corrective reset re-serializes the rolled-back state.
+            _cachedFullStateTick = -1;
+
             // Save previous predicted events in the rolled-back tick range (for cancel/confirm comparison).
             _rollbackOldEventsCache.Clear();
             for (int t = resolvedTick; t < CurrentTick; t++)
@@ -156,56 +187,82 @@ namespace xpTURN.Klotho.Core
                 _eventBuffer.ClearTick(t, returnToPool: false);
             }
 
-            // Re-simulation with event collection.
-#if DEBUG || DEVELOPMENT_BUILD
-            _inputBuffer.SetResimulating(true);
-#endif
-            int resimTick = resolvedTick;
-            while (resimTick < CurrentTick)
+            // Re-simulation with event collection. Stage covers the whole post-rollback window
+            // — resim loop, chain re-advance, and event diff — matching the SD batch path, which
+            // wraps ProcessVerifiedBatchCore (resim + promotion dispatch + diff) entirely, so
+            // ILockstepEngine.IsResimulation is mode-agnostic for side-effect suppression.
+            Stage = SimulationStage.Resimulate;
+            try
             {
-                SaveSnapshot(resimTick);
-
-                // Collect actual commands + predict for missing players.
-                _tickCommandsCache.Clear();
-                var received = _inputBuffer.GetCommandList(resimTick);
-                for (int i = 0; i < received.Count; i++)
-                    _tickCommandsCache.Add(received[i]);
-
-                for (int pi = 0; pi < _activePlayerIds.Count; pi++)
+#if DEBUG || DEVELOPMENT_BUILD
+                _inputBuffer.SetResimulating(true);
+#endif
+                int resimTick = resolvedTick;
+                while (resimTick < CurrentTick)
                 {
-                    int playerId = _activePlayerIds[pi];
-                    if (!_inputBuffer.HasCommandForTick(resimTick, playerId))
+                    SaveSnapshot(resimTick);
+
+                    // Collect actual commands + predict for missing players.
+                    _tickCommandsCache.Clear();
+                    var received = _inputBuffer.GetCommandList(resimTick);
+                    for (int i = 0; i < received.Count; i++)
+                        _tickCommandsCache.Add(received[i]);
+
+                    for (int pi = 0; pi < _activePlayerIds.Count; pi++)
                     {
-                        GetPreviousCommands(playerId, PREDICTION_HISTORY_COUNT, resimTick);
-                        var predicted = _inputPredictor.PredictInput(playerId, resimTick, _previousCommandsCache);
-                        _tickCommandsCache.Add(predicted);
-                        _pendingCommands.Add(predicted);
+                        int playerId = _activePlayerIds[pi];
+                        if (!_inputBuffer.HasCommandForTick(resimTick, playerId))
+                        {
+                            // Empty-predict confirmed-disconnected peers so the resim does
+                            // not re-create a repeat-last pending that the host's empty fill would
+                            // mismatch into a cascade rollback. Same branch as the main path.
+                            var predicted = PredictInputOrEmpty(playerId, resimTick, resimTick);
+                            _tickCommandsCache.Add(predicted);
+                            _pendingCommands.Add(predicted);
+                        }
                     }
+
+                    _eventCollector.BeginTick(resimTick);
+                    _tickCommandsCache.Sort(s_commandComparer);
+                    _simulation.Tick(_tickCommandsCache);
+                    for (int ei = 0; ei < _eventCollector.Count; ei++)
+                        _eventBuffer.AddEvent(resimTick, _eventCollector.Collected[ei]);
+
+                    // Recompute the stashed sync hash for re-simulated check ticks (invalidated
+                    // above); the chain re-advance performs the deferred send.
+                    if (_networkService != null && resimTick % _simConfig.GetEffectiveSyncCheckInterval() == 0)
+                    {
+                        _localHashes[resimTick] = _simulation.GetStateHash();
+                        _deferredHashSendTicks.Add(resimTick);
+                    }
+
+                    resimTick++;
                 }
 
-                _eventCollector.BeginTick(resimTick);
-                _tickCommandsCache.Sort(s_commandComparer);
-                _simulation.Tick(_tickCommandsCache);
-                for (int ei = 0; ei < _eventCollector.Count; ei++)
-                    _eventBuffer.AddEvent(resimTick, _eventCollector.Collected[ei]);
-
-                resimTick++;
-            }
-
 #if DEBUG || DEVELOPMENT_BUILD
-            _inputBuffer.SetResimulating(false);
+                _inputBuffer.SetResimulating(false);
 #endif
 
-            // Advance verified chain after re-simulation.
-            TryAdvanceVerifiedChain();
+                // Pre-rollback dispatched-Synced boundary: captured before the chain
+                // re-advance raises the watermark, so re-advance dispatches above it are not misread
+                // as divergences by the diff below.
+                int dispatchedSyncedMark = _syncedDispatchHighWaterMark;
 
-            // Compare old vs new events: cancel old, dispatch new events.
-            DiffRollbackEvents(resolvedTick);
+                // Advance verified chain after re-simulation.
+                TryAdvanceVerifiedChain();
 
-            // Return old events to the pool after comparison.
-            for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
-                EventPool.Return(_rollbackOldEventsCache[i]);
-            _rollbackOldEventsCache.Clear();
+                // Compare old vs new events: cancel old, dispatch new events.
+                DiffRollbackEvents(resolvedTick, dispatchedSyncedMark);
+
+                // Return old events to the pool after comparison.
+                for (int i = 0; i < _rollbackOldEventsCache.Count; i++)
+                    EventPool.Return(_rollbackOldEventsCache[i]);
+                _rollbackOldEventsCache.Clear();
+            }
+            finally
+            {
+                Stage = SimulationStage.Forward;
+            }
 
             _logger?.KWarning($"[KlothoEngine][Rollback] complete: {resolvedTick} -> {CurrentTick}");
             OnRollbackExecuted?.Invoke(fromTick, resolvedTick);
@@ -228,23 +285,23 @@ namespace xpTURN.Klotho.Core
 
         private void SaveSnapshot(int tick)
         {
-            _engineSnapshots[tick % _engineSnapshots.Length] = new EngineStateSnapshot
-            {
-                ActivePlayerIds = _activePlayerIds.ToArray(),
-            };
+            // Reuse the slot-owned list instead of allocating per tick.
+            // Do not reassign the struct — that would orphan the reused list.
+            ref var slot = ref _engineSnapshots[tick % _engineSnapshots.Length];
+            slot.ActivePlayerIds ??= new List<int>(_activePlayerIds.Count);
+            slot.ActivePlayerIds.Clear();
+            slot.ActivePlayerIds.AddRange(_activePlayerIds);
 
-            if (_simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSim)
-            {
-                ecsSim.SaveSnapshot();
-            }
+            _simulation.SaveSnapshot();
         }
 
-        private int ResolveRollbackTick_Ecs(xpTURN.Klotho.ECS.EcsSimulation ecsSim, ref int targetTick)
+        private int ResolveRollbackTick(ref int targetTick)
         {
+            // Deep request — clamp to the window edge and take the nearest restorable tick.
             if (targetTick < CurrentTick - _simConfig.MaxRollbackTicks)
             {
                 int clampedTick = CurrentTick - _simConfig.MaxRollbackTicks;
-                int nearestTick = ecsSim.GetNearestSnapshotTick(clampedTick);
+                int nearestTick = _simulation.GetNearestRollbackTick(clampedTick);
                 if (nearestTick < 0)
                 {
                     _logger?.KError($"[KlothoEngine][Rollback] failed ({RollbackFailureReason.TooFar}): target={targetTick}, current={CurrentTick}");
@@ -259,53 +316,8 @@ namespace xpTURN.Klotho.Core
                 targetTick = nearestTick;
             }
 
-            int resolvedTick = ecsSim.HasSnapshot(targetTick)
-                ? targetTick
-                : ecsSim.GetNearestSnapshotTick(targetTick);
+            int resolvedTick = _simulation.GetNearestRollbackTick(targetTick);
             if (resolvedTick < 0)
-            {
-                _logger?.KError($"[KlothoEngine][Rollback] failed ({RollbackFailureReason.NoSnapshot}): target={targetTick}, current={CurrentTick}");
-                OnRollbackFailed?.Invoke(targetTick, RollbackFailureReason.NoSnapshot);
-#if DEBUG
-                _rollbackStats.FailedRollbacks++;
-#endif
-            }
-            return resolvedTick;
-        }
-
-        private int ResolveRollbackTick_Default(ref int targetTick)
-        {
-            if (targetTick < CurrentTick - _simConfig.MaxRollbackTicks)
-            {
-                int clampedTick = CurrentTick - _simConfig.MaxRollbackTicks;
-                IStateSnapshot fallbackSnapshot = _snapshotManager.GetSnapshot(clampedTick);
-                if (fallbackSnapshot == null && _snapshotManager is RingSnapshotManager ringMgr)
-                    fallbackSnapshot = ringMgr.GetNearestSnapshot(clampedTick);
-
-                if (fallbackSnapshot != null)
-                {
-                    _logger?.KWarning($"[KlothoEngine][Rollback] clamped: requested={targetTick}, clamped={fallbackSnapshot.Tick}, current={CurrentTick}");
-                    targetTick = fallbackSnapshot.Tick;
-                }
-                else
-                {
-                    _logger?.KError($"[KlothoEngine][Rollback] failed ({RollbackFailureReason.TooFar}): target={targetTick}, current={CurrentTick}");
-                    OnRollbackFailed?.Invoke(targetTick, RollbackFailureReason.TooFar);
-                    RequestFullStateResync();
-#if DEBUG
-                    _rollbackStats.FailedRollbacks++;
-#endif
-                    return -1;
-                }
-            }
-
-            var snapshot = _snapshotManager.GetSnapshot(targetTick);
-            if (snapshot == null)
-            {
-                if (_snapshotManager is RingSnapshotManager ringManager)
-                    snapshot = ringManager.GetNearestSnapshot(targetTick);
-            }
-            if (snapshot == null)
             {
                 _logger?.KError($"[KlothoEngine][Rollback] failed ({RollbackFailureReason.NoSnapshot}): target={targetTick}, current={CurrentTick}");
                 OnRollbackFailed?.Invoke(targetTick, RollbackFailureReason.NoSnapshot);
@@ -314,7 +326,7 @@ namespace xpTURN.Klotho.Core
 #endif
                 return -1;
             }
-            return snapshot.Tick;
+            return resolvedTick;
         }
     }
 }

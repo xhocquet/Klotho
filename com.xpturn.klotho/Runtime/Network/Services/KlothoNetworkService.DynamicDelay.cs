@@ -10,8 +10,13 @@ namespace xpTURN.Klotho.Network
         // ── Mid-match dynamic InputDelay push ─────────────────────
 
         private readonly Dictionary<int, PlayerRttSmoother> _rttSmoothers = new Dictionary<int, PlayerRttSmoother>();
-        private readonly Dictionary<int, int> _lastPushedExtraDelay = new Dictionary<int, int>();
-        private readonly Dictionary<int, long> _lastPushTimeMs = new Dictionary<int, long>();
+        // Per-peer target baseline = min(max(rttBased, reportedEffective), clampMax).
+        // The broadcast value is the MAX over all peers (P2P uses one common delay = worst-case peer,
+        // not the last-measured peer). _reportedEffective absorbs each guest's reactive report.
+        private readonly Dictionary<int, int> _peerTargetBaseline = new Dictionary<int, int>();
+        private readonly Dictionary<int, int> _reportedEffective = new Dictionary<int, int>();
+        private int _lastBroadcastBaseline = 0;
+        private long _lastBroadcastTimeMs = 0;
 
         private const int EXTRA_DELAY_PUSH_THRESHOLD_UP = 2;
         private const int EXTRA_DELAY_PUSH_THRESHOLD_DOWN = 4;
@@ -27,27 +32,35 @@ namespace xpTURN.Klotho.Network
             // emits [KlothoNetworkService][{tag}] + [Metrics][{tag}] on every call and is reserved
             // for 1-shot seed events (LateJoin/Reconnect/Sync). Mid-match push calls the static
             // calculator directly so only real push events are logged.
-            var (newExtraDelay, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
+            var (rttBased, _, _, _, _) = RecommendedExtraDelayCalculator.Compute(
                 smoothedRtt,
                 _simConfig.TickIntervalMs,
                 _sessionConfig.LateJoinDelaySafety,
                 _sessionConfig.RttSanityMaxMs,
                 _simConfig.MaxRollbackTicks);
 
-            int prev = _lastPushedExtraDelay.TryGetValue(peerId, out var p) ? p : 0;
-            int diff = newExtraDelay - prev;
+            // Absorb this peer's reported reactive correction and record its target baseline.
+            int clampMax = _simConfig.MaxRollbackTicks / 2;
+            int reported = _reportedEffective.TryGetValue(peerId, out var r) ? r : 0;
+            _peerTargetBaseline[peerId] = System.Math.Min(System.Math.Max(rttBased, reported), clampMax);
+
+            // Broadcast the MAX over all peers — a low-RTT peer must not drag the common delay down.
+            int aggregate = 0;
+            foreach (var kv in _peerTargetBaseline)
+                if (kv.Value > aggregate) aggregate = kv.Value;
+
+            int diff = aggregate - _lastBroadcastBaseline;
             int absDiff = diff >= 0 ? diff : -diff;
             int threshold = (diff > 0) ? EXTRA_DELAY_PUSH_THRESHOLD_UP : EXTRA_DELAY_PUSH_THRESHOLD_DOWN;
             if (absDiff < threshold) return;
 
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (_lastPushTimeMs.TryGetValue(peerId, out var last) && now - last < MIN_PUSH_INTERVAL_MS)
-                return;
+            if (now - _lastBroadcastTimeMs < MIN_PUSH_INTERVAL_MS) return;
 
             string reason = diff > 0 ? "threshold_up" : "threshold_down";
-            PushExtraDelayUpdate(peerId, playerId, newExtraDelay, smoothedRtt, prev, reason);
-            _lastPushedExtraDelay[peerId] = newExtraDelay;
-            _lastPushTimeMs[peerId] = now;
+            PushExtraDelayUpdate(peerId, playerId, aggregate, smoothedRtt, _lastBroadcastBaseline, reason);
+            _lastBroadcastBaseline = aggregate;
+            _lastBroadcastTimeMs = now;
         }
 
         private void PushExtraDelayUpdate(int peerId, int playerId, int extraDelay, int avgRttMs, int prevDelay, string reason)

@@ -8,10 +8,16 @@
     { "atSec": 30.0, "rttMs": 200 },
     { "atSec": 45.0, "rttMs": 200 }
   ],
-  "ServerGcPauseMs": 0,
-  "ServerGcPauseAtTick": -1,
+  
+  "EmulatedDisconnectSchedule": [],
+
   "DropSpawnCommandPlayerIds": [],
   "SuppressBootstrapAckPlayerIds": [],
   "ForceSpawnRetryPlayerIds": [],
-  "ForceTickOffsetDelta": 0
+  "ServerGcPauseMs": 0,
+  "ServerGcPauseAtTick": -1,
+  "ForceTickOffsetDelta": 0,
+
+  "ForceClientDesyncAtTick": -1,
+  "ForceClientDesyncPlayerIds": []
 }
