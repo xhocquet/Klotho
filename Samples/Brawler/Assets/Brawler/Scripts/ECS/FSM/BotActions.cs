@@ -59,7 +59,7 @@ namespace Brawler
         readonly BotBehaviorAsset     _behavior;
         readonly SkillConfigAsset[][] _skills;
 
-        readonly UseSkillCommand _skillCmd = new UseSkillCommand();
+        readonly PlayerInputCommand _skillCmd = new PlayerInputCommand();
 
         public SkillUpdateAction(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets, SkillConfigAsset[][] skills)
         {
@@ -108,8 +108,11 @@ namespace Brawler
             if (aimDir == FPVector2.Zero)
                 aimDir = new FPVector2(FP64.Sin(selfT.Rotation), FP64.Cos(selfT.Rotation));
 
+            // Skill-only input: no HAS_MOVE_BIT (so HandleMove is skipped — velocity preserved).
+            byte buttons = PlayerInputCommand.HAS_SKILL_BIT;
+            if (slot == 1) buttons |= PlayerInputCommand.SKILL_SLOT_BIT;
             _skillCmd.PlayerId     = character.PlayerId;
-            _skillCmd.SkillSlot    = slot;
+            _skillCmd.Buttons      = buttons;
             _skillCmd.AimDirection = aimDir;
             context.CommandSystem.OnCommand(ref context.Frame, _skillCmd);
         }

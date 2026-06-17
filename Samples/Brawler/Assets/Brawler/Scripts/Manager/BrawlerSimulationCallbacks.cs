@@ -108,9 +108,10 @@ namespace Brawler
                 // the outstanding spawn cmd's target slot (single cmd per (tick, playerId)).
                 if (_spawnHandle != null && !_spawnHandle.WouldCollideAt(tick))
                 {
-                    var emptyMove = CommandPool.Get<MoveInputCommand>();
-                    emptyMove.PlayerId = playerId;
-                    sender.Send(emptyMove);
+                    var emptyInput = CommandPool.Get<PlayerInputCommand>();
+                    emptyInput.PlayerId = playerId;
+                    emptyInput.Buttons  = 0;   // no movement/action intent; dispatch is a no-op until the character exists
+                    sender.Send(emptyInput);
                 }
                 return;
             }
@@ -123,33 +124,29 @@ namespace Brawler
                 _spawnHandle = null;
             }
 
-            // Move command (InputCommand sets Tick to CurrentTick+InputDelay)
-            var moveCmd = CommandPool.Get<MoveInputCommand>();
-            moveCmd.PlayerId       = playerId;
-            moveCmd.HorizontalAxis = _input.H;
-            moveCmd.VerticalAxis   = _input.V;
-            moveCmd.JumpPressed    = _input.Jump;
-            moveCmd.JumpHeld       = _input.JumpHeld;
-            sender.Send(moveCmd);
+            // Single unified per-tick input (InputCommand sets Tick to CurrentTick+InputDelay). Move +
+            // jump + attack + skill packed into one (tick, playerId) slot. Attack and skill are NOT
+            // mutually exclusive — both fire if pressed the same tick.
+            bool useSkill = _input.SkillSlot >= 0;
 
-            // Attack command
-            if (_input.Attack)
-            {
-                var attackCmd = CommandPool.Get<AttackCommand>();
-                attackCmd.PlayerId     = playerId;
-                attackCmd.AimDirection = GetNearestEnemyDirection(playerId) ?? _input.AimDirection;
-                sender.Send(attackCmd);
-            }
+            byte buttons = PlayerInputCommand.HAS_MOVE_BIT;   // human always carries movement intent (neutral = stop)
+            if (_input.Jump)             buttons |= PlayerInputCommand.JUMP_PRESSED_BIT;
+            if (_input.JumpHeld)         buttons |= PlayerInputCommand.JUMP_HELD_BIT;
+            if (_input.Attack)           buttons |= PlayerInputCommand.ATTACK_BIT;
+            if (useSkill)              { buttons |= PlayerInputCommand.HAS_SKILL_BIT;
+                                         if (_input.SkillSlot == 1) buttons |= PlayerInputCommand.SKILL_SLOT_BIT; }
 
-            // Skill command
-            if (_input.SkillSlot >= 0)
-            {
-                var skillCmd = CommandPool.Get<UseSkillCommand>();
-                skillCmd.PlayerId     = playerId;
-                skillCmd.SkillSlot    = _input.SkillSlot;
-                skillCmd.AimDirection = GetNearestEnemyDirection(playerId) ?? _input.AimDirection;
-                sender.Send(skillCmd);
-            }
+            var cmd = CommandPool.Get<PlayerInputCommand>();
+            cmd.PlayerId       = playerId;
+            cmd.HorizontalAxis = _input.H;
+            cmd.VerticalAxis   = _input.V;
+            cmd.Buttons        = buttons;
+            // Set every serialized field each send — pooled instances reuse stale data fields. Aim is
+            // serialized unconditionally, so default it to zero when there is no attack/skill.
+            cmd.AimDirection   = (_input.Attack || useSkill)
+                               ? (GetNearestEnemyDirection(playerId) ?? _input.AimDirection)
+                               : FPVector2.Zero;
+            sender.Send(cmd);
 
             // Consume event-style input (send only once)
             _input.ConsumeOneShot();

@@ -13,11 +13,11 @@ namespace Brawler
     enum HitEffectType { HitReaction, Push }
 
     /// <summary>
-    /// ICommandSystem implementation. Handles 4 commands.
-    /// - MoveInputCommand : XZ velocity setting + jump Y velocity
-    /// - AttackCommand    : Hit handling within melee range
-    /// - UseSkillCommand  : Skill branching per character class
+    /// ICommandSystem implementation.
+    /// - PlayerInputCommand : unified per-tick input — HandleMove (XZ velocity + jump),
+    ///   HandleAttack (melee knockback), HandleSkill (per-class branching) by Buttons bits
     /// - SpawnCharacterCommand : Create character entity
+    /// - StopCommand : zero XZ velocity (pause)
     /// </summary>
     public class PlatformerCommandSystem : ICommandSystem, IInitSystem, ISyncEventSystem
     {
@@ -64,14 +64,17 @@ namespace Brawler
         {
             switch (command)
             {
-                case MoveInputCommand move:
-                    HandleMove(ref frame, move);
-                    break;
-                case AttackCommand attack:
-                    HandleAttack(ref frame, attack);
-                    break;
-                case UseSkillCommand skill:
-                    HandleSkill(ref frame, skill);
+                case PlayerInputCommand input:
+                    // Single per-tick input: move/jump, then attack, then skill (order is load-bearing —
+                    // HandleMove checks ActionLock before HandleAttack/HandleSkill set it). HandleMove only
+                    // when the command carries movement intent (HasMove) so a skill/attack-only command
+                    // does not zero the velocity. Attack and skill may both fire in the same tick.
+                    if (input.HasMove)
+                        HandleMove(ref frame, input);
+                    if (input.Attack)
+                        HandleAttack(ref frame, input);
+                    if (input.HasSkill)
+                        HandleSkill(ref frame, input);
                     break;
                 case SpawnCharacterCommand spawn:
                     HandleSpawn(ref frame, spawn);
@@ -106,9 +109,9 @@ namespace Brawler
         }
 
         // ────────────────────────────────────────────
-        // MoveInputCommand: XZ velocity setting + jump
+        // HandleMove: XZ velocity setting + jump
         // ────────────────────────────────────────────
-        void HandleMove(ref Frame frame, MoveInputCommand cmd)
+        void HandleMove(ref Frame frame, PlayerInputCommand cmd)
         {
             if (!TryFindCharacter(ref frame, cmd.PlayerId, out var entity)) return;
 
@@ -149,9 +152,9 @@ namespace Brawler
         }
 
         // ────────────────────────────────────────────
-        // AttackCommand: Apply knockback to enemies within melee range
+        // HandleAttack: Apply knockback to enemies within melee range
         // ────────────────────────────────────────────
-        void HandleAttack(ref Frame frame, AttackCommand cmd)
+        void HandleAttack(ref Frame frame, PlayerInputCommand cmd)
         {
             if (!TryFindCharacter(ref frame, cmd.PlayerId, out var attacker)) return;
 
@@ -202,9 +205,9 @@ namespace Brawler
         }
 
         // ────────────────────────────────────────────
-        // UseSkillCommand: Branch per class
+        // HandleSkill: Branch per class
         // ────────────────────────────────────────────
-        void HandleSkill(ref Frame frame, UseSkillCommand cmd)
+        void HandleSkill(ref Frame frame, PlayerInputCommand cmd)
         {
             if (!TryFindCharacter(ref frame, cmd.PlayerId, out var caster)) return;
 
@@ -254,7 +257,7 @@ namespace Brawler
         }
 
         // Warrior — Skill0: Melee circular smash / Skill1: Charge dash
-        FPVector2? SkillWarrior(ref Frame frame, EntityRef caster, UseSkillCommand cmd, FPVector2 origin, FPVector2 aimDir)
+        FPVector2? SkillWarrior(ref Frame frame, EntityRef caster, PlayerInputCommand cmd, FPVector2 origin, FPVector2 aimDir)
         {
             if (cmd.SkillSlot == 0)
             {
@@ -276,7 +279,7 @@ namespace Brawler
         }
 
         // Mage — Skill0: (projectile planned, currently ranged impact) / Skill1: Teleport
-        FPVector2? SkillMage(ref Frame frame, EntityRef caster, UseSkillCommand cmd, FPVector2 origin, FPVector2 aimDir)
+        FPVector2? SkillMage(ref Frame frame, EntityRef caster, PlayerInputCommand cmd, FPVector2 origin, FPVector2 aimDir)
         {
             if (cmd.SkillSlot == 0)
             {
@@ -320,7 +323,7 @@ namespace Brawler
         }
 
         // Rogue — Skill0: Short-range dash+strike / Skill1: Thrown dagger (ranged linear hit)
-        FPVector2? SkillRogue(ref Frame frame, EntityRef caster, UseSkillCommand cmd, FPVector2 origin, FPVector2 aimDir)
+        FPVector2? SkillRogue(ref Frame frame, EntityRef caster, PlayerInputCommand cmd, FPVector2 origin, FPVector2 aimDir)
         {
             if (cmd.SkillSlot == 0)
             {
@@ -364,7 +367,7 @@ namespace Brawler
         }
 
         // Knight — Skill0: Shield reflect (absorb hit events) / Skill1: Ground slam
-        FPVector2? SkillKnight(ref Frame frame, EntityRef caster, UseSkillCommand cmd, FPVector2 origin)
+        FPVector2? SkillKnight(ref Frame frame, EntityRef caster, PlayerInputCommand cmd, FPVector2 origin)
         {
             if (cmd.SkillSlot == 0)
             {

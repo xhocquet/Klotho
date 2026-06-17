@@ -607,6 +607,9 @@ namespace xpTURN.Klotho.Input
                 if (predicted is Core.CommandBase cmdBase)
                 {
                     cmdBase.Tick = tick;
+                    // Repeat only the held/continuous portion; clear one-shot intent (attack/skill/jump
+                    // edge) so prediction does not re-fire it every predicted tick. No-op by default.
+                    cmdBase.ClearOneShotForPrediction();
                 }
 
                 return predicted;

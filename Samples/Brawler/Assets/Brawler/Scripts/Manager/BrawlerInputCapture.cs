@@ -9,12 +9,12 @@ namespace Brawler
     /// <summary>
     /// Brawler keyboard/mouse input capture
     ///
-    /// Input mapping:
-    ///   WASD         → MoveInputCommand (XZ movement)
-    ///   Space        → MoveInputCommand (JumpPressed)
-    ///   Left Click   → AttackCommand (mouse direction)
-    ///   Q            → UseSkillCommand (slot 0)
-    ///   E            → UseSkillCommand (slot 1)
+    /// Input mapping (all packed into a single PlayerInputCommand per tick):
+    ///   WASD         → HorizontalAxis/VerticalAxis (XZ movement)
+    ///   Space        → JUMP_PRESSED_BIT
+    ///   Left Click   → ATTACK_BIT (mouse direction)
+    ///   Q            → HAS_SKILL_BIT (slot 0)
+    ///   E            → HAS_SKILL_BIT + SKILL_SLOT_BIT (slot 1)
     /// </summary>
     public class BrawlerInputCapture : IDisposable
     {

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.1] - 2026-06-17
+
+### Multi-room dedicated server — straggler lifecycle thread safety
+
+- **Straggler state-machine concurrency fixes** — three races in the multi-room server's straggler handling, surfacing only under `MaxRooms >= 2` load. A per-cycle barrier was stored under every ready room id and then waited/disposed twice (`ObjectDisposedException` → process abort) — it is now a single shared instance disposed exactly once. A timeout marked *all* ready rooms as stragglers, including ones that finished in budget (tick stalls, inflated counts that could force-close healthy rooms) — only rooms that didn't complete this cycle are marked now. And teardown could tear down a room whose worker tick was still running — guarded so a straggler is never collected mid-update.
+- **`EndRequested` cross-thread publication fence** — the room's end-request timestamp is written by the worker thread (match-end/abort) and read by the main thread (join validation) without a publication fence, so the reader could see a stale/torn value. Split into a volatile bool gate plus its backing fields, written gate-last / read gate-first, so the companion fields are always visible; the public property and callers are unchanged.
+
+### Input command model
+
+- **Unified per-tick input command (`PlayerInputCommand`)** — the keep-first regression meant a move command claimed each `(tick, playerId)` slot, so a same-tick attack or skill was silently dropped as a duplicate. Move, attack, and skill are now folded into one per-tick command (move axis + a button bitmask + aim/skill-slot), so a single tick can carry movement *and* an action. A prediction hook clears one-shot bits (jump/attack/skill) on repeat so only movement repeats during prediction; humans and bots both emit the unified command, and the three legacy command types were removed.
+
+### Build & packaging hygiene
+
+- **Brawler server fixture-copy glob fix** — a pre-existing path glob for the Brawler server's `Data` test fixtures copied to the wrong location; corrected.
+
 ## [0.3.0] - 2026-06-16
 
 ### Repository layout

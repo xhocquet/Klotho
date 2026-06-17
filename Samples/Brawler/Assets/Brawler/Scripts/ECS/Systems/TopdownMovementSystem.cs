@@ -9,7 +9,7 @@ namespace Brawler
 {
     /// <summary>
     /// Every tick: apply gravity -> integrate position -> clamp on landing -> change direction.
-    /// XZ velocity is set by PlatformerCommandSystem(ICommandSystem) when receiving MoveInputCommand.
+    /// XZ velocity is set by PlatformerCommandSystem(ICommandSystem) when receiving PlayerInputCommand.
     /// </summary>
     public class TopdownMovementSystem : ISystem
     {

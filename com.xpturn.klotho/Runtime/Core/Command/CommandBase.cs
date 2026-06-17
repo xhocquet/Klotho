@@ -17,6 +17,15 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public virtual bool IsContinuousInput => false;
 
+        /// <summary>
+        /// Called on a predicted clone right after its Tick is assigned (prediction repeats the last
+        /// <see cref="IsContinuousInput"/> command). Continuous commands that also carry one-shot
+        /// intent (edge presses, attack/skill triggers) override this to clear those fields so the
+        /// prediction repeats only the held/continuous portion and does not re-fire one-shots every
+        /// predicted tick. Default is a no-op.
+        /// </summary>
+        public virtual void ClearOneShotForPrediction() { }
+
         protected CommandBase()
         {
         }

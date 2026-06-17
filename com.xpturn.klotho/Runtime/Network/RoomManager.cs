@@ -202,6 +202,22 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
+        /// Clears IsStraggler for straggler rooms whose ThreadPool Update has completed
+        /// (UpdateComplete set by the worker). Invoked every cycle on the main thread of ServerLoop,
+        /// before the Draining/Disposing transitions so a just-completed straggler can be processed
+        /// in the same cycle. StragglerCount is intentionally preserved (cumulative; see D-1).
+        /// </summary>
+        public void RecoverCompletedStragglers()
+        {
+            for (int i = 0; i < _rooms.Length; i++)
+            {
+                var room = _rooms[i];
+                if (room != null && room.IsStraggler && room.UpdateComplete)
+                    room.IsStraggler = false;
+            }
+        }
+
+        /// <summary>
         /// Cleans up rooms in the Disposing state and transitions them to Empty.
         /// Invoked every cycle on the main thread of ServerLoop.
         /// </summary>
@@ -211,6 +227,11 @@ namespace xpTURN.Klotho.Network
             {
                 var room = _rooms[i];
                 if (room == null || room.State != RoomState.Disposing)
+                    continue;
+
+                // Straggler's ThreadPool Update may still be running — defer teardown until it is
+                // recovered (IsStraggler cleared once UpdateComplete). Avoids Dispose racing the worker.
+                if (room.IsStraggler)
                     continue;
 
                 long lifetimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - room.CreatedAtMs;
@@ -260,6 +281,10 @@ namespace xpTURN.Klotho.Network
                 if (room == null || room.State != RoomState.Draining)
                     continue;
 
+                // Straggler's ThreadPool Update may still be running — defer Engine.Stop until recovered.
+                if (room.IsStraggler)
+                    continue;
+
                 // From Draining: Engine.Stop + transition to Disposing
                 room.Engine.Stop();
                 room.State = RoomState.Disposing;
@@ -282,19 +307,25 @@ namespace xpTURN.Klotho.Network
                 if (room == null || room.State == RoomState.Empty)
                     continue;
 
-                // Skip the broadcast for straggler rooms — their threads may still be running
-                if (!room.IsStraggler)
+                // Skip the entire teardown for straggler rooms — their ThreadPool Update may still be
+                // running and LeaveRoom/Unregister/State writes would race it. The process is exiting
+                // (GracefulShutdown → Disconnect, with the hard-timeout thread as backstop), and the
+                // shared transport's Disconnect tears down all peers regardless.
+                if (room.IsStraggler)
                 {
-                    try
-                    {
-                        using var msg = serializer.SerializePooled(shutdownMsg);
-                        room.Transport.Broadcast(msg.Data, msg.Length, DeliveryMethod.Reliable);
-                        room.Engine.Stop();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.KError($"[RoomManager] Room {room.RoomId} shutdown broadcast failed: {ex.Message}");
-                    }
+                    _logger?.KWarning($"[RoomManager] Room {room.RoomId} still running at shutdown — skipping teardown");
+                    continue;
+                }
+
+                try
+                {
+                    using var msg = serializer.SerializePooled(shutdownMsg);
+                    room.Transport.Broadcast(msg.Data, msg.Length, DeliveryMethod.Reliable);
+                    room.Engine.Stop();
+                }
+                catch (Exception ex)
+                {
+                    _logger?.KError($"[RoomManager] Room {room.RoomId} shutdown broadcast failed: {ex.Message}");
                 }
 
                 room.NetworkService.LeaveRoom();

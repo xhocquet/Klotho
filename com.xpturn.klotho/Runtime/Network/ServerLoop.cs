@@ -33,8 +33,10 @@ namespace xpTURN.Klotho.Network
         private readonly Stopwatch _stopwatch = new Stopwatch();
         private readonly List<Room> _readyRooms = new List<Room>();
 
-        // Straggler completion tracking: roomId → CountdownEvent for that cycle
-        private readonly Dictionary<int, CountdownEvent> _stragglerCountdowns = new Dictionary<int, CountdownEvent>();
+        // Per-cycle barrier CountdownEvents pending disposal. Each instance appears exactly once;
+        // disposed only when its count reaches 0 (Wait(0)==true) so a late worker Signal cannot
+        // hit a disposed instance. Straggler marking/recovery uses Room.UpdateComplete, not this list.
+        private readonly List<CountdownEvent> _pendingCountdowns = new List<CountdownEvent>();
 
         // Drift measurement
         private long _startTimeMs;
@@ -85,82 +87,7 @@ namespace xpTURN.Klotho.Network
                     lastUpdateTime = cycleStart;
                     float elapsedSec = elapsed / 1000f;
 
-                    // ── Stage 0: previous cycle cleanup ──
-                    RecoverStragglers();
-                    _roomManager.TransitionDrainingRooms();
-                    _roomManager.CleanupDisposingRooms();
-
-                    // ── Stage 1: receive (Main Thread) ──
-                    _transport.PollEvents();
-
-                    // Cleanup unrouted peer timeouts (1-second interval)
-                    if (cycleStart - _lastUnroutedCleanupMs >= UNROUTED_CLEANUP_INTERVAL_MS)
-                    {
-                        _router.CleanupUnroutedPeers();
-                        _lastUnroutedCleanupMs = cycleStart;
-                    }
-
-                    long pollEnd = _stopwatch.ElapsedMilliseconds;
-                    long pollElapsed = pollEnd - cycleStart;
-
-                    // ── Stage 2: room updates (ThreadPool) ──
-                    _roomManager.GetReadyRooms(_readyRooms);
-                    int readyCount = _readyRooms.Count;
-
-                    if (readyCount > 0)
-                    {
-                        // New CountdownEvent each cycle (straggler isolation)
-                        var countdown = new CountdownEvent(readyCount);
-
-                        for (int i = 0; i < readyCount; i++)
-                        {
-                            var room = _readyRooms[i];
-                            ThreadPool.QueueUserWorkItem(state =>
-                            {
-                                var r = (Room)state;
-                                try
-                                {
-                                    r.Update(elapsedSec);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger?.KError($"[ServerLoop] Room {r.RoomId} Update exception: {ex.Message}\n{ex.StackTrace}");
-                                }
-                                finally
-                                {
-                                    countdown.Signal();
-                                }
-                            }, room);
-                        }
-
-                        // Timeout barrier
-                        int budgetMs = Math.Max(1, _tickIntervalMs - (int)pollElapsed - BUDGET_MARGIN_MS);
-                        bool allCompleted = countdown.Wait(budgetMs);
-
-                        if (!allCompleted)
-                        {
-                            // Incomplete rooms → stragglers
-                            for (int i = 0; i < readyCount; i++)
-                            {
-                                var room = _readyRooms[i];
-                                // Rooms that have not signaled = still running
-                                // CountdownEvent cannot track individually → use per-room completion flag
-                                // Simple approach: among rooms where IsStraggler is still false,
-                                // detect those still running. Uses a clear-after-completion pattern.
-                            }
-                            HandleStragglers(countdown);
-                        }
-                        else
-                        {
-                            countdown.Dispose();
-                        }
-
-                        // Force close overloaded rooms
-                        HandleOverloadedRooms();
-                    }
-
-                    // ── Stage 3: flush send queue ──
-                    _transport.FlushSendQueue();
+                    ExecuteCycle(elapsedSec);
 
                     _totalCycles++;
                     LogDriftIfNeeded();
@@ -184,76 +111,137 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
-        /// Checks whether stragglers from the previous cycle have completed and restores them to Ready.
+        /// Runs one server cycle: Stage 0 (recover/transition/cleanup) → Stage 1 (poll) →
+        /// Stage 2 (ThreadPool room updates with a timeout barrier) → Stage 3 (flush).
+        /// Extracted from Run() so tests can drive deterministic single cycles.
+        /// </summary>
+        private void ExecuteCycle(float elapsedSec)
+        {
+            long cycleStart = _stopwatch.ElapsedMilliseconds;
+
+            // ── Stage 0: previous cycle cleanup ──
+            RecoverStragglers();
+            _roomManager.TransitionDrainingRooms();
+            _roomManager.CleanupDisposingRooms();
+
+            // ── Stage 1: receive (Main Thread) ──
+            _transport.PollEvents();
+
+            // Cleanup unrouted peer timeouts (1-second interval)
+            if (cycleStart - _lastUnroutedCleanupMs >= UNROUTED_CLEANUP_INTERVAL_MS)
+            {
+                _router.CleanupUnroutedPeers();
+                _lastUnroutedCleanupMs = cycleStart;
+            }
+
+            long pollElapsed = _stopwatch.ElapsedMilliseconds - cycleStart;
+
+            // ── Stage 2: room updates (ThreadPool) ──
+            _roomManager.GetReadyRooms(_readyRooms);
+            int readyCount = _readyRooms.Count;
+
+            if (readyCount > 0)
+            {
+                // New CountdownEvent each cycle (per-cycle isolation). Disposed later in
+                // RecoverStragglers when its count reaches 0 — never disposed in-cycle (avoids the
+                // Set/Dispose race with a worker still inside Signal()).
+                var countdown = new CountdownEvent(readyCount);
+
+                for (int i = 0; i < readyCount; i++)
+                {
+                    var room = _readyRooms[i];
+                    room.UpdateComplete = false;   // reset before dispatch (main thread)
+                    ThreadPool.QueueUserWorkItem(state =>
+                    {
+                        var r = (Room)state;
+                        try
+                        {
+                            r.Update(elapsedSec);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger?.KError($"[ServerLoop] Room {r.RoomId} Update exception: {ex.Message}\n{ex.StackTrace}");
+                        }
+                        finally
+                        {
+                            r.UpdateComplete = true;   // recovery signal (Signal() touches no room state)
+                            countdown.Signal();
+                        }
+                    }, room);
+                }
+
+                // Timeout barrier
+                int budgetMs = Math.Max(1, _tickIntervalMs - (int)pollElapsed - BUDGET_MARGIN_MS);
+                bool allCompleted = countdown.Wait(budgetMs);
+
+                if (!allCompleted)
+                    HandleStragglers();
+
+                // Single disposal path: always defer to RecoverStragglers (Wait(0)==true).
+                _pendingCountdowns.Add(countdown);
+
+                // Force close overloaded rooms
+                HandleOverloadedRooms();
+            }
+
+            // ── Stage 3: flush send queue ──
+            _transport.FlushSendQueue();
+        }
+
+        /// <summary>
+        /// Test seam: runs N deterministic cycles without Run()'s blocking, drift correction,
+        /// or Console/ProcessExit hooks. Used by the straggler-safety tests.
+        /// </summary>
+        internal void RunCyclesForTest(int cycles, float elapsedSec)
+        {
+            for (int i = 0; i < cycles; i++)
+                ExecuteCycle(elapsedSec);
+        }
+
+        /// <summary>
+        /// Stage-0 recovery: (1) clears IsStraggler for completed stragglers (per-room UpdateComplete),
+        /// (2) disposes each pending barrier CountdownEvent once its count reaches 0. Must run before
+        /// TransitionDrainingRooms/CleanupDisposingRooms so a just-completed straggler is processed
+        /// in the same cycle.
         /// </summary>
         private void RecoverStragglers()
         {
-            List<int> recovered = null;
-            foreach (var kvp in _stragglerCountdowns)
-            {
-                int roomId = kvp.Key;
-                var cd = kvp.Value;
+            // (1) Room recovery — completion flag based, independent of the countdowns.
+            _roomManager.RecoverCompletedStragglers();
 
-                // Wait(0): check immediately, no blocking
+            // (2) Countdown disposal — each instance appears once; dispose only when count==0
+            //     (all workers Signaled), so no late worker can hit a disposed instance.
+            for (int i = _pendingCountdowns.Count - 1; i >= 0; i--)
+            {
+                var cd = _pendingCountdowns[i];
                 if (cd.Wait(0))
                 {
-                    // Straggler thread has completed → restore to Ready
-                    var room = _roomManager.GetRoom(roomId);
-                    if (room != null)
-                    {
-                        room.IsStraggler = false;
-                        // StragglerCount is preserved (used for consecutive count determination)
-                    }
                     cd.Dispose();
-                    recovered ??= new List<int>();
-                    recovered.Add(roomId);
+                    _pendingCountdowns.RemoveAt(i);
                 }
-            }
-
-            if (recovered != null)
-            {
-                for (int i = 0; i < recovered.Count; i++)
-                    _stragglerCountdowns.Remove(recovered[i]);
             }
         }
 
         /// <summary>
-        /// Registers incomplete rooms as stragglers upon stage-2 timeout.
+        /// Marks rooms still running at the stage-2 timeout as stragglers. Uses per-room
+        /// UpdateComplete so rooms that finished within budget are not falsely marked (MT-2 fix).
         /// </summary>
-        private void HandleStragglers(CountdownEvent countdown)
+        private void HandleStragglers()
         {
-            // Since CountdownEvent cannot distinguish individual room completion,
-            // a per-room completion flag pattern is used.
-            // When Room.Update() finishes normally, IsStraggler remains false.
-            // To identify rooms still running at the timeout point,
-            // they are temporarily marked before entering stage 2 and cleared on completion.
-            //
-            // Current implementation: iterate over all readyRooms and mark those not yet straggling.
-            // Since countdown.Signal() is called in the finally block of Room.Update(),
-            // threads will continue running after the timeout and eventually complete.
-            // The countdown is stored in _stragglerCountdowns for completion check in the next cycle.
-
-            // For all ready rooms: mark those that are not yet stragglers and are incomplete
             for (int i = 0; i < _readyRooms.Count; i++)
             {
                 var room = _readyRooms[i];
-                if (!room.IsStraggler)
+                if (!room.UpdateComplete && !room.IsStraggler)
                 {
-                    // Straggler candidate for this cycle — MarkStraggler
                     room.MarkStraggler();
-                    // This room's thread is still waiting to Signal on the countdown
-                    // Store countdown for completion check in the next cycle
-                    _stragglerCountdowns[room.RoomId] = countdown;
                     _logger?.KWarning(
                         $"[ServerLoop] Room {room.RoomId} straggler (count={room.StragglerCount})");
                 }
             }
-
-            // Keep countdown alive until straggler threads Signal — do not Dispose it
         }
 
         /// <summary>
-        /// Force-closes rooms whose consecutive straggler count exceeds the threshold.
+        /// Force-closes rooms whose cumulative straggler count exceeds the threshold.
         /// </summary>
         private void HandleOverloadedRooms()
         {
@@ -263,7 +251,7 @@ namespace xpTURN.Klotho.Network
                 if (room.StragglerCount >= STRAGGLER_OVERLOAD_THRESHOLD)
                 {
                     _logger?.KError(
-                        $"[ServerLoop] Room {room.RoomId} overloaded ({room.StragglerCount} consecutive straggles), force closing");
+                        $"[ServerLoop] Room {room.RoomId} overloaded ({room.StragglerCount} cumulative straggles), force closing");
 
                     // Broadcast ServerShutdown (Reason=2: RoomOverloaded)
                     try
@@ -325,23 +313,27 @@ namespace xpTURN.Klotho.Network
             // (1) Reject new connections
             _router.StopAccepting();
 
-            // (2) Wait for stragglers to complete
-            if (_stragglerCountdowns.Count > 0)
-            {
-                _logger?.KInformation(
-                    $"[ServerLoop] Waiting for {_stragglerCountdowns.Count} straggler room(s) to complete...");
+            // (2) Wait for stragglers to complete.
+            //     _pendingCountdowns may also hold already-complete cycles' countdowns; count only the
+            //     truly-outstanding ones (Wait(0)==false) for the log. Dispose only the ones that
+            //     complete within the timeout — a still-counting one may be Signaled by a late worker,
+            //     so disposing it would risk a disposed-Signal (ThreadPool unobserved exception).
+            int outstanding = 0;
+            for (int i = 0; i < _pendingCountdowns.Count; i++)
+                if (!_pendingCountdowns[i].Wait(0)) outstanding++;
 
-                foreach (var kvp in _stragglerCountdowns)
-                {
-                    if (!kvp.Value.Wait(SHUTDOWN_PHASE2_TIMEOUT_MS))
-                    {
-                        _logger?.KWarning(
-                            $"[ServerLoop] Straggler room {kvp.Key} did not complete within {SHUTDOWN_PHASE2_TIMEOUT_MS}ms, skipping broadcast");
-                    }
-                    kvp.Value.Dispose();
-                }
-                _stragglerCountdowns.Clear();
+            if (outstanding > 0)
+                _logger?.KInformation(
+                    $"[ServerLoop] Waiting for {outstanding} straggler room(s) to complete...");
+
+            for (int i = 0; i < _pendingCountdowns.Count; i++)
+            {
+                var cd = _pendingCountdowns[i];
+                if (cd.Wait(SHUTDOWN_PHASE2_TIMEOUT_MS))
+                    cd.Dispose();
+                // else: leave undisposed — GC + hard-timeout (Environment.Exit) reclaims it.
             }
+            _pendingCountdowns.Clear();
 
             // (3) Broadcast ServerShutdown to all rooms
             _roomManager.ShutdownAllRooms();

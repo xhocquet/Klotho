@@ -42,13 +42,23 @@ namespace xpTURN.Klotho.Network
         public int StragglerCount { get; set; }
         public bool IsStraggler { get; set; }
 
+        // Set by the ThreadPool worker at the end of Update(); read by the main thread (ServerLoop)
+        // to decide straggler marking/recovery. volatile for cross-thread visibility.
+        public volatile bool UpdateComplete;
+
         // Lifetime / drain metrics (set by RoomManager.CreateRoomAt; phase captured at drain transition)
         public long CreatedAtMs { get; set; }
         public SessionPhase DrainPhase { get; private set; }
 
-        // Match-end / abort grace state. Null EndRequestedAtUtc = no request pending.
-        // Wall-time based so the EndGracePolicy.Pause case (tick frozen) still progresses naturally.
-        public DateTimeOffset? EndRequestedAtUtc { get; private set; }
+        // Match-end / abort grace state. Wall-time based so the EndGracePolicy.Pause case
+        // (tick frozen) still progresses naturally. _endRequested (volatile) gates publication:
+        // RequestEnd (ThreadPool worker) writes _endRequestedAtMs/EndReason/EndGrace, then sets
+        // _endRequested last (release); cross-thread readers (RoomRouter, main thread) check
+        // _endRequested first (acquire) so the companion fields are always visible.
+        private volatile bool _endRequested;
+        private long _endRequestedAtMs;
+        public DateTimeOffset? EndRequestedAtUtc =>
+            _endRequested ? DateTimeOffset.FromUnixTimeMilliseconds(_endRequestedAtMs) : (DateTimeOffset?)null;
         public TimeSpan EndGrace { get; private set; }
         public EndReason EndReason { get; private set; }
 
@@ -125,14 +135,16 @@ namespace xpTURN.Klotho.Network
         /// </summary>
         public void RequestEnd(EndReason reason, TimeSpan grace)
         {
-            if (EndRequestedAtUtc.HasValue)
+            if (_endRequested)
             {
                 _logger?.KDebug($"[Room {RoomId}] RequestEnd ignored (already pending: reason={EndReason}, grace={EndGrace.TotalMilliseconds:F0}ms); incoming reason={reason}");
                 return;
             }
-            EndRequestedAtUtc = DateTimeOffset.UtcNow;
+            // Companion fields first, then the volatile flag last (release) — publishes the above to readers.
+            _endRequestedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             EndReason = reason;
             EndGrace = grace;
+            _endRequested = true;
             _logger?.KInformation($"[Room {RoomId}] RequestEnd: reason={reason}, grace={grace.TotalMilliseconds:F0}ms");
         }
 
@@ -229,6 +241,7 @@ namespace xpTURN.Klotho.Network
 
             StragglerCount = 0;
             IsStraggler = false;
+            UpdateComplete = false;
             State = RoomState.Empty;
 
             _logger?.KInformation($"[Room {RoomId}] → Empty (disposed)");
@@ -238,12 +251,6 @@ namespace xpTURN.Klotho.Network
         {
             IsStraggler = true;
             StragglerCount++;
-        }
-
-        public void ClearStraggler()
-        {
-            IsStraggler = false;
-            StragglerCount = 0;
         }
     }
 }

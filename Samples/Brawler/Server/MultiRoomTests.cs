@@ -47,6 +47,9 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
             Test13_NonExistentRoomReject();
             Test14_GracefulShutdown();
             Test15_ThreadSafety();
+            Test16_MT1_NoDoubleDispose();
+            Test17_MT2_FastRoomNotMarked();
+            Test18_MT3_StragglerGuards();
 
             Console.WriteLine($"\n=== Results: {_passed} passed, {_failed} failed ===");
             _loggerFactory.Dispose();
@@ -311,6 +314,95 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
             env.Dispose();
         }
 
+        // ── #16: MT-1 — no double-dispose of shared barrier (ObjectDisposedException) ──
+
+        static void Test16_MT1_NoDoubleDispose()
+        {
+            const int maxPlayers = 2;
+            // Both rooms slow (>budget≈23ms) → both straggle the same cycle → exercises the
+            // multi-room straggle/recover path that the old code crashed on (shared CountdownEvent).
+            var env = CreateTestEnv(maxRooms: 2, maxPlayersPerRoom: maxPlayers,
+                log => new SlowRoomCallbacks(
+                    new BrawlerServerCallbacks(log, _sharedStaticColliders, _sharedNavMesh, maxPlayers, 0), 50));
+            var room0 = env.RoomManager.CreateRoom(0);
+            var room1 = env.RoomManager.CreateRoom(1);
+            SimulatePeerJoin(env, 200, 0); SimulatePeerJoin(env, 201, 0);
+            SimulatePeerJoin(env, 202, 1); SimulatePeerJoin(env, 203, 1);
+            // Drain joins → register players, then Start so the sim ticks (DelaySystem runs).
+            room0.Update(0.025f); room0.Engine.Start();
+            room1.Update(0.025f); room1.Engine.Start();
+
+            var loop = new ServerLoop(env.Transport, env.RoomManager, 25, _logger);
+            bool ok = true;
+            try { loop.RunCyclesForTest(10, 0.025f); }
+            catch (Exception ex) { ok = false; Console.WriteLine($"  MT-1 exception: {ex.GetType().Name}: {ex.Message}"); }
+
+            Assert("#16a No ObjectDisposedException over 10 cycles", ok);
+            var r0 = env.RoomManager.GetRoom(0);
+            var r1 = env.RoomManager.GetRoom(1);
+            Assert("#16b Rooms not force-closed",
+                (r0 == null || r0.StragglerCount < 10) && (r1 == null || r1.StragglerCount < 10));
+
+            env.Dispose();
+        }
+
+        // ── #17: MT-2 — fast room not falsely marked straggler ──
+
+        static void Test17_MT2_FastRoomNotMarked()
+        {
+            const int maxPlayers = 2;
+            int created = 0; // first-created room is slow, the rest fast
+            var env = CreateTestEnv(maxRooms: 2, maxPlayersPerRoom: maxPlayers,
+                log => new SlowRoomCallbacks(
+                    new BrawlerServerCallbacks(log, _sharedStaticColliders, _sharedNavMesh, maxPlayers, 0),
+                    (created++ == 0) ? 50 : 0));
+            var room0 = env.RoomManager.CreateRoom(0); // slow
+            var room1 = env.RoomManager.CreateRoom(1); // fast
+            SimulatePeerJoin(env, 210, 0); SimulatePeerJoin(env, 211, 0);
+            SimulatePeerJoin(env, 212, 1); SimulatePeerJoin(env, 213, 1);
+            room0.Update(0.025f); room0.Engine.Start();
+            room1.Update(0.025f); room1.Engine.Start();
+
+            var loop = new ServerLoop(env.Transport, env.RoomManager, 25, _logger);
+            loop.RunCyclesForTest(4, 0.025f);
+
+            Assert("#17a Slow room marked straggler", room0.IsStraggler || room0.StragglerCount >= 1);
+            Assert("#17b Fast room NOT marked", room1.StragglerCount == 0 && !room1.IsStraggler);
+
+            env.Dispose();
+        }
+
+        // ── #18: MT-3 — lifecycle guards skip rooms whose thread may still run (deterministic) ──
+
+        static void Test18_MT3_StragglerGuards()
+        {
+            var env = CreateTestEnv(maxRooms: 4, maxPlayersPerRoom: 2);
+
+            // G5a/b: CleanupDisposingRooms defers a Disposing straggler until recovered.
+            var r0 = env.RoomManager.CreateRoom(0);
+            r0.State = RoomState.Disposing; r0.IsStraggler = true; r0.UpdateComplete = false;
+            env.RoomManager.CleanupDisposingRooms();
+            Assert("#18a Disposing straggler not cleaned", r0.State == RoomState.Disposing);
+            r0.UpdateComplete = true;
+            env.RoomManager.RecoverCompletedStragglers();
+            env.RoomManager.CleanupDisposingRooms();
+            Assert("#18b Cleaned after recovery", r0.State == RoomState.Empty);
+
+            // G5c: TransitionDrainingRooms defers a Draining straggler.
+            var r1 = env.RoomManager.CreateRoom(1);
+            r1.State = RoomState.Draining; r1.IsStraggler = true;
+            env.RoomManager.TransitionDrainingRooms();
+            Assert("#18c Draining straggler not stopped", r1.State == RoomState.Draining);
+
+            // G5d: ShutdownAllRooms skips teardown for a straggler.
+            var r2 = env.RoomManager.CreateRoom(2);
+            r2.IsStraggler = true; // Active
+            env.RoomManager.ShutdownAllRooms();
+            Assert("#18d Straggler teardown skipped at shutdown", r2.State != RoomState.Empty);
+
+            env.Dispose();
+        }
+
         // ═══════════════════════════════════════════════════════
         // Test infrastructure
         // ═══════════════════════════════════════════════════════
@@ -345,6 +437,10 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
         }
 
         static TestEnvironment CreateTestEnv(int maxRooms, int maxPlayersPerRoom)
+            => CreateTestEnv(maxRooms, maxPlayersPerRoom, null);
+
+        static TestEnvironment CreateTestEnv(int maxRooms, int maxPlayersPerRoom,
+            Func<IKLogger, ISimulationCallbacks> callbacksFactory)
         {
             EnsureSharedTestData();
 
@@ -355,7 +451,9 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
             var navMesh = _sharedNavMesh;
             var staticColliders = _sharedStaticColliders;
             var assetRegistry = _sharedAssetRegistry;
-            var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new BrawlerServerCallbacks(roomLogger, staticColliders, navMesh, maxPlayersPerRoom, 0))
+            Func<IKLogger, ISimulationCallbacks> factory = callbacksFactory
+                ?? ((roomLogger) => new BrawlerServerCallbacks(roomLogger, staticColliders, navMesh, maxPlayersPerRoom, 0));
+            var roomManagerConfig = new RoomManagerConfigBuilder(factory)
                 .WithRoomLimits(maxRooms, maxPlayersPerRoom)
                 .WithSimulationConfig(() => new SimulationConfig
                 {
@@ -440,6 +538,38 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
                 Router?.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Test system that sleeps a fixed wall-time each tick to force a room to straggle.
+    /// Mutates no Frame state → no determinism/hash impact.
+    /// </summary>
+    sealed class DelaySystem : xpTURN.Klotho.ECS.ISystem
+    {
+        private readonly int _delayMs;
+        public DelaySystem(int delayMs) { _delayMs = delayMs; }
+        public void Update(ref xpTURN.Klotho.ECS.Frame frame)
+        {
+            if (_delayMs > 0) System.Threading.Thread.Sleep(_delayMs);
+        }
+    }
+
+    /// <summary>
+    /// Wraps real callbacks and registers a <see cref="DelaySystem"/> so a room's Update overruns
+    /// the stage-2 budget (straggler injection for MT-1/MT-2 tests).
+    /// </summary>
+    sealed class SlowRoomCallbacks : ISimulationCallbacks
+    {
+        private readonly ISimulationCallbacks _inner;
+        private readonly int _delayMs;
+        public SlowRoomCallbacks(ISimulationCallbacks inner, int delayMs) { _inner = inner; _delayMs = delayMs; }
+        public void RegisterSystems(xpTURN.Klotho.ECS.EcsSimulation simulation)
+        {
+            _inner.RegisterSystems(simulation);
+            simulation.AddSystem(new DelaySystem(_delayMs), xpTURN.Klotho.ECS.SystemPhase.Update);
+        }
+        public void OnInitializeWorld(IKlothoEngine engine) => _inner.OnInitializeWorld(engine);
+        public void OnPollInput(int playerId, int tick, ICommandSender sender) => _inner.OnPollInput(playerId, tick, sender);
     }
 
     /// <summary>

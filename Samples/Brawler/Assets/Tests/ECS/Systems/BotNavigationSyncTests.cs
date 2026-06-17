@@ -151,12 +151,13 @@ namespace xpTURN.Klotho.Tests
                 {
                     return new ICommand[]
                     {
-                        new MoveInputCommand
+                        new PlayerInputCommand
                         {
                             PlayerId       = 1,
                             Tick           = tick,
                             HorizontalAxis = -FP64.One,
                             VerticalAxis   = FP64.Zero,
+                            Buttons        = PlayerInputCommand.HAS_MOVE_BIT,
                         }
                     };
                 }

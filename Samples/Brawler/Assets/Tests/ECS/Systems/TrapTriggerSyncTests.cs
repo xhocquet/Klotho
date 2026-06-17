@@ -123,12 +123,13 @@ namespace xpTURN.Klotho.Tests
                 {
                     return new ICommand[]
                     {
-                        new MoveInputCommand
+                        new PlayerInputCommand
                         {
                             PlayerId = 0,
                             Tick = tick,
                             HorizontalAxis = FP64.One,  // right
                             VerticalAxis = FP64.Zero,
+                            Buttons = PlayerInputCommand.HAS_MOVE_BIT,
                         }
                     };
                 }
@@ -160,19 +161,21 @@ namespace xpTURN.Klotho.Tests
                 {
                     return new ICommand[]
                     {
-                        new MoveInputCommand
+                        new PlayerInputCommand
                         {
                             PlayerId = 0,
                             Tick = tick,
                             HorizontalAxis = FP64.One,   // → East trap
                             VerticalAxis = FP64.Zero,
+                            Buttons = PlayerInputCommand.HAS_MOVE_BIT,
                         },
-                        new MoveInputCommand
+                        new PlayerInputCommand
                         {
                             PlayerId = 1,
                             Tick = tick,
                             HorizontalAxis = -FP64.One,  // ← West trap
                             VerticalAxis = FP64.Zero,
+                            Buttons = PlayerInputCommand.HAS_MOVE_BIT,
                         }
                     };
                 }
@@ -204,12 +207,13 @@ namespace xpTURN.Klotho.Tests
 
                 return new ICommand[]
                 {
-                    new MoveInputCommand
+                    new PlayerInputCommand
                     {
                         PlayerId = 0,
                         Tick = tick,
                         HorizontalAxis = horizontal,
                         VerticalAxis = FP64.Zero,
+                        Buttons = PlayerInputCommand.HAS_MOVE_BIT,
                     }
                 };
             });

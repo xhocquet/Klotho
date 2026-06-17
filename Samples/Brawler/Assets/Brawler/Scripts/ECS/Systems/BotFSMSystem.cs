@@ -25,8 +25,8 @@ namespace Brawler
 
         Frame        _lastFrame;
 
-        readonly MoveInputCommand _moveCmd   = new MoveInputCommand();
-        readonly AttackCommand    _attackCmd = new AttackCommand();
+        // Single reused unified input command (bot bypasses the buffer/network — direct OnCommand).
+        readonly PlayerInputCommand _inputCmd = new PlayerInputCommand();
 
         public BotFSMSystem(FPNavAgentSystem navSystem)
         {
@@ -272,7 +272,9 @@ namespace Brawler
                           in CharacterComponent character, FPVector2 desiredVelocity,
                           int leafStateId)
         {
-            // Move command (always)
+            // Build one unified input: movement (always) + attack (Attack state) folded into the same
+            // command. Dispatched once at the end — HandleMove runs before HandleAttack (case order),
+            // matching the old two-command behavior.
             FP64 h = FP64.Zero, v = FP64.Zero;
             FP64 sqrMag = desiredVelocity.x * desiredVelocity.x + desiredVelocity.y * desiredVelocity.y;
             if (sqrMag > FP64.Zero)
@@ -281,17 +283,13 @@ namespace Brawler
                 h = desiredVelocity.x / mag;
                 v = desiredVelocity.y / mag;
             }
-            _moveCmd.PlayerId       = character.PlayerId;
-            _moveCmd.HorizontalAxis = h;
-            _moveCmd.VerticalAxis   = v;
-            _moveCmd.JumpPressed    = false;
-            _moveCmd.JumpHeld       = false;
-            _commandSystem.OnCommand(ref frame, _moveCmd);
+
+            byte buttons = PlayerInputCommand.HAS_MOVE_BIT;   // bot move intent (no jump)
 
             if (bot.AttackCooldown > 0)
                 bot.AttackCooldown--;
 
-            // Attack command (Attack state)
+            // Attack (Attack state)
             if (leafStateId == BotStateId.Attack && bot.AttackCooldown <= 0)
             {
                 if (character.ActionLockTicks <= 0)
@@ -307,13 +305,18 @@ namespace Brawler
                                         ? new FPVector2(dir3.x / len, dir3.z / len)
                                         : new FPVector2(FP64.Sin(selfT.Rotation), FP64.Cos(selfT.Rotation));
 
-                        _attackCmd.PlayerId     = character.PlayerId;
-                        _attackCmd.AimDirection = aimDir;
-                        _commandSystem.OnCommand(ref frame, _attackCmd);
+                        buttons |= PlayerInputCommand.ATTACK_BIT;
+                        _inputCmd.AimDirection = aimDir;
                         bot.AttackCooldown = _diffAssets[bot.Difficulty].AttackCooldownBase;
                     }
                 }
             }
+
+            _inputCmd.PlayerId       = character.PlayerId;
+            _inputCmd.HorizontalAxis = h;
+            _inputCmd.VerticalAxis   = v;
+            _inputCmd.Buttons        = buttons;
+            _commandSystem.OnCommand(ref frame, _inputCmd);
         }
 
         static void ResetBotState(ref Frame frame, EntityRef entity, ref BotComponent bot)

@@ -46,7 +46,7 @@
 
   <ItemGroup>
     <!-- Brawler Data (.bytes) → copy to bin/Data/ -->
-    <Content Include="..\..\Assets\Brawler\Data\*.bytes">
+    <Content Include="..\Assets\Brawler\Data\*.bytes">
       <Link>Data\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
