@@ -30,7 +30,7 @@ jobs:
           mkdir -p dist
 
           # Include only the addons/ folder (exclude unnecessary files)
-          zip -r dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip \
+          zip -r dist/klotho-godot-addons-${{ steps.meta.outputs.sha }}.zip \
             dist/ \
             --exclude "*.import" \
             --exclude "*/.DS_Store" \
