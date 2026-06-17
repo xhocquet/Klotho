@@ -67,6 +67,6 @@ jobs:
             ```
 
             See [Installation.Unity.md](https://github.com/xpTURN/Klotho/blob/${{ steps.meta.outputs.tag }}/Docs/Installation.Unity.md) for Polyfill activation, the dedicated-server setup and full details.
-          files: dist/Klotho-Godot-addons-${{ steps.meta.outputs.sha }}.zip
+          files: dist/klotho-godot-addons-${{ steps.meta.outputs.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
