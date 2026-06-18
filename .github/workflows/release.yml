@@ -18,12 +18,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Full history & tags needed for the changelog
 
       - name: Get commit hash & tag
         id: meta
         run: |
           echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+          # Resolve the release tag. On tag push GITHUB_REF_NAME is the tag;
+          # on manual workflow_dispatch it is a branch, so fall back to the latest tag.
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+          # Previous tag (immediately before the current one); empty if this is the first tag
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+            echo "prev_tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+          else
+            RANGE="${TAG}"
+          fi
+
+          # Collect commit subjects since the previous tag as a bulleted list.
+          # Random heredoc delimiter so a commit message can't terminate it early.
+          DELIM="CHANGELOG_$(uuidgen)"
+          {
+            echo "changelog<<${DELIM}"
+            git log --no-merges --pretty=format:'- %s (%h)' "$RANGE"
+            echo ""
+            echo "${DELIM}"
+          } >> $GITHUB_OUTPUT
 
       - name: Build addon zip
         run: |
@@ -67,6 +96,9 @@ jobs:
             ```
 
             See [Installation.Unity.md](https://github.com/xpTURN/Klotho/blob/${{ steps.meta.outputs.tag }}/Docs/Installation.Unity.md) for Polyfill activation, the dedicated-server setup and full details.
+
+            ### Changes
+            ${{ steps.meta.outputs.changelog }}
           files: dist/klotho-godot-addons-${{ steps.meta.outputs.sha }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
