@@ -1,7 +1,7 @@
 # PhysicsDeterminismProbe
 
 Cross-runtime determinism guard for the deterministic FP64 math + `FPPhysicsWorld`
-physics layer. Built for IMP48-F5 (see `Docs/IMP/IMP48/Followup-PhysicsDeterminism.md`).
+physics layer.
 
 It compiles the **same** `Deterministic/{Math,Physics,Geometry}` sources that ship in
 the package and runs them under two runtimes, then diffs raw-`long` output:
@@ -23,8 +23,8 @@ across the server and client runtimes — a determinism bug.
   ground box 10x0.2x10 @ y=-0.1).
 
 As of 2026-05-29 every line is **bit-identical** between CoreCLR and Unity 6.3 Mono —
-i.e. the physics layer is cross-runtime deterministic. (IMP48-F5's actual divergence was
-outside the physics step: the SD client never registered the static ground collider.)
+i.e. the physics layer is cross-runtime deterministic. (The divergence that motivated this
+probe was outside the physics step: the SD client never registered the static ground collider.)
 
 ## Run
 

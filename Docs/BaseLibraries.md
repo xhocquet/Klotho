@@ -202,4 +202,4 @@ xpTURN.Klotho.Logging.Mel (opt-in)   ← + Klotho.Logging + Microsoft.Extensions
 
 ---
 
-*Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine: per-engine sinks, Godot NuGet deps, Godot adapter layering)*
+*Last updated: 2026-06-07 (Unity/Godot dual-engine: per-engine sinks, Godot NuGet deps, Godot adapter layering)*

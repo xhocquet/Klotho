@@ -271,7 +271,7 @@ Configuration is split into two layers.
 | UsePrediction | true | bool | Whether input prediction is enabled. False → engine waits for all inputs (Paused) |
 | MaxEntities | 256 | entities | ECS entity capacity (EntityManager array size) |
 | Mode | P2P | NetworkMode | Network topology (P2P / ServerDriven). Discriminator for SD-only fields |
-| HardToleranceMs | 0 | ms | (SD) **Deprecated — no effect (IMP59 V0-C).** The effective server deadline is the tick's execution moment: inputs missing at execution are substituted with `EmptyCommand`, later arrivals are past-tick rejected, and chronic lateness self-corrects via client lead escalation. Property and wire fields retained for serialized-asset / message compatibility only |
+| HardToleranceMs | 0 | ms | (SD) **Deprecated — no effect.** The effective server deadline is the tick's execution moment: inputs missing at execution are substituted with `EmptyCommand`, later arrivals are past-tick rejected, and chronic lateness self-corrects via client lead escalation. Property and wire fields retained for serialized-asset / message compatibility only |
 | InputResendIntervalMs | 25 | ms | (SD) Interval at which the client resends unacknowledged inputs |
 | MaxUnackedInputs | 30 | count | (SD) Cap on accumulated unacknowledged inputs (warning emitted on overflow) |
 | ServerSnapshotRetentionTicks | 0 | ticks | (SD) Server snapshot ring-buffer slots. **0 = auto** (TickRate × 10). Independent of MaxRollbackTicks — used for FullStateRequest replies |

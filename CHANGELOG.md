@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3] - 2026-06-18
+
+### Synchronization diagnostics & robustness
+
+- **Mesh geometry folded into the static-geometry fingerprint** — the diagnostic fingerprint of the loaded static colliders hashed only each mesh collider's placement (position/rotation), not its actual shape. Two peers that loaded the same scene but ended up with differing mesh vertices or triangle winding produced an identical fingerprint, so a geometry-only divergence stayed invisible. The mesh's vertex and index content is now folded in (computed once when the mesh is set, allocation-free), so such a divergence surfaces at its source. The fingerprint is a log-only diagnostic outside the per-tick state hash and is not serialized — determinism, consensus, and the wire format are unaffected.
+- **Server-driven reconnect no longer cut short by the full-state abort timer** — on a server-driven client, a pending full-state request runs a short abort countdown (~15s) as its own safety net. If the server dropped while that request was outstanding, the client also began its much longer reconnect attempt (~60s) — but the short abort fired first and ended the match, throwing away a reconnect that could still have recovered. The abort countdown is now suspended for the duration of a reconnect: a successful reconnect's incoming full-state resolves the request naturally, and only if the reconnect itself ultimately fails does the match terminate. Ordinary reconnect failures with no full-state request outstanding are still left to the game layer, unchanged.
+
 ## [0.3.2] - 2026-06-18
 
 ### Reliable command channel

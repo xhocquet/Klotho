@@ -123,4 +123,4 @@ An **editor** tool (menu + dock) that loads exported static colliders and draws 
 
 ---
 
-*Implementation: [`com.xpturn.klotho/Godot~/Adapters/Physics/GodotFPPhysics*.cs`](../com.xpturn.klotho/Godot~/Adapters/Physics/) · plan: [`Docs/IMP/IMP57/Plan-GodotPhysicsWorldVisualizer.md`](IMP/IMP57/Plan-GodotPhysicsWorldVisualizer.md)*
+*Implementation: [`com.xpturn.klotho/Godot~/Adapters/Physics/GodotFPPhysics*.cs`](../com.xpturn.klotho/Godot~/Adapters/Physics/)*

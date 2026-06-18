@@ -127,7 +127,7 @@ public partial class PlayerStatsAsset : IDataAsset
 }
 ```
 
-Looked up by systems via `frame.AssetRegistry.Get<PlayerStatsAsset>()` (IMP-46 C parameterless 1-shot lookup — single instance per type).
+Looked up by systems via `frame.AssetRegistry.Get<PlayerStatsAsset>()` (parameterless 1-shot lookup — single instance per type).
 
 ### 4-4. Systems
 
@@ -269,5 +269,3 @@ See [`<repo>/Samples/P2pSample/README.md`](../../Samples/P2pSample/README.md) fo
 
 - **Brawler sample** — [`Brawler.md`](Brawler.md) for the full-feature reference (ServerDriven, HFSM bots, Replay, etc.).
 - **Game dev API overview** — [`../GameDevAPI.md`](../GameDevAPI.md) and [`../GameDevWorkflow.md`](../GameDevWorkflow.md) for the broader authoring pattern.
-- **Implementation plan** — [`../IMP/IMP48/Plan-P2pSample.md`](../IMP/IMP48/Plan-P2pSample.md) for design rationale and step-by-step build history.
-- **Editor setup guide** — [`../IMP/IMP48/Guide-Step3-UnityEditor.md`](../IMP/IMP48/Guide-Step3-UnityEditor.md) for the scene/prefab/asset setup performed in Unity.

@@ -149,6 +149,16 @@ namespace xpTURN.Klotho.Core.Tests
         private static readonly MethodInfo _checkSdFullStateRequestTimeoutMethod =
             _engineType.GetMethod("CheckSdFullStateRequestTimeout", BindingFlags.NonPublic | BindingFlags.Instance);
 
+        // Reconnect-aware FullState timer handles.
+        private static readonly MethodInfo _handleSdReconnectingMethod =
+            _engineType.GetMethod("HandleSdReconnecting", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        private static readonly MethodInfo _handleSdReconnectFailedMethod =
+            _engineType.GetMethod("HandleSdReconnectFailed", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        private static readonly FieldInfo _fullStateRequestPausedForReconnectField =
+            _engineType.GetField("_fullStateRequestPausedForReconnect", BindingFlags.NonPublic | BindingFlags.Instance);
+
         // ── Helpers ──────────────────────────────────────────────────────────
 
         private static void InvokeHandleServerDrivenFullStateReceived(
@@ -218,6 +228,15 @@ namespace xpTURN.Klotho.Core.Tests
 
         private static bool InvokeCheckSdFullStateRequestTimeout(KlothoEngine engine, float deltaTime)
             => (bool)_checkSdFullStateRequestTimeoutMethod.Invoke(engine, new object[] { deltaTime });
+
+        private static void InvokeHandleSdReconnecting(KlothoEngine engine)
+            => _handleSdReconnectingMethod.Invoke(engine, null);
+
+        private static void InvokeHandleSdReconnectFailed(KlothoEngine engine, ReconnectRejectReason reason)
+            => _handleSdReconnectFailedMethod.Invoke(engine, new object[] { reason });
+
+        private static bool ReadPausedForReconnect(KlothoEngine engine)
+            => (bool)_fullStateRequestPausedForReconnectField.GetValue(engine);
 
         // ── Fixture state ────────────────────────────────────────────────────
 
@@ -392,6 +411,146 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.AreEqual(0, mockSDNetwork.SendFullStateRequestCallCount,
                 "No resend before RESYNC_TIMEOUT_MS reached");
             Assert.IsTrue(ReadFullStateRequestPending(engine), "Request still pending");
+        }
+
+        // ════════════════════════════════════════════════════════════════════════
+        // Reconnect-aware FullState timer
+        // ════════════════════════════════════════════════════════════════════════
+
+        // OnReconnecting suspends the retry/abort timer so the shorter FullState abort window
+        // cannot preempt a recoverable reconnect (which has the longer ReconnectTimeoutMs budget).
+        [Test]
+        public void SdFullStatePending_Reconnecting_PausesTimer_NoAbortPastWindow()
+        {
+            var (engine, _, mockSDNetwork) = CreateSDClient(autoAbort: true);
+            SetFullStateRequestPending(engine, true);
+
+            InvokeHandleSdReconnecting(engine);
+            Assert.IsTrue(ReadPausedForReconnect(engine),
+                "OnReconnecting with a pending request must pause the timer");
+
+            // Drive well past RESYNC_TIMEOUT_MS×retries (15s) — paused timer must not resend or abort.
+            bool aborted = false;
+            for (int i = 0; i < 5; i++)
+                aborted = InvokeCheckSdFullStateRequestTimeout(engine, 5.0f);
+
+            Assert.IsFalse(aborted, "Paused timer must not abort while reconnect is in progress");
+            Assert.AreEqual(KlothoState.Running, engine.State, "Engine stays Running during reconnect");
+            Assert.AreEqual(0, mockSDNetwork.SendFullStateRequestCallCount, "Paused timer must not resend");
+            Assert.IsTrue(ReadFullStateRequestPending(engine), "Request still pending (awaiting reconnect outcome)");
+        }
+
+        // OnReconnecting is a no-op when nothing is pending (a request cannot start mid-reconnect).
+        [Test]
+        public void SdReconnecting_NoPendingRequest_NoOp()
+        {
+            var (engine, _, _) = CreateSDClient();
+            InvokeHandleSdReconnecting(engine);
+            Assert.IsFalse(ReadPausedForReconnect(engine),
+                "OnReconnecting with no pending request must not set the pause flag");
+        }
+
+        // Reconnect terminal failure (every service failure path converges on OnReconnectFailed)
+        // terminates with AbortReason.ReconnectFailed; a duplicate/late signal no-ops (idempotent).
+        [Test]
+        public void SdFullStatePending_ReconnectFailed_Terminates()
+        {
+            var (engine, _, _) = CreateSDClient(autoAbort: true);
+            int resyncFailedCount = 0;
+            engine.OnResyncFailed += () => resyncFailedCount++;
+            AbortReason captured = AbortReason.Unknown;
+            engine.OnMatchAborted += r => captured = r;
+
+            SetFullStateRequestPending(engine, true);
+            InvokeHandleSdReconnecting(engine); // paused
+
+            LogAssert.Expect(LogType.Warning, new Regex(@"Reconnect failed .* FullState request outstanding"));
+            InvokeHandleSdReconnectFailed(engine, ReconnectRejectReason.TimedOut);
+            // Duplicate/late terminal signal must no-op (pending already cleared).
+            InvokeHandleSdReconnectFailed(engine, ReconnectRejectReason.TimedOut);
+
+            Assert.AreEqual(1, resyncFailedCount, "Terminal reconnect failure fires OnResyncFailed exactly once");
+            Assert.AreEqual(KlothoState.Aborted, engine.State, "Terminal reconnect failure aborts under AutoAbort");
+            Assert.AreEqual(AbortReason.ReconnectFailed, captured,
+                "Abort reason is ReconnectFailed (not StateDivergence)");
+            Assert.IsFalse(ReadFullStateRequestPending(engine), "Terminal clears the request gate");
+        }
+
+        // Reconnect failure with NO pending FullState must NOT abort the engine — reconnect-failure
+        // handling stays with the game layer (IKlothoSessionObserver.OnReconnectFailed).
+        [Test]
+        public void SdReconnectFailed_NoPendingRequest_DoesNotAbort()
+        {
+            var (engine, _, _) = CreateSDClient(autoAbort: true);
+            int resyncFailedCount = 0;
+            engine.OnResyncFailed += () => resyncFailedCount++;
+
+            InvokeHandleSdReconnectFailed(engine, ReconnectRejectReason.TimedOut);
+
+            Assert.AreEqual(KlothoState.Running, engine.State,
+                "Reconnect failure without a pending FullState must NOT abort (game layer decides)");
+            Assert.AreEqual(0, resyncFailedCount, "No OnResyncFailed when not pending");
+        }
+
+        // AutoAbort off — terminal reconnect failure signals OnResyncFailed but leaves the engine
+        // as-is for the game layer to tear down (mirrors HandleSdResyncFailure's contract).
+        [Test]
+        public void SdFullStatePending_ReconnectFailed_AutoAbortOff_NoAbort()
+        {
+            var (engine, _, _) = CreateSDClient(autoAbort: false);
+            int resyncFailedCount = 0;
+            engine.OnResyncFailed += () => resyncFailedCount++;
+
+            SetFullStateRequestPending(engine, true);
+            LogAssert.Expect(LogType.Warning, new Regex(@"Reconnect failed .* FullState request outstanding"));
+            InvokeHandleSdReconnectFailed(engine, ReconnectRejectReason.MaxRetries);
+
+            Assert.AreEqual(1, resyncFailedCount, "OnResyncFailed fires so the game layer can tear down");
+            Assert.AreEqual(KlothoState.Running, engine.State, "AutoAbort off: engine left as-is (game decides)");
+        }
+
+        // Repeated OnReconnecting stays paused — no double-pause corruption.
+        [Test]
+        public void SdReconnecting_RepeatedSignals_Idempotent()
+        {
+            var (engine, _, mockSDNetwork) = CreateSDClient(autoAbort: true);
+            SetFullStateRequestPending(engine, true);
+
+            InvokeHandleSdReconnecting(engine);
+            InvokeHandleSdReconnecting(engine); // duplicate
+            Assert.IsTrue(ReadPausedForReconnect(engine));
+
+            bool aborted = InvokeCheckSdFullStateRequestTimeout(engine, 20.0f);
+            Assert.IsFalse(aborted, "Still paused after duplicate signals");
+            Assert.AreEqual(KlothoState.Running, engine.State);
+            Assert.AreEqual(0, mockSDNetwork.SendFullStateRequestCallCount);
+        }
+
+        // Once a FullState is consumed (reconnect success), the pause flag is cleared via
+        // ClearFullStateRequestState, so a subsequent FullState-pending cycle resumes normal countdown.
+        [Test]
+        public void SdPauseCleared_NextRequestTimesOutNormally()
+        {
+            var (engine, sim, mockSDNetwork) = CreateSDClient(autoAbort: true);
+
+            // Cycle 1: pending + paused, then a server FullState (reconnect success) clears everything.
+            SetFullStateRequestPending(engine, true);
+            InvokeHandleSdReconnecting(engine);
+            Assert.IsTrue(ReadPausedForReconnect(engine));
+
+            SetExpectingInitialFullState(engine, false);
+            SetExpectingFullState(engine, false); // Resync/Reconnect branch → ClearFullStateRequestState
+            InvokeHandleServerDrivenFullStateReceived(engine, 60, sim.SerializeFullState(), sim.GetStateHash());
+            Assert.IsFalse(ReadPausedForReconnect(engine),
+                "FullState consumption must clear the pause flag (ClearFullStateRequestState)");
+            Assert.IsFalse(ReadFullStateRequestPending(engine));
+
+            // Cycle 2 (no reconnect): timer must resume normal countdown and resend.
+            SetFullStateRequestPending(engine, true);
+            bool aborted = InvokeCheckSdFullStateRequestTimeout(engine, 5.0f);
+            Assert.IsFalse(aborted);
+            Assert.AreEqual(1, mockSDNetwork.SendFullStateRequestCallCount,
+                "After a cleared pause, a fresh request must resume normal countdown (no stale pause)");
         }
 
         // ResyncRequest apply that the retreat guard Skips (nothing restored) must skip all

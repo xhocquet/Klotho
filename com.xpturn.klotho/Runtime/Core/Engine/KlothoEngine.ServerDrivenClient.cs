@@ -35,6 +35,13 @@ namespace xpTURN.Klotho.Core
         private float _fullStateRequestElapsedMs;
         private int _fullStateRequestRetryCount;
 
+        // Set while a reconnect (ReconnectTimeoutMs budget) is in progress with a FullState request
+        // outstanding: suspends the retry/abort timer so the shorter FullState abort window cannot
+        // preempt a recoverable reconnect. Cleared by ClearFullStateRequestState (a reconnect that
+        // succeeds consumes a server FullState, which routes through that clear) and by the terminal
+        // abort when the reconnect ultimately fails.
+        private bool _fullStateRequestPausedForReconnect;
+
         // Per-entry scratch for verified-batch instances the buffer rejected (Dropped*) —
         // returned to CommandPool at the entry consumption point, after the last
         // entry.Commands use (RecordTick). In practice always empty (SD has no seals and
@@ -79,6 +86,7 @@ namespace xpTURN.Klotho.Core
             _fullStateRequestPending = false;
             _fullStateRequestElapsedMs = 0f;
             _fullStateRequestRetryCount = 0;
+            _fullStateRequestPausedForReconnect = false;
         }
 
         // SD-local terminal for an unrecoverable resync — retry budget
@@ -107,6 +115,13 @@ namespace xpTURN.Klotho.Core
             if (!_fullStateRequestPending)
                 return false;
 
+            // A reconnect is in progress — suspend the retry/abort countdown so the shorter FullState
+            // abort window does not preempt the reconnect budget. The pause is lifted either by
+            // ClearFullStateRequestState when the reconnect succeeds, or by HandleSdReconnectFailed
+            // when it ultimately fails.
+            if (_fullStateRequestPausedForReconnect)
+                return false;
+
             _fullStateRequestElapsedMs += deltaTime * 1000f;
             if (_fullStateRequestElapsedMs >= RESYNC_TIMEOUT_MS)
             {
@@ -130,6 +145,31 @@ namespace xpTURN.Klotho.Core
 
             // Exhaustion may have aborted the match — signal the caller to skip the prediction loop.
             return State != KlothoState.Running;
+        }
+
+        // SD reconnect interrupt — a recoverable disconnect (NetworkFailure) started a reconnect.
+        // While a FullState request is outstanding, suspend its retry/abort timer so the abort
+        // window cannot preempt the reconnect (up to ReconnectTimeoutMs). No-op when nothing is
+        // pending (a new request cannot start mid-reconnect — transport is down), and idempotent
+        // across repeated signals. Cleared by ClearFullStateRequestState / the terminal abort.
+        private void HandleSdReconnecting()
+        {
+            if (_fullStateRequestPending)
+                _fullStateRequestPausedForReconnect = true;
+        }
+
+        // SD reconnect terminal failure — reconnect exhausted retries / timed out / was rejected
+        // (all four service paths converge on OnReconnectFailed). Act only when a FullState request
+        // was outstanding (the freeze this targets); otherwise reconnect-failure handling stays with
+        // the game layer (IKlothoSessionObserver.OnReconnectFailed), unchanged. HandleSdResyncFailure
+        // is idempotent (it clears the pending gate), so a duplicate/late signal no-ops.
+        private void HandleSdReconnectFailed(ReconnectRejectReason reason)
+        {
+            if (!_fullStateRequestPending)
+                return;
+            _logger?.KWarning(
+                $"[KlothoEngine][SD] Reconnect failed ({reason}) with FullState request outstanding — terminating");
+            HandleSdResyncFailure(AbortReason.ReconnectFailed);
         }
 
         // ── Client tick loop ──────────────────────────

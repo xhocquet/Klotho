@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using NUnit.Framework;
 using xpTURN.Klotho.Serialization;
 using xpTURN.Klotho.Deterministic.Math;
+using xpTURN.Klotho.Deterministic.Geometry;
 
 namespace xpTURN.Klotho.Deterministic.Physics.Tests
 {
@@ -1217,6 +1218,90 @@ namespace xpTURN.Klotho.Deterministic.Physics.Tests
             Assert.AreEqual(bodiesA[0].position.x.RawValue, bodiesB[0].position.x.RawValue);
             Assert.AreEqual(bodiesA[0].position.y.RawValue, bodiesB[0].position.y.RawValue);
             Assert.AreEqual(bodiesA[0].rigidBody.velocity.x.RawValue, bodiesB[0].rigidBody.velocity.x.RawValue);
+        }
+
+        #endregion
+
+        #region StaticFingerprint — mesh vertex hashing (RISK-1)
+
+        static FPMeshData MakeTriMesh(FP64 yOffset)
+            => new FPMeshData(
+                new[]
+                {
+                    new FPVector3(FP64.Zero, yOffset, FP64.Zero),
+                    new FPVector3(FP64.One,  yOffset, FP64.Zero),
+                    new FPVector3(FP64.Zero, yOffset, FP64.One),
+                },
+                new[] { 0, 1, 2 });
+
+        static FPStaticCollider MakeMeshCollider(int id, FPMeshData meshData)
+            => new FPStaticCollider
+            {
+                id       = id,
+                collider = FPCollider.FromMesh(new FPMeshShape(FPVector3.Zero, FPQuaternion.Identity)),
+                meshData = meshData,
+            };
+
+        static FPStaticCollider MakeSphereCollider(int id)
+            => new FPStaticCollider
+            {
+                id       = id,
+                collider = FPCollider.FromSphere(new FPSphereShape(FP64.One, FPVector3.Zero)),
+                meshData = default,
+            };
+
+        static FPPhysicsWorld WorldWith(params FPStaticCollider[] colliders)
+        {
+            var world = new FPPhysicsWorld(FP64.FromInt(4));
+            world.LoadStaticColliders("scene", new List<FPStaticCollider>(colliders));
+            return world;
+        }
+
+        [Test]
+        public void StaticFingerprint_VertexOnlyDivergence_DiffersAcrossWorlds()
+        {
+            // Same transform + id, vertices differ only → fingerprint must differ (RISK-1: was identical).
+            var worldA = WorldWith(MakeMeshCollider(1, MakeTriMesh(FP64.Zero)));
+            var worldB = WorldWith(MakeMeshCollider(1, MakeTriMesh(FP64.One)));
+            Assert.AreNotEqual(worldA.GetStaticFingerprint(), worldB.GetStaticFingerprint());
+        }
+
+        [Test]
+        public void StaticFingerprint_FlyweightSharedMesh_StableAndNoThrow()
+        {
+            var mesh = MakeTriMesh(FP64.Zero);
+            var world = WorldWith(MakeMeshCollider(1, mesh), MakeMeshCollider(2, mesh)); // shared instance
+            Assert.DoesNotThrow(() => world.GetStaticFingerprint());
+            Assert.AreEqual(world.GetStaticFingerprint(), world.GetStaticFingerprint());
+        }
+
+        [Test]
+        public void StaticFingerprint_MeshTypeWithNullMeshData_NoThrow()
+        {
+            var world = WorldWith(new FPStaticCollider
+            {
+                id       = 1,
+                collider = FPCollider.FromMesh(new FPMeshShape(FPVector3.Zero, FPQuaternion.Identity)),
+                meshData = null,
+            });
+            Assert.DoesNotThrow(() => world.GetStaticFingerprint());
+        }
+
+        [Test]
+        public void StaticFingerprint_NonMeshIdenticalWorlds_Match()
+        {
+            // type != Mesh never enters the new branch — non-mesh geometry is unaffected.
+            var a = WorldWith(MakeSphereCollider(1));
+            var b = WorldWith(MakeSphereCollider(1));
+            Assert.AreEqual(a.GetStaticFingerprint(), b.GetStaticFingerprint());
+        }
+
+        [Test]
+        public void StaticFingerprint_MeshOnlyWorld_NonZero()
+        {
+            // Wire contract: 0 means "not provided"; GetStaticFingerprint must never return 0.
+            var world = WorldWith(MakeMeshCollider(1, MakeTriMesh(FP64.Zero)));
+            Assert.AreNotEqual(0L, world.GetStaticFingerprint());
         }
 
         #endregion

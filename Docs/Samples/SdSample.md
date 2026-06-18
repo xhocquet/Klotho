@@ -144,13 +144,13 @@ var roomManager = new RoomManager(transport, router, loggerFactory, new RoomMana
 new ServerLoop(transport, roomManager, tickIntervalMs, logger).Run();   // blocks until SIGINT, graceful drain
 ```
 
-`RoomManager` wires `EcsSimulation` / `ServerNetworkService` / `KlothoEngine` / `CommandFactory` per room internally — `Program.cs` only supplies the four factories. **Why `RoomManager(MaxRooms=1)` and not a single-engine loop**: the stock `JoinServerDrivenAsync` always sends a `RoomHandshakeMessage`, which only `RoomRouter` consumes — a raw `ServerNetworkService` would reject it. `MaxRooms=1` keeps the standard routing path while disabling multi-room. (Full rationale: [Plan-SdSample.md §4-3](../IMP/IMP48/Plan-SdSample.md).)
+`RoomManager` wires `EcsSimulation` / `ServerNetworkService` / `KlothoEngine` / `CommandFactory` per room internally — `Program.cs` only supplies the four factories. **Why `RoomManager(MaxRooms=1)` and not a single-engine loop**: the stock `JoinServerDrivenAsync` always sends a `RoomHandshakeMessage`, which only `RoomRouter` consumes — a raw `ServerNetworkService` would reject it. `MaxRooms=1` keeps the standard routing path while disabling multi-room.
 
 ---
 
 ## 5. SD-specific gotchas (reusing a P2P game on a server)
 
-These four bit us porting P2pSample → SD. All four trace back to **the ServerDriven client skipping `OnInitializeWorld`** (it boots from the server FullState), or to the **1-based server player ids**. (Detail + fixes: [Plan-SdSample.md §14](../IMP/IMP48/Plan-SdSample.md).)
+These four bit us porting P2pSample → SD. All four trace back to **the ServerDriven client skipping `OnInitializeWorld`** (it boots from the server FullState), or to the **1-based server player ids**.
 
 | # | Trap | Fix |
 |---|---|---|
@@ -179,6 +179,5 @@ The server propagates its `SimulationConfig` (tick interval etc.) to clients via
 ## See also
 
 - [`Samples/SdSample/README.md`](../../Samples/SdSample/README.md) — run steps (server + 2 clients), troubleshooting.
-- [Plan-SdSample.md](../IMP/IMP48/Plan-SdSample.md) — full implementation plan, §14 gotchas (SG11~SG14).
 - [P2pSample.md](./P2pSample.md) — the P2P sibling (same game, peer topology).
 - [Brawler.H.DedicatedServer.md](./Brawler.H.DedicatedServer.md) — full-featured dedicated server (multi-room / LateJoin / Reconnect).

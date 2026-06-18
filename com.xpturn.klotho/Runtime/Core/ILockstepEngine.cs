@@ -556,6 +556,8 @@ namespace xpTURN.Klotho.Core
         /// re-prediction is not counted. Sampled: predictions cleared by a rollback before
         /// their actual command arrived are not counted. Persistently low values signal a
         /// too-thin timing buffer (raise InputDelayTicks / extra delay).
+        /// Returns <c>-1</c> (outside the 0~1 range) in ServerDriven mode, where the metric is
+        /// not measured — distinguishing "not measured" from a real perfect-accuracy 1.0.
         /// </summary>
         float PredictionAccuracy { get; }
 

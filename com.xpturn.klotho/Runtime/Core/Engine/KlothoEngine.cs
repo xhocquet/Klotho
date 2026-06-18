@@ -187,7 +187,11 @@ namespace xpTURN.Klotho.Core
         private SimpleInputPredictor _inputPredictor;
 
         /// <inheritdoc />
-        public float PredictionAccuracy => _inputPredictor?.Accuracy ?? 1.0f;
+        public float PredictionAccuracy =>
+            _simConfig?.Mode == NetworkMode.ServerDriven
+                ? -1f // N/A sentinel: SD re-prediction never feeds UpdateAccuracy, so the predictor
+                      // would otherwise report a false 1.0. -1 (outside the 0~1 range) means "not measured".
+                : _inputPredictor?.Accuracy ?? 1.0f;
 
         private float _accumulator;
         private bool _consumePendingDeltaTime;
@@ -602,6 +606,12 @@ namespace xpTURN.Klotho.Core
                 {
                     _serverDrivenNetwork.OnBootstrapBegin += HandleBootstrapBegin;
                     _serverDrivenNetwork.OnCommandRejected += HandleCommandRejected;
+                    // Pause the FullState retry/abort timer while a reconnect is in progress, and
+                    // terminate if the reconnect ultimately fails — so the shorter FullState abort
+                    // window does not race the (longer) reconnect. These events live on
+                    // IKlothoNetworkService, the same instance as _serverDrivenNetwork.
+                    _networkService.OnReconnecting += HandleSdReconnecting;
+                    _networkService.OnReconnectFailed += HandleSdReconnectFailed;
                 }
             }
             else
@@ -1340,6 +1350,8 @@ namespace xpTURN.Klotho.Core
                         {
                             _serverDrivenNetwork.OnBootstrapBegin -= HandleBootstrapBegin;
                             _serverDrivenNetwork.OnCommandRejected -= HandleCommandRejected;
+                            _networkService.OnReconnecting -= HandleSdReconnecting;
+                            _networkService.OnReconnectFailed -= HandleSdReconnectFailed;
                         }
                     }
                 }

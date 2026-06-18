@@ -20,6 +20,12 @@ namespace xpTURN.Klotho.Deterministic.Geometry
         // index: triIndex * 3 + edgeSlot
         public bool[] activeEdgeFlags;
 
+        // Allocation-free content hash of the geometry (vertex/index counts + elements, matching the
+        // Serialize payload). Recomputed in SetData. Folded into the static-geometry fingerprint so a
+        // vertex-only divergence between peers surfaces at its source. Not part of the per-tick state
+        // hash, the snapshot, or the wire format — do not add it to Serialize.
+        public long ContentHash;
+
         public FPVector3[] Vertices => vertices;
         public int[] Indices => indices;
         public FPBounds3 LocalBounds => localBounds;
@@ -35,7 +41,23 @@ namespace xpTURN.Klotho.Deterministic.Geometry
             this.vertices = vertices;
             this.indices = indices;
             localBounds = ComputeBounds(vertices);
+            ContentHash = ComputeContentHash();
             // BuildActiveEdges();
+        }
+
+        // Folds vertex/index counts + elements via FNV (deterministic, allocation-free). Mirrors the
+        // Serialize payload range; excludes localBounds (derived) and activeEdgeFlags (lazy/unserialized)
+        // so a later BuildActiveEdges call does not invalidate the cache.
+        long ComputeContentHash()
+        {
+            ulong h = FPHash.FNV_OFFSET;
+            h = FPHash.Hash(h, vertices.Length);
+            for (int i = 0; i < vertices.Length; i++)
+                h = FPHash.Hash(h, vertices[i]);
+            h = FPHash.Hash(h, indices.Length);
+            for (int i = 0; i < indices.Length; i++)
+                h = FPHash.Hash(h, indices[i]);
+            return (long)h;
         }
 
         // edge key: (min(a,b), max(a,b))

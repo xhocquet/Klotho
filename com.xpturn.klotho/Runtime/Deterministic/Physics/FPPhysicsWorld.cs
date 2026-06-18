@@ -142,8 +142,10 @@ namespace xpTURN.Klotho.Deterministic.Physics
             count = _staticColliderCount;
         }
 
-        // Diagnostic fingerprint of the registered static geometry (count + per-collider fields).
-        // Not part of the state hash or snapshot — see GetSerializedSize/Serialize.
+        // Diagnostic fingerprint of the registered static geometry (count + per-collider fields, plus
+        // the mesh content hash for Mesh colliders so vertex-only divergence is surfaced — the collider
+        // field alone only carries the mesh transform). Not part of the state hash or snapshot — see
+        // GetSerializedSize/Serialize.
         public long GetStaticFingerprint()
         {
             ulong h = FPHash.FNV_OFFSET;
@@ -156,6 +158,8 @@ namespace xpTURN.Klotho.Deterministic.Physics
                 h = FPHash.Hash(h, c.restitution);
                 h = FPHash.Hash(h, c.friction);
                 h = FPHash.Hash(h, c.collider);
+                if (c.collider.type == ShapeType.Mesh && c.meshData != null)
+                    h = FPHash.Hash(h, c.meshData.ContentHash);
             }
             return (long)h;
         }
