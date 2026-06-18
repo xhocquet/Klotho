@@ -29,6 +29,12 @@ namespace xpTURN.Klotho.Network
         void SendClientInput(int tick, ICommand command);
 
         /// <summary>
+        /// Client → server: submit a reliable command, reliably-ordered and tick-less — the server
+        /// assigns the execution tick on arrival. The server implementation is a no-op (never submits).
+        /// </summary>
+        void SendReliableCommand(ICommand command);
+
+        /// <summary>
         /// Client → server: signal that Initial FullState has been applied and the client is ready
         /// for the first server tick. ReliableOrdered. Server side throws NotSupportedException.
         /// </summary>

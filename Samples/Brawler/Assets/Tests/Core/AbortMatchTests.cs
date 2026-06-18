@@ -6,7 +6,7 @@ namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
     /// Validates IKlothoEngine.AbortMatch — the sole entry point for KlothoState.Aborted.
-    /// Covers Gate 4.1 / Gate A of IMP38 Plan-P2PChainStallWatchdog.
+    /// Covers the P2P chain-stall watchdog abort path.
     /// </summary>
     [TestFixture]
     public class AbortMatchTests

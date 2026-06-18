@@ -5,11 +5,11 @@ using System.Text;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Physics;
 
-// Cross-runtime numeric isolation probe (IMP48-F5 §6-1), Part A.
+// Cross-runtime numeric isolation probe, Part A.
 // Same source compiled by Roslyn; executed under CoreCLR (net8.0, `dotnet`) and
 // Unity Mono (net472, `mono`). Folds every primitive result into an FNV-1a ulong;
 // diff the two runtimes' outputs. A differing fold => that primitive is NOT
-// cross-runtime bit-identical (the IMP48-F5 root-cause class).
+// cross-runtime bit-identical (a non-determinism root-cause class).
 
 const ulong FNV_OFFSET = 14695981039346656037UL;
 const ulong FNV_PRIME = 1099511628211UL;
@@ -115,7 +115,7 @@ const int SWEEP = 4_000_000;
     sb.Append("sweep,div_small,").Append(hDivS.ToString(CultureInfo.InvariantCulture)).Append('\n');
 }
 
-// ---- Part B: box-on-ground via FPStaticCollider + static BVH (the actual IMP48-F5
+// ---- Part B: box-on-ground via FPStaticCollider + static BVH (the actual non-determinism
 //      bug path: _staticPairs -> _staticContacts -> MergeStaticContacts -> ResolveContact).
 //      Exercises explicit-layout FPCollider union + contact-only Sqrt/Divide in the real path. ----
 static void RunStep(StringBuilder o, string tag, bool useStaticCollider)

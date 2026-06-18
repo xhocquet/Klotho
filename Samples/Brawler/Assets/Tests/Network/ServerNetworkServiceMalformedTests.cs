@@ -16,7 +16,7 @@ namespace xpTURN.Klotho.Network.Tests
     /// Success branches that dispatch into StartHandshake / HandleReconnectRequest / HandleSpectatorJoin
     /// may throw downstream when the engine isn't initialized; the L2 boundary state (pending Remove,
     /// DisconnectPeer count) is asserted *regardless* of whether the inner handler throws — those are
-    /// the assertions IMP35 owns.
+    /// the assertions this suite owns.
     /// </summary>
     [TestFixture]
     public class ServerNetworkServiceMalformedTests
@@ -266,7 +266,7 @@ namespace xpTURN.Klotho.Network.Tests
                 // Downstream handlers (StartHandshake / HandleReconnectRequest / HandleSpectatorJoin /
                 // HandleClientInputMessage / etc.) may throw when the engine and other deps are not
                 // fully initialized in this slim-unit setup. The L2 boundary behavior — the only
-                // contract IMP35 owns — already mutated state before the throw, so post-throw
+                // contract this suite owns — already mutated state before the throw, so post-throw
                 // assertions on _pendingPeers / DisconnectPeerCallCount / _peerDeviceIds remain valid.
             }
         }

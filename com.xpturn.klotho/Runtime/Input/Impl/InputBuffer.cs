@@ -51,6 +51,11 @@ namespace xpTURN.Klotho.Input
         private readonly Dictionary<int, List<ICommand>> _systemCommands
             = new Dictionary<int, List<ICommand>>();
 
+        // Per-player high-water sequence number for client-side reliable-command dedup
+        // (see AddSystemCommand). Monotone per match; reset only on full Clear (match reset).
+        private readonly Dictionary<int, int> _reliableSeqHighWater
+            = new Dictionary<int, int>();
+
         private int _oldestTick = int.MaxValue;
         private int _newestTick = int.MinValue;
 
@@ -226,6 +231,20 @@ namespace xpTURN.Klotho.Input
 
         private void AddSystemCommand(ICommand command)
         {
+            // Client-side reliable dedup. AddSystemCommand is a dedup-free List.Add, so a reliable
+            // command redelivered/reprocessed at the same commit tick would double-execute. The
+            // per-player high-water sequence number (reliable-ordered delivery ⇒ gap-free monotone)
+            // drops any seq <= high-water silently. Safe against rollback: server-driven reliable lands
+            // at a verified tick (below the rollback floor, never wiped/re-added); peer-to-peer preserves
+            // committed reliable across the rollback wipe (see ClearAfter) — neither path re-adds.
+            if (command is IReliableCommand rel)
+            {
+                if (_reliableSeqHighWater.TryGetValue(command.PlayerId, out int hw)
+                    && rel.SequenceNumber <= hw)
+                    return;   // duplicate — ignore (arrival is caller-owned; not buffer property)
+                _reliableSeqHighWater[command.PlayerId] = rel.SequenceNumber;
+            }
+
             int tick = command.Tick;
             if (!_systemCommands.TryGetValue(tick, out var list))
             {
@@ -446,7 +465,13 @@ namespace xpTURN.Klotho.Input
                 _commands.Remove(t);
             }
 
-            // System commands
+            // System commands — PRESERVE committed reliable commands across the rollback wipe.
+            // A reliable command is placed by the authority at an absolute tick; rolling back earlier
+            // ticks doesn't move it, and peer-to-peer has no re-delivery path (reliable-ordered,
+            // single-shot), so wiping it here would lose it permanently. Keep IReliableCommand entries;
+            // return only non-reliable system commands (e.g. PlayerJoin) to the pool. (Server-driven:
+            // reliable lands at the verified floor — below any ClearAfter tick — so this skip is a no-op
+            // there. ClearBefore still cleans reliable normally; preservation is ClearAfter-only.)
             _ticksToRemoveCache.Clear();
             foreach (var t in _systemCommands.Keys)
             {
@@ -456,12 +481,22 @@ namespace xpTURN.Klotho.Input
             for (int i = 0; i < _ticksToRemoveCache.Count; i++)
             {
                 int t = _ticksToRemoveCache[i];
-                if (_systemCommands.TryGetValue(t, out var list))
+                if (!_systemCommands.TryGetValue(t, out var list))
+                    continue;
+
+                bool hasReliable = false;
+                for (int j = 0; j < list.Count; j++)
                 {
-                    for (int j = 0; j < list.Count; j++)
+                    if (list[j] is IReliableCommand)
+                        hasReliable = true;       // keep — committed at an absolute tick
+                    else
                         CommandPool.Return(list[j]);
                 }
-                _systemCommands.Remove(t);
+
+                if (hasReliable)
+                    list.RemoveAll(c => !(c is IReliableCommand));   // compact: drop returned non-reliable
+                else
+                    _systemCommands.Remove(t);
             }
 
             RecalculateBounds();
@@ -487,6 +522,7 @@ namespace xpTURN.Klotho.Input
             _systemCommands.Clear();
 
             _sealedTickPlayer.Clear();
+            _reliableSeqHighWater.Clear();   // match reset — fresh reliable seq sequence
 
             _oldestTick = int.MaxValue;
             _newestTick = int.MinValue;
@@ -545,12 +581,10 @@ namespace xpTURN.Klotho.Input
                 => a.PlayerId.CompareTo(b.PlayerId);
         }
 
+        // Single source of truth for system/reliable ordering (shared with KlothoEngine's
+        // server-sim/replay comparer) — total-order key chain, see Core.CommandOrdering.
         private static int CompareSystemCommands(ICommand a, ICommand b)
-        {
-            if (a is ISystemCommand sa && b is ISystemCommand sb)
-                return sa.OrderKey.CompareTo(sb.OrderKey);
-            return a.CommandTypeId.CompareTo(b.CommandTypeId);
-        }
+            => Core.CommandOrdering.Compare(a, b);
     }
 
     /// <summary>

@@ -7,8 +7,8 @@ using System.Text;
 namespace xpTURN.Klotho.Diagnostics
 {
     /// <summary>
-    /// Match-scoped accumulator for the RTT spike measurement mini-IMP
-    /// (Plan-P2PRttSpikeMeasurement section 3.3). Each client (host/guest) runs its own
+    /// Match-scoped accumulator for RTT spike measurement.
+    /// Each client (host/guest) runs its own
     /// instance — host does not receive guest metrics over the wire. Engine emit sites
     /// (ChainBreak / Rollback) push events here; the controller emits the summary line
     /// when the match phase exits Playing.

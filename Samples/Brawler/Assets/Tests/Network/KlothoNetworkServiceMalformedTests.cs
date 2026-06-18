@@ -117,7 +117,7 @@ namespace xpTURN.Klotho.Network.Tests
         {
             // P2P client never populates _pendingPeers (audit Stage 0 #5: "host only").
             // The intent of this test: confirm client-mode receive path goes through *regular dispatch*,
-            // and that the IMP35 changes don't cause client mode to misroute messages into the pending branch.
+            // and that the malformed-message handling doesn't cause client mode to misroute messages into the pending branch.
             // L2 disconnect-on-malformed *does* fire in both modes (intentional — symmetric defense),
             // so we focus on verifying the pending path is untouched in client mode.
 

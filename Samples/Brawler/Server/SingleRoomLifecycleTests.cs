@@ -11,7 +11,7 @@ using xpTURN.Klotho.Network;
 namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
 {
     /// <summary>
-    /// Single-room lifecycle tests (IMP36).
+    /// Single-room lifecycle tests.
     /// Verifies that a RoomManager configured with MaxRooms=1 supports the lazy CreateRoom flow:
     /// boot with no rooms, RoomRouter creates room 0 on first RoomHandshakeMessage,
     /// match end drains and disposes the room, next peer triggers a fresh room creation in the same slot.

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2] - 2026-06-18
+
+### Reliable command channel
+
+- **One-shot commands get a dedicated reliable channel (server-driven)** — actions that must land exactly once yet aren't latency-sensitive (character spawn, and similar buy/surrender-type commands) used to compete for the same per-tick input slot as movement and leaned on a retry / collision-avoidance workaround to get through. In server-driven mode they now travel a separate channel: the client submits without picking a tick and the server assigns one authoritative execution tick, so the command applies exactly once, in a stable order, on every peer — never predicted or rolled back. A per-player sequence guard makes a resend harmless. Peer-to-peer keeps the existing path; spawn is the first command moved over.
+- **Owning player decided by the authority on placement** — a reliable command's player is now taken from the server's validated connection mapping rather than the submitted payload. Previously two players' spawns both collapsed onto the same default id, so only one character appeared and the other was dropped as a duplicate; fixing it also cleared a spurious mismatch in the client's command reconciliation.
+- **Reliable-retry collision check false positive** — the guard that stops the legacy retry path from stamping over an in-flight command also fired on the command's own last-attempt tick, suppressing the empty filler that keeps the per-tick quorum advancing and risking a stall rather than preventing a collision. The bad clause was removed, so the guard now blocks only a genuine future-tick collision.
+
 ## [0.3.1] - 2026-06-17
 
 ### Multi-room dedicated server — straggler lifecycle thread safety

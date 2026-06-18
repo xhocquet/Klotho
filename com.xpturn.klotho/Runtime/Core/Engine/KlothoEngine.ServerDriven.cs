@@ -79,14 +79,17 @@ namespace xpTURN.Klotho.Core
             for (int i = 0; i < commands.Count; i++)
                 _inputBuffer.AddCommand(commands[i]);
 
-            // 2. Record replay (optional).
-            if (_replaySystem.IsRecording)
-                _replaySystem.RecordTick(CurrentTick, commands);
-
-            // 3. Run simulation.
+            // 2. Run simulation.
             _logger?.KDebug($"[KlothoEngine][SD] ServerTick: CurrentTick={CurrentTick}, frame.Tick before={_simulation.CurrentTick}, cmds={commands.Count}");
             _eventCollector.BeginTick(CurrentTick);
             commands.Sort(s_commandComparer);
+
+            // 3. Record replay (optional) — recorded AFTER the sort: replay re-runs the recorded byte
+            // order without re-sorting, so the recorded order must equal the executed (sorted) order,
+            // else a tick carrying multiple reliable commands desyncs on replay.
+            if (_replaySystem.IsRecording)
+                _replaySystem.RecordTick(CurrentTick, commands);
+
             _simulation.Tick(commands);
             _logger?.KDebug($"[KlothoEngine][SD] ServerTick: frame.Tick after={_simulation.CurrentTick}");
 

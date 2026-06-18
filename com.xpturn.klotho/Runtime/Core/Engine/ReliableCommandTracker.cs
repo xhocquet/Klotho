@@ -66,16 +66,46 @@ namespace xpTURN.Klotho.Core
             // Initial send. factory() must return a fresh CommandPool instance — framework takes ownership.
             var cmd = factory();
             handle.CommandTypeId = cmd.CommandTypeId;
+            handle.IssueCount = 1;
+
+            // Reliable-channel path: assign a per-player monotonic sequence number, then submit to the
+            // authority, which assigns the execution tick. The client does not predict a tick, so there
+            // is no retry/escalation here (HandleTickExecuted skips reliable-channel handles); the handle
+            // resolves via Confirm (state-driven ack) or the wire dedup-ack. Falls back to the legacy
+            // slot path when the reliable channel is unavailable — peer-to-peer, a server-side issue, or
+            // a command that does not implement IReliableCommand.
+            if (cmd is IReliableCommand reliable)
+            {
+                reliable.SequenceNumber = NextSequence(playerId);
+                if (_engine.SubmitReliable(cmd))
+                {
+                    handle.ReliableChannel = true;
+                    handle.AssignedSeq = reliable.SequenceNumber;
+                    _handles[playerId] = handle;
+                    _logger?.KInformation($"[KlothoEngine][Reliable] Submit: playerId={playerId}, cmdType={cmd.GetType().Name}, seq={reliable.SequenceNumber}");
+                    return handle;
+                }
+            }
+
+            // Legacy slot path (P2P / server-side issue / non-reliable command).
             _engine.InputCommand(cmd, extraDelay: 0);
             handle.LastAttemptTick = _engine.CurrentTick;
             handle.OutstandingTargetTick = _engine.CurrentTick + _engine.InputDelay;
-            handle.IssueCount = 1;
 
             _handles[playerId] = handle;
 
             _logger?.KInformation($"[KlothoEngine][Reliable] Issue: playerId={playerId}, cmdType={cmd.GetType().Name}, targetTick={handle.OutstandingTargetTick}");
 
             return handle;
+        }
+
+        // Per-player monotonic reliable-command sequence (client-assigned; the authority dedups by it).
+        private readonly Dictionary<int, int> _nextSeq = new Dictionary<int, int>();
+        private int NextSequence(int playerId)
+        {
+            _nextSeq.TryGetValue(playerId, out int next);
+            _nextSeq[playerId] = next + 1;
+            return next;
         }
 
         private void HandleTickExecuted(int executedTick)
@@ -94,6 +124,10 @@ namespace xpTURN.Klotho.Core
             {
                 int playerId = kv.Key;
                 var handle = kv.Value;
+
+                // Reliable-channel handles are placed by the authority and delivered reliably-ordered,
+                // so they take no per-tick retry/escalation (they resolve via Confirm or wire dedup-ack).
+                if (handle.ReliableChannel) continue;
 
                 bool forced = FaultInjection.ForceSpawnRetryPlayerIds.Contains(playerId);
                 if (handle.IsResolved && !forced) continue;
@@ -170,7 +204,27 @@ namespace xpTURN.Klotho.Core
         private void HandleResyncCompleted(int restoredTick)
         {
             foreach (var kv in _handles)
-                kv.Value.LastAttemptTick = -1;
+            {
+                var handle = kv.Value;
+
+                // A reliable-channel submit may have been lost across a resync/reconnect (reliable-ordered
+                // delivery is per-connection). Re-submit unresolved handles with the SAME sequence number —
+                // the authority dedups by (playerId, sequence), so a still-live original is harmless. The
+                // commit tick is re-assigned by the authority on re-arrival.
+                if (handle.ReliableChannel)
+                {
+                    if (handle.IsResolved) continue;
+                    var cmd = handle.Factory();
+                    if (cmd is IReliableCommand rc)
+                        rc.SequenceNumber = handle.AssignedSeq;
+                    if (!_engine.SubmitReliable(cmd))
+                        CommandPool.Return(cmd);   // channel unavailable (mode flip) — drop, no leak
+                    continue;
+                }
+
+                // Legacy slot path: clear cooldown so the next due check re-emits immediately.
+                handle.LastAttemptTick = -1;
+            }
         }
 
         private void ResolveAndRemove(int playerId, ReliableCommandHandle handle)
@@ -199,10 +253,18 @@ namespace xpTURN.Klotho.Core
         internal bool CapHitLogged = false;
         internal int CapHitRejectCount = 0;
 
+        // True when this handle was submitted on the reliable channel (the authority assigns the
+        // execution tick). Such handles do NOT retry/escalate — they resolve via Confirm (state-driven
+        // ack) or wire dedup-ack. Legacy slot handles (ReliableChannel == false) keep the retry loop.
+        internal bool ReliableChannel = false;
+
+        // The per-player sequence number assigned at issue. Reused on resync re-submit so the authority
+        // dedups (playerId, sequence) against a still-live original. -1 until a reliable-channel submit.
+        internal int AssignedSeq = -1;
+
         public bool WouldCollideAt(int pollTick)
         {
             if (LastAttemptTick < 0) return false;
-            if (pollTick == LastAttemptTick) return true;
             if (Engine != null && pollTick + Engine.InputDelay == OutstandingTargetTick) return true;
             return false;
         }

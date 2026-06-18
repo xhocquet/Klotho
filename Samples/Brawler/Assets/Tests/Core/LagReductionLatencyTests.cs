@@ -6,7 +6,7 @@ namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
     /// Verifies the LagReductionLatency tracker entry behavior in KlothoEngine.ApplyExtraDelay.
-    /// Backs Plan-LagReductionLatencyReconnectFix Option A — Reconnect source skip + stale pending guard.
+    /// Covers the reconnect-source skip and stale-pending guard in the lag-reduction latency path.
     /// </summary>
     [TestFixture]
     public class LagReductionLatencyTests

@@ -9,7 +9,7 @@ namespace xpTURN.Klotho.Tests.Network
     /// <summary>
     /// Verifies SDClientService buffers the handshake-time extra-delay value when
     /// the engine has not yet been subscribed, and drains it on SubscribeEngine.
-    /// Backs ISS-09 fix (Sync seed lost when handshake handler fires before engine ready).
+    /// Covers the fix for the Sync seed being lost when the handshake handler fires before the engine is ready.
     /// </summary>
     [TestFixture]
     public class PendingExtraDelayTests

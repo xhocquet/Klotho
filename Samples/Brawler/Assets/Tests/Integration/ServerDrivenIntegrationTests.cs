@@ -1382,7 +1382,7 @@ namespace xpTURN.Klotho.Tests.Integration
         /// <summary>
         /// Bootstrap-acked-players set must clear when the server transitions Phase = Disconnected,
         /// otherwise a reused single-room session would treat match-2 as already pre-acked.
-        /// Mirrors the IMP36 single-room reuse regression guard and ServerNetworkService Phase setter
+        /// Mirrors the single-room reuse regression guard and ServerNetworkService Phase setter
         /// clear branch (Phase = Disconnected / Lobby).
         /// </summary>
         [Test]

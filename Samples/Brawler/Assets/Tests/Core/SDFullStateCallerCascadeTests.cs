@@ -99,6 +99,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void BroadcastFullState(int tick, byte[] data, long hash, FullStateKind k = FullStateKind.Unicast) { }
             public void SendPlayerConfig(int playerId, PlayerConfigBase config) { }
             public void SendClientInput(int tick, ICommand command) { }
+            public void SendReliableCommand(ICommand command) { }
             public void SendBootstrapReady(int playerId) { }
             public int GetMinClientAckedTick() => 0;
 

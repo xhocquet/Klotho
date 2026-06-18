@@ -485,6 +485,30 @@ namespace xpTURN.Klotho.Network
             StreamPool.ReturnBuffer(cmdBuf);
         }
 
+        // Reliable command submit — tick-less, reliably-ordered. No _unackedInputs queue: the transport
+        // guarantees delivery, and the command tracker re-submits across a reconnect to cover in-flight
+        // loss. The server assigns the execution tick on arrival (its reliable inbox in ServerInputCollector).
+        public void SendReliableCommand(ICommand command)
+        {
+            int cmdSize = command.GetSerializedSize();
+            byte[] cmdBuf = StreamPool.GetBuffer(cmdSize);
+            var cmdWriter = new SpanWriter(cmdBuf.AsSpan(0, cmdBuf.Length));
+            command.Serialize(ref cmdWriter);
+
+            var msg = new ReliableCommandSubmitMessage
+            {
+                PlayerId = _localPlayerId,
+                CommandData = cmdBuf,
+                CommandDataLength = cmdWriter.Position,
+                _sourceBuffer = null,
+            };
+
+            using (var serialized = _messageSerializer.SerializePooled(msg))
+                _transport.Send(0, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+
+            StreamPool.ReturnBuffer(cmdBuf);
+        }
+
         public void SendFullStateRequest(int currentTick)
         {
             var msg = new FullStateRequestMessage { RequestTick = currentTick };

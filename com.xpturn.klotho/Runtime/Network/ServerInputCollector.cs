@@ -44,6 +44,14 @@ namespace xpTURN.Klotho.Network
         private int _rejectedPastTickCount;
         private int _rejectedPeerMismatchCount;
 
+        // Reliable channel: per-player FIFO of pending reliable commands awaiting authoritative tick
+        // placement, plus a per-player high-water sequence number for dedup. Reliably-ordered delivery
+        // is gap-free monotone, so a single high-water value suffices (seq <= high-water ⇒ duplicate).
+        private readonly Dictionary<int, Queue<ICommand>> _reliableInbox
+            = new Dictionary<int, Queue<ICommand>>();
+        private readonly Dictionary<int, int> _reliableSeqHighWater
+            = new Dictionary<int, int>();
+
         /// <summary>
         /// Raised when a player's input has not arrived by tick execution time and is substituted with EmptyCommand.
         /// Parameter: playerId
@@ -152,6 +160,45 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
+        /// Accept a reliable command submit into the per-player inbox for authoritative tick placement
+        /// (there is no client-assigned tick, so no past-tick check). Peer↔player validation is kept
+        /// (reject a spoofed/unregistered peer). Dedup by per-player high-water sequence — a duplicate
+        /// (seq &lt;= high-water, e.g. a reconnect resend) is silently ignored. Accepted instances are
+        /// owned by the inbox until drained by CollectTickInputs; rejected/duplicate arrivals return
+        /// false so the caller disposes them.
+        /// </summary>
+        public bool TryAcceptReliable(int peerId, int playerId, int sequenceNumber, ICommand command)
+        {
+            // PeerMismatch — spoofed or unregistered peer (security; mirrors TryAcceptInput).
+            if (_peerToPlayer == null
+                || !_peerToPlayer.TryGetValue(peerId, out int expectedPlayerId)
+                || expectedPlayerId != playerId)
+            {
+                _rejectedPeerMismatchCount++;
+                _logger?.KWarning($"[InputCollector][Reliable] Rejected (peerId mismatch): peerId={peerId}, playerId={playerId}, cmd={command.GetType().Name}");
+                OnCommandRejected?.Invoke(peerId, -1, command.CommandTypeId, RejectionReason.PeerMismatch);
+                return false;
+            }
+
+            // Dedup — ReliableOrdered is gap-free monotone, so seq <= high-water is a duplicate resend.
+            if (_reliableSeqHighWater.TryGetValue(playerId, out int hw) && sequenceNumber <= hw)
+            {
+                _logger?.KDebug($"[InputCollector][Reliable] Dup ignored: playerId={playerId}, seq={sequenceNumber}, highWater={hw}");
+                return false;
+            }
+            _reliableSeqHighWater[playerId] = sequenceNumber;
+
+            if (!_reliableInbox.TryGetValue(playerId, out var queue))
+            {
+                queue = new Queue<ICommand>();
+                _reliableInbox[playerId] = queue;
+            }
+            queue.Enqueue(command);
+            _logger?.KDebug($"[InputCollector][Reliable] Enqueued: playerId={playerId}, seq={sequenceNumber}, cmd={command.GetType().Name}, pending={queue.Count}");
+            return true;
+        }
+
+        /// <summary>
         /// Snapshot and reset rejection/acceptance counters for phase-tagged monitoring.
         /// </summary>
         public void GetAndResetStats(out int accepted, out int rejectedPastTick, out int rejectedPeerMismatch)
@@ -205,6 +252,29 @@ namespace xpTURN.Klotho.Network
                 }
             }
 
+            // Drain pending reliable commands onto this (executed) tick — authoritative placement.
+            // Stamp command.PlayerId from the peer-validated inbox key (the client-supplied payload
+            // PlayerId is untrusted/zero and must not be relied on) and command.Tick = tick so the
+            // client buffers them at the commit tick and replay/broadcast key them correctly. Drain
+            // order is irrelevant: the engine re-sorts the returned batch with the deterministic
+            // ordering key chain (CommandOrdering) before sim/record.
+            foreach (int playerId in _activePlayerIds)
+            {
+                if (!_reliableInbox.TryGetValue(playerId, out var queue))
+                    continue;
+                while (queue.Count > 0)
+                {
+                    var rel = queue.Dequeue();
+                    if (rel is CommandBase cb)
+                    {
+                        cb.PlayerId = playerId;
+                        cb.Tick = tick;
+                    }
+                    _resultCache.Add(rel);
+                    _logger?.KDebug($"[InputCollector][Reliable] Placed: tick={tick}, pid={playerId}, cmd={rel.GetType().Name}");
+                }
+            }
+
             _lastExecutedTick = tick;
 
             // Clean up data for the executed tick
@@ -255,6 +325,15 @@ namespace xpTURN.Klotho.Network
                 DictionaryPoolHelper.ReturnIntDictionary(dict);
             }
             _inputs.Clear();
+
+            // Reliable inbox: return any undrained pending commands to the pool, then clear inbox
+            // and per-player seq high-water (match reset — a fresh authority/seq sequence).
+            foreach (var queue in _reliableInbox.Values)
+                while (queue.Count > 0)
+                    CommandPool.Return(queue.Dequeue());
+            _reliableInbox.Clear();
+            _reliableSeqHighWater.Clear();
+
             _activePlayerIds.Clear();
             _lastExecutedTick = -1;
             _bootstrapPending = false;

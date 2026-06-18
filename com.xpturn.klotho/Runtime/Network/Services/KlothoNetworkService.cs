@@ -652,6 +652,54 @@ namespace xpTURN.Klotho.Network
             StreamPool.ReturnBuffer(cmdBuf);
         }
 
+        // Reliable command submit — tick-less, reliably-ordered. Guest → host (star topology: a guest's
+        // broadcast reaches peerId 0). The host would assign the execution tick and re-broadcast a
+        // tick-confirmed command.
+        // Currently unused: peer-to-peer keeps the legacy reliable path (the engine's reliable submit
+        // returns false for peer-to-peer, so the command tracker uses the slot/retry path), so nothing
+        // calls this. Retained as the host-placement entry point should the channel later be enabled
+        // for peer-to-peer.
+        public void SendReliableCommand(ICommand command)
+        {
+            int cmdSize = command.GetSerializedSize();
+            var cmdBuf = StreamPool.GetBuffer(cmdSize);
+            var cmdWriter = new SpanWriter(cmdBuf.AsSpan(0, cmdBuf.Length));
+            command.Serialize(ref cmdWriter);
+
+            var msg = new ReliableCommandSubmitMessage
+            {
+                PlayerId = command.PlayerId,
+                CommandData = cmdBuf,
+                CommandDataLength = cmdWriter.Position,
+                _sourceBuffer = null,
+            };
+
+            BroadcastMessagePooled(msg, DeliveryMethod.ReliableOrdered);
+
+            StreamPool.ReturnBuffer(cmdBuf);
+        }
+
+        // Reliable submit receive — the host (authority) would sequence it: assign a lead commit tick,
+        // dedup by (playerId, sequence), and re-broadcast a tick-confirmed command.
+        // Currently unused: peer-to-peer keeps the legacy reliable path, so no guest submits a
+        // ReliableCommandSubmitMessage and this handler never fires in peer-to-peer. The
+        // deserialize-then-drop below is a defensive no-op for any stray message.
+        private void HandleReliableCommandSubmit(ReliableCommandSubmitMessage msg, int fromPeerId = -1)
+        {
+            if (!IsHost) return;   // only the authority sequences reliable commands
+
+            var cmdSpan = msg.CommandDataSpan;
+            if (cmdSpan.Length < 4) return;
+            var reader = new SpanReader(cmdSpan);
+            var command = _commandFactory.DeserializeCommandRaw(ref reader);
+            if (command == null) return;
+
+            // Dormant: a host would do commit-tick placement + (playerId, sequence) dedup +
+            // tick-confirmed re-broadcast here. Until then, drop (unreachable in peer-to-peer — see
+            // the method summary above).
+            CommandPool.Return(command);
+        }
+
         public void RequestCommandsForTick(int tick)
         {
             // Implement resend requests as needed
@@ -871,6 +919,10 @@ namespace xpTURN.Klotho.Network
             {
                 case CommandMessage cmdMsg:
                     HandleCommandMessage(cmdMsg, peerId);
+                    break;
+
+                case ReliableCommandSubmitMessage submitMsg:
+                    HandleReliableCommandSubmit(submitMsg, peerId);
                     break;
 
                 case SyncHashMessage hashMsg:

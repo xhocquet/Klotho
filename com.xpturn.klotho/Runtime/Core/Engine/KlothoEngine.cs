@@ -133,9 +133,11 @@ namespace xpTURN.Klotho.Core
             {
                 bool aIsSys = a is ISystemCommand;
                 bool bIsSys = b is ISystemCommand;
-                if (aIsSys != bIsSys) return aIsSys ? 1 : -1;
-                if (aIsSys) return ((ISystemCommand)a).OrderKey.CompareTo(((ISystemCommand)b).OrderKey);
-                return a.PlayerId.CompareTo(b.PlayerId);
+                if (aIsSys != bIsSys) return aIsSys ? 1 : -1;   // players first, system/reliable last
+                // system/reliable phase: shared total-order key chain (single source of truth) — must
+                // match InputBuffer.CompareSystemCommands so server-sim and client-sim agree.
+                if (aIsSys) return CommandOrdering.Compare(a, b);
+                return a.PlayerId.CompareTo(b.PlayerId);   // player phase
             }
         }
 
@@ -1139,6 +1141,22 @@ namespace xpTURN.Klotho.Core
 
         public IReliableCommandHandle IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null)
             => _reliableTracker.Issue(commandFactory, policy ?? ReliabilityPolicy.Default);
+
+        // Route a reliable command to the authority for execution-tick placement. Returns true if the
+        // reliable channel handled it (server-driven client → reliably-ordered submit to the server).
+        // Returns false when the channel is unavailable — peer-to-peer (which uses the legacy slot
+        // path) or a server-side issue — so ReliableCommandTracker falls back to the legacy slot path.
+        internal bool SubmitReliable(ICommand command)
+        {
+            if (_simConfig.Mode == NetworkMode.ServerDriven
+                && _serverDrivenNetwork != null
+                && !_serverDrivenNetwork.IsServer)
+            {
+                _serverDrivenNetwork.SendReliableCommand(command);
+                return true;
+            }
+            return false;
+        }
 
         /// <summary>
         /// Submit a command for the local player.

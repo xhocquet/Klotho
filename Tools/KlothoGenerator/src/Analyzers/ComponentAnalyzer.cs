@@ -69,7 +69,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 return result;
             }
 
-            // IMP-25 §15 D1 — StructLayout(Sequential, Pack=4) enforcement
+            // StructLayout(Sequential, Pack=4) enforcement
             CheckStructLayout(symbol, location, result);
 
             // Extract ComponentTypeId from attribute
@@ -91,7 +91,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 IsSingleton = isSingleton,
             };
 
-            // Collect fields + IMP-25 §15 D1 field-level cross-runtime checks
+            // Collect fields + field-level cross-runtime checks
             foreach (var member in symbol.GetMembers())
             {
                 ct.ThrowIfCancellationRequested();
@@ -114,7 +114,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     continue;
                 }
 
-                // IMP-25 §15 D1 field-level guards (non-fixed fields only)
+                // Field-level guards (non-fixed fields only)
                 CheckFieldType(symbol, fs, result);
 
                 info.Fields.Add(new ComponentFieldInfo
@@ -124,7 +124,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 });
             }
 
-            // IMP-25 §15 D1 — empty tag struct requires Size = 1
+            // Empty tag struct requires Size = 1
             if (info.Fields.Count == 0)
             {
                 CheckEmptyStructSize(symbol, location, result);
@@ -198,7 +198,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
             return null;
         }
 
-        // IMP-25 §15 D1 / Phase 25-G — helper rules
+        // Helper rules
 
         private static AttributeData FindStructLayoutAttribute(INamedTypeSymbol symbol)
         {

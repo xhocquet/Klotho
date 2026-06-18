@@ -468,6 +468,12 @@ namespace xpTURN.Klotho.Network
             // No local input on server — no-op
         }
 
+        // The server is the authority and never submits a reliable command — no-op (mirrors SendCommand).
+        public void SendReliableCommand(ICommand command)
+        {
+            // No local reliable submit on server.
+        }
+
         public void RequestCommandsForTick(int tick)
         {
             // Not needed in SD mode
@@ -876,6 +882,10 @@ namespace xpTURN.Klotho.Network
                     HandleClientInputMessage(peerId, inputMsg);
                     break;
 
+                case ReliableCommandSubmitMessage submitMsg:
+                    HandleReliableCommandSubmit(peerId, submitMsg);
+                    break;
+
                 case ClientInputBundleMessage bundleMsg:
                     HandleClientInputBundleMessage(peerId, bundleMsg);
                     break;
@@ -1130,6 +1140,27 @@ namespace xpTURN.Klotho.Network
 
             // Send ACK — also ACK rejected past-tick inputs to allow client unacked queue cleanup
             SendInputAck(peerId, msg.Tick);
+        }
+
+        // Reliable command submit receive → the collector's reliable inbox. Peer↔player validation and
+        // per-player high-water sequence dedup live in the collector; the past-tick check does not apply
+        // (there is no client-assigned tick — the server assigns the execution tick at the next
+        // CollectTickInputs). Accepted → owned by the inbox; rejected/duplicate → returned to the pool here.
+        private void HandleReliableCommandSubmit(int peerId, ReliableCommandSubmitMessage msg)
+        {
+            _logger?.KTrace($"[HandleReliableCommandSubmit] peerId={peerId}, playerId={msg.PlayerId}, dataLen={msg.CommandDataLength}");
+
+            var cmdSpan = msg.CommandDataSpan;
+            if (cmdSpan.Length < 4)
+                return;
+            var reader = new SpanReader(cmdSpan);
+            var command = _commandFactory.DeserializeCommandRaw(ref reader);
+            if (command == null)
+                return;
+
+            int seq = command is IReliableCommand rel ? rel.SequenceNumber : 0;
+            if (!_inputCollector.TryAcceptReliable(peerId, msg.PlayerId, seq, command))
+                CommandPool.Return(command);
         }
 
         private void HandleClientInputBundleMessage(int peerId, ClientInputBundleMessage bundle)

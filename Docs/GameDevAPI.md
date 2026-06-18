@@ -371,6 +371,8 @@ Spectator / replay kinds skip the dispatch at the Flow boundary, so games no lon
 
 For commands that must reach the deterministic timeline exactly once despite Duplicate / PastTick rejects, use `engine.IssueOnce(Func<ICommand> commandFactory, ReliabilityPolicy policy = null)`. The framework `ReliableCommandTracker` owns retry-interval cooldown, past-tick escalation (`ExtraDelayStep` bump, capped at `ExtraDelayMax`), empty-move collision avoidance, and `OnResyncCompleted` reset.
 
+> **`IReliableCommand` opt-in (ServerDriven authoritative placement).** Mark the command type `IReliableCommand` (a subtype of `ISystemCommand`; add an `[KlothoOrder] int SequenceNumber { get; set; }` serialized member and an `OrderKey`) to route it onto a **dedicated reliable channel**: in **ServerDriven** the client submits it tick-less and the **server assigns the execution tick** (`ReliableCommandSubmit` wire message), so it is confirmed-only — no client-side retry/escalation/`WouldCollideAt`/PastTick-reject loop. A plain `IssueOnce` command (not `IReliableCommand`), and **all** reliable commands in **P2P**, take the legacy path described above (retry/escalation/`WouldCollideAt`). The `IssueOnce` call site and `IReliableCommandHandle` surface are identical for both — the routing is internal and mode-dependent. `SpawnCharacterCommand` in the Brawler sample is an `IReliableCommand`.
+
 ```csharp
 private Func<ICommand>          _spawnBuilder;
 private IReliableCommandHandle  _spawnHandle;
@@ -553,6 +555,22 @@ public partial class AttackCommand : CommandBase
 ```
 
 Adding `[KlothoSerializable(N)]` auto-generates `CommandType`, `SerializeData`, and `DeserializeData`. Duplicate TypeIds are caught at compile time.
+
+### Reliable commands (`IReliableCommand`)
+
+A command that must land exactly once on a latency-insensitive action (spawn, purchase, surrender) can opt into the reliable channel by implementing `IReliableCommand` (a subtype of `ISystemCommand`) and being issued via `engine.IssueOnce` (§3.4):
+
+```csharp
+[KlothoSerializable(103)]
+public partial class SpawnCharacterCommand : CommandBase, IReliableCommand
+{
+    [KlothoOrder] public int CharacterClass;
+    [KlothoOrder] public int SequenceNumber { get; set; }   // serialized; framework stamps it on issue
+    public int OrderKey => 0;                                // ISystemCommand ordering key
+}
+```
+
+In ServerDriven the server assigns the execution tick (confirmed-only, no client predict); in P2P it falls back to the legacy `IssueOnce` path. Reliable commands share the non-slot system channel (not counted by `HasAllCommands`) and are **not predicted** — use only for latency-insensitive actions. See §3.4.
 
 ---
 
@@ -920,4 +938,4 @@ Constructing `RoomManagerConfig` directly via object initializer (and passing it
 
 ---
 
-*Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine: session driving, Flow handshake, view conversions/timing)*
+*Last updated: 2026-06-18 — IReliableCommand reliable command channel (§3.4 / §5)*

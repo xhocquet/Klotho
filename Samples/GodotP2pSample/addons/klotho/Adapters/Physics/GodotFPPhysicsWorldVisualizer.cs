@@ -23,7 +23,7 @@ namespace xpTURN.Klotho.Godot
         // ---- Inspector ([Export] display toggles + colors) ----
 
         [ExportGroup("General")]
-        [Export] public bool Enabled = false;        // master switch; default OFF (§8 #2)
+        [Export] public bool Enabled = false;        // master switch; default OFF
         [Export] public bool AlwaysOnTop = true;     // depth-test off (draw over geometry)
 
         [ExportGroup("PhysicsBody Display")]
@@ -197,7 +197,7 @@ namespace xpTURN.Klotho.Godot
             // Rebuild static every tick alongside dynamic. The original count-gate (rebuild only when
             // staticCount changed) was a premature optimization — static colliders are few, so per-tick
             // rebuild is negligible, and it makes ShowStaticColliders/ShowStaticShape/colors toggles take
-            // effect immediately (matching how dynamic toggles already work). See plan §8 #3.
+            // effect immediately (matching how dynamic toggles already work).
             RebuildStatic(statics, sc);
             RebuildDynamic(bodies, bc, statics, sc, contacts, cc, sContacts, scc);
         }

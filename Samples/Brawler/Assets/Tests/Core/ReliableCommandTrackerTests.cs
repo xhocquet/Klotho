@@ -166,5 +166,51 @@ namespace xpTURN.Klotho.Tests.Core
             Assert.AreEqual(0, handle.CurrentExtraDelay,
                 "ToleranceExceeded must not bump CurrentExtraDelay");
         }
+
+        // --- WouldCollideAt collision-tick correctness ---------------------------------------
+        // The accurate collision tick is OutstandingTargetTick - InputDelay (the tick whose
+        // input slot the outstanding spawn cmd targets). The former 1st clause
+        // (pollTick == LastAttemptTick) was a stale CurrentTick-axis check: equivalent to the
+        // accurate clause when extraDelay == 0, but a false positive once extraDelay > 0
+        // (PastTick escalation), suppressing the empty-move filler at a non-colliding tick.
+
+        [Test]
+        public void WouldCollideAt_Unsent_NeverCollides()
+        {
+            var (_, handle) = NewTrackerWithHandle();
+            handle.LastAttemptTick = -1;   // nothing outstanding
+            Assert.IsFalse(handle.WouldCollideAt(SeedTick),
+                "No outstanding attempt (LastAttemptTick < 0) must never report a collision");
+        }
+
+        [Test]
+        public void WouldCollideAt_NoEscalation_CollidesOnlyAtTargetPollTick()
+        {
+            var (_, handle) = NewTrackerWithHandle();   // LastAttemptTick = SeedTick
+            int d = handle.Engine.InputDelay;
+            handle.OutstandingTargetTick = SeedTick + d;   // extraDelay == 0
+
+            // Collision tick: pollTick + InputDelay == OutstandingTargetTick → pollTick == SeedTick.
+            Assert.IsTrue(handle.WouldCollideAt(SeedTick),
+                "extraDelay==0: collides exactly at OutstandingTargetTick - InputDelay");
+            Assert.IsFalse(handle.WouldCollideAt(SeedTick - 1), "no collision before the target poll tick");
+            Assert.IsFalse(handle.WouldCollideAt(SeedTick + 1), "no collision after the target poll tick");
+        }
+
+        [Test]
+        public void WouldCollideAt_AfterEscalation_NoFalsePositiveAtLastAttemptTick()
+        {
+            var (_, handle) = NewTrackerWithHandle();   // LastAttemptTick = SeedTick
+            int d = handle.Engine.InputDelay;
+            const int extraDelay = 3;
+            handle.OutstandingTargetTick = SeedTick + d + extraDelay;   // post-escalation lead
+
+            // Removed 1st clause would falsely return true here (pollTick == LastAttemptTick).
+            Assert.IsFalse(handle.WouldCollideAt(SeedTick),
+                "extraDelay>0: must NOT collide at LastAttemptTick (the removed stale-tick clause's false positive)");
+            // Accurate collision tick: pollTick + InputDelay == OutstandingTargetTick.
+            Assert.IsTrue(handle.WouldCollideAt(SeedTick + extraDelay),
+                "extraDelay>0: collides exactly at OutstandingTargetTick - InputDelay");
+        }
     }
 }

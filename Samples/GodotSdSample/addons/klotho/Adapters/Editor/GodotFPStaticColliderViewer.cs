@@ -5,7 +5,7 @@
 // the edited scene root.
 //
 // MUCH simpler than the NavMesh visualizer: it only draws an overlay (no picking, no labels), so it needs
-// NO _forward_3d_* / force-forwarding (IMP55 §3.1/§9 gating is irrelevant). The overlay MeshInstance3D
+// NO _forward_3d_* / force-forwarding (the selection-based editor-gizmo gating is irrelevant). The overlay MeshInstance3D
 // renders regardless of node selection. Drawing reuses the runtime GodotFPPhysicsImmediateDrawer.
 #if TOOLS
 using System;

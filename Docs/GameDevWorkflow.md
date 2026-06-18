@@ -207,6 +207,8 @@ public class MySimulationCallbacks : ISimulationCallbacks, INetworkServiceReceiv
 
 For commands that must reach the deterministic timeline exactly once despite duplicate / past-tick rejects, use `engine.IssueOnce`. The framework `ReliableCommandTracker` owns the retry-interval cooldown, past-tick escalation, empty-move collision avoidance, and resync reset.
 
+> Mark the command `IReliableCommand` (subtype of `ISystemCommand`; add a serialized `[KlothoOrder] int SequenceNumber { get; set; }` + `OrderKey`) to route it onto the reliable channel — in **ServerDriven** the server assigns the execution tick (confirmed-only, no retry/escalation/`WouldCollideAt`); in **P2P** (or for a plain `IssueOnce` command) it uses the legacy path below. The call site is identical for both. Reliable commands are **not predicted** — latency-insensitive actions only (spawn / purchase / surrender).
+
 ```csharp
 private Func<ICommand>          _spawnBuilder;     // bound delegate, single-alloc
 private IReliableCommandHandle  _spawnHandle;
@@ -454,4 +456,4 @@ The transform pipeline, Reconcile timing, hybrid dedup, and pooling (`DefaultGod
 
 ---
 
-Last updated: 2026-06-07 (IMP53 — Unity/Godot dual-engine View Sync)
+Last updated: 2026-06-18 — IReliableCommand reliable command channel

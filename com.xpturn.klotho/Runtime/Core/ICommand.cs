@@ -55,6 +55,26 @@ namespace xpTURN.Klotho.Core
     }
 
     /// <summary>
+    /// Reliable gameplay command (Spawn, item purchase, surrender, …) — a subtype of
+    /// <see cref="ISystemCommand"/> so it shares the non-slot list channel and the system
+    /// ordering path (no slot contention; not counted by HasAllCommands). Routed by the
+    /// authority (SD server / P2P host) onto an authoritative execution tick.
+    /// Distinct from framework system commands (e.g. PlayerJoin) by the per-player monotonic
+    /// <see cref="SequenceNumber"/>, which serves as the authority-side dedup key and the
+    /// final tie-breaker in the deterministic ordering chain (see CommandOrdering).
+    /// </summary>
+    public interface IReliableCommand : ISystemCommand
+    {
+        /// <summary>
+        /// Per-player monotonic sequence number. Serialized command field (not a wire-message
+        /// field): the issuing client assigns it at <see cref="IKlothoEngine.IssueOnce"/>; the
+        /// authority dedups by (PlayerId, SequenceNumber); the ordering chain uses it as the last
+        /// tie-breaker after redistribution. Settable so the framework stamps it on issue.
+        /// </summary>
+        int SequenceNumber { get; set; }
+    }
+
+    /// <summary>
     /// Command factory interface.
     /// </summary>
     public interface ICommandFactory

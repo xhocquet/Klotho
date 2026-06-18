@@ -11,7 +11,7 @@ using xpTURN.Klotho.Helper.Tests;
 namespace xpTURN.Klotho.Network.Tests
 {
     /// <summary>
-    /// Unit tests for IMP38 RTT metrics — EmitRttMatchAggregate computes
+    /// Unit tests for RTT metrics — EmitRttMatchAggregate computes
     /// min/max/mean/percentile statistics and emits a culture-invariant JSON line.
     /// MatchRttAccumulator is private nested type; accessed via reflection.
     /// </summary>

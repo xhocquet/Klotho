@@ -325,7 +325,7 @@ Configuration is split into two layers.
 | OnRollbackExecuted | `Action<int, int>` | Rollback completed (fromTick, toTick) |
 | OnRollbackFailed | `Action<int, string>` | Rollback failed (requestedTick, reason) |
 | OnPendingWipe | `Action<int, int, WipeKind>` | A pending input or Synced event was wiped during cleanup before the chain advanced past it (tick, playerId, kind). `playerId = -1` for `WipeKind.SyncedEvent` |
-| OnCommandRejected | `Action<int, int, RejectionReason>` | (SD client) Server rejected a client input (tick, cmdTypeId, reason). For commands issued via `engine.IssueOnce(Func<ICommand>, ReliabilityPolicy)`, the framework `ReliableCommandTracker` intercepts this internally and applies the policy: `TreatDuplicateAsAck=true` resolves the handle on `Duplicate`; `TreatPastTickAsEscalation=true` advances `CurrentExtraDelay` by `ExtraDelayStep` (capped at `ExtraDelayMax`) and clears the retry cooldown for an immediate re-issue. Game-side `OnCommandRejected` subscribers still receive the event for non-handle commands (game-specific telemetry / response). |
+| OnCommandRejected | `Action<int, int, RejectionReason>` | (SD client) Server rejected a client input (tick, cmdTypeId, reason). For commands issued via `engine.IssueOnce(Func<ICommand>, ReliabilityPolicy)`, the framework `ReliableCommandTracker` intercepts this internally and applies the policy: `TreatDuplicateAsAck=true` resolves the handle on `Duplicate`; `TreatPastTickAsEscalation=true` advances `CurrentExtraDelay` by `ExtraDelayStep` (capped at `ExtraDelayMax`) and clears the retry cooldown for an immediate re-issue. Game-side `OnCommandRejected` subscribers still receive the event for non-handle commands (game-specific telemetry / response). A command marked `IReliableCommand` takes the ServerDriven authoritative-placement path instead (server assigns the execution tick via `ReliableCommandSubmit`, no PastTick/Duplicate reject loop) — the retry/escalation described here applies to the legacy path (plain `IssueOnce` commands, and P2P). |
 | OnExtraDelayChanged | `Action<int>` | Recommended extra InputDelay (ticks) changed. Fired on `ApplyExtraDelay` (Sync / LateJoin / Reconnect / DynamicPush) and `EscalateExtraDelay` (reactive escalation) |
 | OnEventPredicted | `Action<int, SimulationEvent>` | Event raised on a Predicted tick |
 | OnEventConfirmed | `Action<int, SimulationEvent>` | First firing of a Regular event that was confirmed without prediction (verified-direct, replay, new on rollback) |
@@ -988,6 +988,7 @@ INetworkTransport:
 | Command | 20 | Player input command |
 | CommandAck | 21 | Command receipt ack |
 | CommandRequest | 22 | Re-request a missing command |
+| ReliableCommandSubmit | 23 | Reliable command submit (`IReliableCommand`) — client→authority, tick-less; the authority assigns the execution tick. ServerDriven path; P2P uses the legacy path (see API §3.4) |
 | **Sync** | | |
 | SyncHash | 30 | State-hash sync verification |
 | SyncHashAck | 31 | SyncHash receipt ack |
@@ -1342,4 +1343,4 @@ Payload:
 
 ---
 
-*Last updated: 2026-04-27*
+*Last updated: 2026-06-18 — ReliableCommandSubmit=23, IReliableCommand authoritative placement*

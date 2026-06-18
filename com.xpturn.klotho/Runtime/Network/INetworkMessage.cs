@@ -22,6 +22,11 @@ namespace xpTURN.Klotho.Network
         Command = 20,
         CommandAck = 21,
         CommandRequest = 22,
+        // Reliable command submit — client/guest → authority (server-driven server / P2P host),
+        // reliably-ordered. Carries a serialized IReliableCommand with no client-assigned tick; the
+        // authority assigns the execution tick. (CommandAck=21 / CommandRequest=22 are unused reserved
+        // slots; a new append-only value is used to avoid repurposing their declared intent.)
+        ReliableCommandSubmit = 23,
 
         // Sync
         SyncHash = 30,

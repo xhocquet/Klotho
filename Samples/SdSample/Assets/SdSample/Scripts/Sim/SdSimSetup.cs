@@ -20,7 +20,7 @@ namespace xpTURN.Samples.SdSample
             // Engine gravity + static ground collider. The ground is registered HERE (not in
             // OnInitializeWorld, which the ServerDriven client skips) so the server and the client
             // build the identical static BVH — engine gravity + ground resting-contact is then
-            // deterministic across the .NET server and the Unity client. (IMP48-F5 / SG14 정정)
+            // deterministic across the .NET server and the Unity client.
             var physics = new PhysicsSystem(64);
             physics.LoadStaticColliders("", new List<FPStaticCollider> { CreateGroundCollider() });
             simulation.AddSystem(physics, SystemPhase.Update);
