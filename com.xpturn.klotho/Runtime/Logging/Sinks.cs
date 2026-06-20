@@ -164,7 +164,6 @@ namespace xpTURN.Klotho.Logging
 
                 var now = DateTime.Now;
                 EnsureWriter(now);
-
                 // Fast path formats into the stack buffer; a custom format longer than the buffer
                 // falls back to a heap string so the timestamp is never silently truncated.
                 int n;
