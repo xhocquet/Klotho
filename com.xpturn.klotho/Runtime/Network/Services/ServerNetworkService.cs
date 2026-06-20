@@ -1296,6 +1296,9 @@ namespace xpTURN.Klotho.Network
             if (command == null)
                 return;
 
+            _logger?.KInformation($"[ServerNetworkService] Command received: peerId={peerId}, playerId={msg.PlayerId}, tick={msg.Tick}, cmd={command.GetType().Name}");
+            OnCommandReceived?.Invoke(command);
+
             // Delegate to InputCollector (includes peerId-PlayerId validation and deadline check)
             if (_inputCollector.TryAcceptInput(peerId, msg.Tick, msg.PlayerId, command))
             {
@@ -1330,6 +1333,9 @@ namespace xpTURN.Klotho.Network
             var command = _commandFactory.DeserializeCommandRaw(ref reader);
             if (command == null)
                 return;
+
+            _logger?.KInformation($"[ServerNetworkService] Reliable command received: peerId={peerId}, playerId={msg.PlayerId}, cmd={command.GetType().Name}");
+            OnCommandReceived?.Invoke(command);
 
             // In-match entitlement gate (opt-in; null = accept all, no regression). The entire block is
             // gated on the gate being set so an unset gate is byte-identical to the prior path. Resolve the
@@ -1372,6 +1378,9 @@ namespace xpTURN.Klotho.Network
                 var command = _commandFactory.DeserializeCommandRaw(ref reader);
                 if (command == null)
                     continue;
+
+                _logger?.KInformation($"[ServerNetworkService] Bundled command received: peerId={peerId}, playerId={bundle.PlayerId}, tick={entry.Tick}, cmd={command.GetType().Name}");
+                OnCommandReceived?.Invoke(command);
 
                 if (_inputCollector.TryAcceptInput(peerId, entry.Tick, bundle.PlayerId, command))
                 {
@@ -2065,6 +2074,27 @@ namespace xpTURN.Klotho.Network
 
             Phase = SessionPhase.Synchronized;
             OnPlayerJoined?.Invoke(newPlayer);
+
+            // Announce the new player to all existing connected peers so the lobby roster
+            // updates immediately on join, before anyone clicks Ready.
+            using (var joinNotif = _messageSerializer.SerializePooled(new PlayerReadyMessage { PlayerId = newPlayerId, IsReady = false }))
+            {
+                foreach (var kvp in _peerToPlayer)
+                {
+                    if (kvp.Key != peerId)
+                        _transport.Send(kvp.Key, joinNotif.Data, joinNotif.Length, DeliveryMethod.Reliable);
+                }
+            }
+
+            // Bootstrap the new peer with the full current roster so they see everyone who joined before them.
+            foreach (var existing in _players)
+            {
+                if (existing.PlayerId == newPlayerId) continue;
+                using (var catchup = _messageSerializer.SerializePooled(new PlayerReadyMessage { PlayerId = existing.PlayerId, IsReady = existing.IsReady }))
+                {
+                    _transport.Send(peerId, catchup.Data, catchup.Length, DeliveryMethod.Reliable);
+                }
+            }
         }
 
         private void SendSimulationConfig(int peerId)

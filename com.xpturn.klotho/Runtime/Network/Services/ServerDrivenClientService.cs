@@ -885,12 +885,20 @@ namespace xpTURN.Klotho.Network
         private void HandlePlayerReadyMessage(PlayerReadyMessage msg)
         {
             var player = FindPlayerById(msg.PlayerId);
-            if (player != null)
+            if (player == null)
             {
-                bool prevReady = AllPlayersReady;
-                player.IsReady = msg.IsReady;
-                RaiseAllPlayersReadyIfChanged(prevReady);
+                // Lobby: _players is empty until GameStart. Add on first ready signal so the
+                // roster is visible before the game begins.
+                player = new PlayerInfo { PlayerId = msg.PlayerId, IsReady = false, ConnectionState = PlayerConnectionState.Connected };
+                int prevCount = _players.Count;
+                bool prevAllReady = AllPlayersReady;
+                _players.Add(player);
+                RaisePlayerCountIfChanged(prevCount);
+                RaiseAllPlayersReadyIfChanged(prevAllReady);
             }
+            bool prevReady2 = AllPlayersReady;
+            player.IsReady = msg.IsReady;
+            RaiseAllPlayersReadyIfChanged(prevReady2);
         }
 
         private void HandleVerifiedStateMessage(VerifiedStateMessage msg)
