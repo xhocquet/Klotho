@@ -1390,6 +1390,9 @@ namespace xpTURN.Klotho.Network
             if (command == null)
                 return;
 
+            _logger?.KInformation($"[ServerNetworkService] Reliable command received: peerId={peerId}, playerId={msg.PlayerId}, cmd={command.GetType().Name}");
+            OnCommandReceived?.Invoke(command);
+
             // In-match entitlement gate (opt-in; null = accept all, no regression). The entire block is
             // gated on the gate being set so an unset gate is byte-identical to the prior path. Resolve the
             // authoritative playerId from the authenticated peer (the wire-claimed msg.PlayerId is untrusted)
