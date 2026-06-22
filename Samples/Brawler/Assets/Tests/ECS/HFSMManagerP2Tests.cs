@@ -65,6 +65,7 @@ namespace xpTURN.Klotho.ECS.Tests
         [SetUp]
         public void SetUp()
         {
+            HFSMRoot.Clear(); // isolate the static registry between tests (each re-registers RootId)
             _frame  = new Frame(MaxEntities, _logger);
             _entity = _frame.CreateEntity();
 
@@ -139,12 +140,36 @@ namespace xpTURN.Klotho.ECS.Tests
             BuildRoot();
             HFSMManager.Init(ref _frame, _entity, RootId);
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
 
             Assert.AreEqual(StateId.Idle, fsm.ActiveStateIds[0], "ActiveStateIds[0] should be DefaultStateId");
             Assert.AreEqual(1, fsm.ActiveDepth,                  "ActiveDepth should be 1 for leaf-only state");
             Assert.AreEqual(0, fsm.StateElapsedTicks,            "StateElapsedTicks should be 0 after Init");
             Assert.AreEqual(1, _idleEnter.CallCount,             "OnEnterActions should run exactly once");
+        }
+
+        // ─────────────────────────────────────────
+        // Query APIs on a non-carrier entity → sentinels, never throw (LOW-1)
+        // ─────────────────────────────────────────
+
+        [Test]
+        public void Query_NonCarrierEntity_ReturnsSentinels_NeverThrows()
+        {
+            // _entity has no HFSMComponent here (no Init). Queries must degrade gracefully for debug overlays.
+            Assert.AreEqual(-1, HFSMManager.GetLeafStateId(ref _frame, _entity));
+
+            Span<int> chain = stackalloc int[HFSMComponent.MaxDepth];
+            Assert.AreEqual(0, HFSMManager.GetActiveStateIds(ref _frame, _entity, chain));
+
+            Span<int> events = stackalloc int[HFSMComponent.MaxPendingEvents];
+            Assert.AreEqual(0, HFSMManager.GetPendingEventIds(ref _frame, _entity, events));
+
+            HFSMManager.GetDebugInfo(ref _frame, _entity,
+                out int rootId, out int depth, out int elapsed, out int pending);
+            Assert.AreEqual(-1, rootId);
+            Assert.AreEqual(0, depth);
+            Assert.AreEqual(0, elapsed);
+            Assert.AreEqual(0, pending);
         }
 
         // ─────────────────────────────────────────
@@ -167,7 +192,7 @@ namespace xpTURN.Klotho.ECS.Tests
 
             Assert.AreEqual(1, _idleExit.CallCount,   "OnExit of old state should run once");
             Assert.AreEqual(1, _chaseEnter.CallCount, "OnEnter of new state should run once");
-            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0]);
+            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0]);
         }
 
         // ─────────────────────────────────────────
@@ -188,7 +213,7 @@ namespace xpTURN.Klotho.ECS.Tests
             HFSMManager.Update(ref _frame, _entity);
             HFSMManager.Update(ref _frame, _entity);
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
 
             Assert.AreEqual(StateId.Idle, fsm.ActiveStateIds[0], "State should remain Idle");
             Assert.AreEqual(2, fsm.StateElapsedTicks,            "StateElapsedTicks should increment each tick");
@@ -217,7 +242,7 @@ namespace xpTURN.Klotho.ECS.Tests
             HFSMManager.Init(ref _frame, _entity, RootId);
             HFSMManager.Update(ref _frame, _entity);
 
-            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0],
+            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0],
                 "Only the highest-priority transition should fire");
             Assert.AreEqual(1, _chaseEnter.CallCount);
             Assert.AreEqual(0, attackEnter.CallCount, "Lower-priority transition must not be evaluated");
@@ -242,7 +267,7 @@ namespace xpTURN.Klotho.ECS.Tests
 
             Assert.AreEqual(1, _idleExit.CallCount,  "OnExit should run on self-transition");
             Assert.AreEqual(2, _idleEnter.CallCount, "OnEnter should run again on self-transition (1 from Init + 1 from transition)");
-            Assert.AreEqual(0, _frame.Get<HFSMComponent>(_entity).StateElapsedTicks,
+            Assert.AreEqual(0, _frame.Get<HFSMComponent>(_entity).State.StateElapsedTicks,
                 "StateElapsedTicks should reset to 0 after self-transition");
         }
 

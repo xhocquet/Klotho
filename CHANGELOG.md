@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.4] - 2026-06-22
+
+### Hierarchical FSM — framework upgrade
+
+- **Safer graphs by construction** — the builder now validates the whole state hierarchy up front (with runtime depth guards as a backstop), so a malformed graph fails at build time instead of misbehaving later.
+- **Transition inheritance** — a parent state's transitions now apply to all of its children, evaluated leaf→root so a child can preempt its parent; per-state OnUpdate runs across the whole active chain. Shared "escape" transitions can live once on a parent instead of being repeated on every child.
+- **Configurable decision/action values (`AIParam`)** — decisions and actions read their thresholds through a small value-source layer, so the same logic can be fed a constant or a per-entity/runtime value (e.g. bot difficulty) without rewriting it. Allocation-free. Build-time checks back it up: every referenced value must be wired to a source (a forgotten wiring fails at init rather than resolving to a silent zero at runtime), and the sources — including custom ones — are scanned for determinism, so one that would desync is caught at build rather than mid-match.
+- **Multiple HFSMs per entity (Compound Agent)** — a single entity can now run several independent HFSM axes at once (e.g. movement vs. combat) on the shared manager, with guidance on how the axes arbitrate shared resources. The required host-component layout is verified at build time, so a misplacement that would corrupt FSM state can't ship.
+- **Lifecycle & cleanup** — context-injected init + explicit teardown, idempotent registration, named transition priorities for the Brawler bot, and read-only queries that return a safe "no FSM" answer for an entity that carries none instead of throwing. Re-triggering an already-pending event is idempotent.
+
+### Session driver — selectable dt source
+
+- **dt source is now selectable per driver** — the session driver measured its per-frame dt from an engine-independent real-time clock. It can now also drive the session from the engine's own frame delta (Unity `Time.deltaTime` / Godot `_Process` delta), chosen via a single option. The default keeps the existing real-time behavior, so nothing changes unless the engine-frame mode is opted into; the explicit-tick path for headless/deterministic loops is unaffected. Applied identically to the Unity and Godot drivers.
+
+### Serialization — reusable inline struct codec
+
+- **`[KlothoSerializableStruct]`** — bundle a group of fields into a reusable `unmanaged` struct that serializes inline wherever it appears, including inside components. Define a common field group once (e.g. an embedded FSM state) and let the generator emit its codec/hash automatically. Round-trip, hash, and nesting tests added.
+
+### Runtime — per-tick allocation cleanup
+
+- **Trimmed garbage-collector pressure on the hot path** — several spots that quietly allocated a small object on every simulation tick (and again on every rollback re-simulation) now reuse a cached one instead. The biggest were the physics step's trigger callbacks and the server-driven client's per-tick input-resend copies; a per-tick input-cleanup step and a handful of low-frequency network lookups and event messages were tidied up the same way. No behavioral or on-the-wire change — purely fewer short-lived allocations, which means steadier frame times with fewer GC-induced spikes.
+
+### Memory — singleton component storage
+
+- **Singleton components no longer reserve room for the whole entity budget** — a component marked as a singleton only ever has one instance in a match (e.g. the shared random seed or the match-end state), yet its storage was sized for as many copies as the maximum entity count, just like an ordinary component — nearly all of it permanently unused. Singletons now reserve a single value slot while keeping the full-size entity lookup table, so any entity can still carry one. The saving is multiplied across every rollback snapshot the engine keeps. The on-the-wire format and the per-tick state hash are unchanged, so determinism, full-state sync, and replays are unaffected.
+
+### Unity 2022.3 LTS compatibility
+
+- **AI Navigation dependency pinned to 1.1.7** — the 2.0 line requires Unity 2023.1+, breaking the package's declared 2022.3 minimum; 1.1.7 is the latest 1.x that supports 2022.3 LTS.
+- **Unity 2022 validation sample** — a `Samples/Unity2022` project on 2022.3.62f3 to verify the package imports and compiles on 2022 LTS.
+
+### Packaging — assembly isolation
+
+- **Bundled Unsafe.dll renamed to avoid a duplicate-assembly clash** — Unity dedups precompiled assemblies by file name, so another package shipping its own `System.Runtime.CompilerServices.Unsafe.dll` (e.g. Unity AI Assistant) could win and hide the Unsafe type, causing CS0103. The bundled DLL is renamed to `xpTURN.Klotho.Unsafe.dll` with Auto Reference off, referenced explicitly by Runtime and LiteNetLib.
+
+### Inspector
+
+- **`[Header]` attribute target fixed** — `[Header]` on `[field: SerializeField]` auto-properties is now `[field: Header]` so it binds to the backing field, restoring inspector header grouping.
+
 ## [0.3.3] - 2026-06-18
 
 ### Synchronization diagnostics & robustness

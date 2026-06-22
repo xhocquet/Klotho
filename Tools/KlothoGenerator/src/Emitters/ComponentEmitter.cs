@@ -78,6 +78,10 @@ namespace xpTURN.Klotho.Generator.Emitters
                         sb.AppendLine($"{indent}        }}");
                     }
                 }
+                else if (field.IsNestedSerializable)
+                {
+                    sb.AppendLine($"{indent}        this.{field.Name}.Serialize(ref writer);");
+                }
                 else if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping))
                 {
                     sb.AppendLine($"{indent}        writer.{mapping.WriteMethod}(this.{field.Name});");
@@ -106,6 +110,10 @@ namespace xpTURN.Klotho.Generator.Emitters
                         sb.AppendLine($"{indent}        }}");
                     }
                 }
+                else if (field.IsNestedSerializable)
+                {
+                    sb.AppendLine($"{indent}        this.{field.Name}.Deserialize(ref reader);");
+                }
                 else if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping))
                 {
                     sb.AppendLine($"{indent}        this.{field.Name} = reader.{mapping.ReadMethod}();");
@@ -118,6 +126,7 @@ namespace xpTURN.Klotho.Generator.Emitters
         private static void EmitGetSerializedSize(StringBuilder sb, ComponentTypeInfo info, string indent)
         {
             int totalSize = 0;
+            var nestedTerms = new System.Collections.Generic.List<string>();
             foreach (var field in info.Fields)
             {
                 if (field.IsFixed)
@@ -125,13 +134,20 @@ namespace xpTURN.Klotho.Generator.Emitters
                     if (TypeMappings.TryGetMapping(field.ElementType, out var elemMapping) && elemMapping.Size > 0)
                         totalSize += elemMapping.Size * field.FixedSize;
                 }
+                else if (field.IsNestedSerializable)
+                {
+                    nestedTerms.Add($"this.{field.Name}.GetSerializedSize()");
+                }
                 else if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping) && mapping.Size > 0)
                 {
                     totalSize += mapping.Size;
                 }
             }
 
-            sb.AppendLine($"{indent}    public int GetSerializedSize() => {totalSize};");
+            if (nestedTerms.Count == 0)
+                sb.AppendLine($"{indent}    public int GetSerializedSize() => {totalSize};");
+            else
+                sb.AppendLine($"{indent}    public int GetSerializedSize() => {totalSize} + {string.Join(" + ", nestedTerms)};");
         }
 
         private static void EmitGetHash(StringBuilder sb, ComponentTypeInfo info, string indent)
@@ -152,6 +168,10 @@ namespace xpTURN.Klotho.Generator.Emitters
                         sb.AppendLine($"{indent}            for (int __i = 0; __i < {field.FixedSize}; __i++) hash = {string.Format(elemMapping.HashExpression, "hash", $"__p_{field.Name}[__i]")};");
                         sb.AppendLine($"{indent}        }}");
                     }
+                }
+                else if (field.IsNestedSerializable)
+                {
+                    sb.AppendLine($"{indent}        hash = this.{field.Name}.GetHash(hash);");
                 }
                 else if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping) && mapping.HashExpression != null)
                 {

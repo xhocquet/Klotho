@@ -38,6 +38,7 @@ namespace xpTURN.Klotho.ECS.FSM
     public struct AIContext { }
     public abstract class AIAction { public abstract void Execute(ref AIContext c); }
     public abstract class HFSMDecision { public abstract bool Decide(ref AIContext c); }
+    public abstract class AIFunction<T> { public abstract T Resolve(ref AIContext c); }
 }
 namespace xpTURN.Klotho.Core
 {
@@ -194,6 +195,24 @@ class S : ISystem { public void Update(ref Frame f) { float x = 1.5f; } }",
 using xpTURN.Klotho.ECS.FSM;
 class Atk : AIAction { public override void Execute(ref AIContext c) { float x = 2f; } }");
             Assert.That(ids, Does.Contain("KLOTHO_DET002"));
+        }
+
+        [Test]
+        public void Det002_AIFunctionBase_Fires()
+        {
+            var ids = Diagnose(@"
+using xpTURN.Klotho.ECS.FSM;
+class F : AIFunction<int> { public override int Resolve(ref AIContext c) { float x = 2f; return 0; } }");
+            Assert.That(ids, Does.Contain("KLOTHO_DET002"));
+        }
+
+        [Test]
+        public void AIFunctionBase_DeterministicBody_Clean()
+        {
+            var ids = Diagnose(@"
+using xpTURN.Klotho.ECS.FSM;
+class F : AIFunction<int> { public override int Resolve(ref AIContext c) { int x = 2; return x; } }");
+            Assert.That(ids, Is.Empty);
         }
     }
 }

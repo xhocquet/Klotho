@@ -109,7 +109,8 @@ To disable: toggle **Enable** off. The menu item and context menu entry are remo
 - **Editor authoring** — `GodotSessionConfig` / `GodotSimulationConfig` are `[GlobalClass]` `Resource`s; once
   built they appear in the editor's *New Resource* menu, can be saved as `.tres`, and injected into
   `KlothoFlowSetupBuilder` / `StartHostAndListen`.
-- **Your own components** — declaring `[KlothoComponent]` / `[KlothoSerializable]` types triggers
-  `KlothoGenerator` (shipped here as the analyzer).
+- **Your own components** — declaring `[KlothoComponent]` / `[KlothoSerializable]` / `[KlothoDataAsset]` /
+  `[KlothoSerializableStruct]` types triggers `KlothoGenerator` (shipped here as the analyzer). The same DLL
+  also runs the `DeterminismAnalyzer`, flagging float / non-deterministic API use in simulation code at build time.
 - **Stable UIDs** — `.cs.uid` files ship beside the adapter sources so Godot keeps script UIDs instead of
   regenerating them per project.

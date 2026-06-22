@@ -62,6 +62,7 @@ namespace xpTURN.Klotho.Input
         // Cached lists for object pooling (GC prevention)
         private readonly List<ICommand> _commandListCache = new List<ICommand>();
         private readonly List<int> _ticksToRemoveCache = new List<int>();
+        private readonly List<long> _sealKeysToRemoveCache = new List<long>();
 
         // (tick << 32) | (uint)playerId — entries sealed by range fill. AddCommand skips any
         // later real command arrival at a sealed (tick, playerId) to prevent InputBuffer ↔
@@ -434,7 +435,12 @@ namespace xpTURN.Klotho.Input
             // Discard seals at ticks below cleanup horizon in lockstep with buffer.
             if (_sealedTickPlayer.Count > 0)
             {
-                _sealedTickPlayer.RemoveWhere(key => (int)(key >> 32) < tick);
+                _sealKeysToRemoveCache.Clear();
+                foreach (var key in _sealedTickPlayer)
+                    if ((int)(key >> 32) < tick)
+                        _sealKeysToRemoveCache.Add(key);
+                for (int i = 0; i < _sealKeysToRemoveCache.Count; i++)
+                    _sealedTickPlayer.Remove(_sealKeysToRemoveCache[i]);
             }
 
             // Recalculate bounds

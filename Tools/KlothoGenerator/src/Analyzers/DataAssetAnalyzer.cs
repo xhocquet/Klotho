@@ -215,7 +215,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 var loc = GetMemberLocation(symbol, field.Name);
 
                 // Validate directly mapped types
-                if (field.ElementTypeName == null && field.KeyTypeName == null)
+                if (field.ElementTypeName == null && field.KeyTypeName == null && !field.IsNestedSerializable)
                 {
                     if (!TypeMappings.TryGetMapping(field.TypeFullName, out _))
                     {
@@ -254,9 +254,19 @@ namespace xpTURN.Klotho.Generator.Analyzers
             }
         }
 
+        private const string KlothoSerializableStructAttributeName = "xpTURN.Klotho.Serialization.KlothoSerializableStructAttribute";
+
         private static void ClassifyFieldType(SerializableFieldInfo field, ITypeSymbol typeSymbol)
         {
             var fullName = typeSymbol.ToDisplayString();
+
+            // Nested [KlothoSerializableStruct] — fields only (a struct property would copy-mutate on deserialize).
+            if (!field.IsProperty && typeSymbol.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == KlothoSerializableStructAttributeName))
+            {
+                field.IsNestedSerializable = true;
+                field.SizeKind = FieldSizeKind.Variable;
+                return;
+            }
 
             if (TypeMappings.TryGetMapping(fullName, out var mapping))
             {

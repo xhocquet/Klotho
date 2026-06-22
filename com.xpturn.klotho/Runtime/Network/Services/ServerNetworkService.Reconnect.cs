@@ -143,7 +143,7 @@ namespace xpTURN.Klotho.Network
             };
 
             // 9. Restore player state
-            var player = _players.Find(p => p.PlayerId == msg.PlayerId);
+            var player = FindPlayerById(msg.PlayerId);
             if (player != null)
                 player.ConnectionState = PlayerConnectionState.Connected;
             OnPlayerReconnected?.Invoke(player);

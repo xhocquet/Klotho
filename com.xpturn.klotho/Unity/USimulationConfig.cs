@@ -26,23 +26,23 @@ namespace xpTURN.Klotho
         [field: SerializeField] public bool UsePrediction { get; set; } = true;
         [field: SerializeField] public NetworkMode Mode { get; set; } = NetworkMode.P2P;
 
-        [Header("ServerDriven")]
+        [field: Header("ServerDriven")]
         [field: SerializeField] public int HardToleranceMs { get; set; } = 0;
         [field: SerializeField] public int InputResendIntervalMs { get; set; } = 50;
         [field: SerializeField] public int MaxUnackedInputs { get; set; } = 30;
         [field: SerializeField] public int ServerSnapshotRetentionTicks { get; set; } = 0;
         [field: SerializeField] public int SDInputLeadTicks { get; set; } = 0;
 
-        [Header("ErrorCorrection")]
+        [field: Header("ErrorCorrection")]
         [field: SerializeField] public bool EnableErrorCorrection { get; set; } = false;
 
-        [Header("View Interpolation")]
+        [field: Header("View Interpolation")]
         [field: SerializeField, Range(1, 3)] public int InterpolationDelayTicks { get; set; } = 3;
 
-        [Header("P2P Quorum-Miss Watchdog")]
+        [field: Header("P2P Quorum-Miss Watchdog")]
         [field: SerializeField] public int QuorumMissDropTicks { get; set; } = 20;
 
-        [Header("Reactive Dynamic InputDelay")]
+        [field: Header("Reactive Dynamic InputDelay")]
         [field: SerializeField] public int ReactiveWindowTicks { get; set; } = 80;
         [field: SerializeField] public int ReactiveEscalateThreshold { get; set; } = 3;
         [field: SerializeField] public int ReactiveStep { get; set; } = 4;
@@ -51,11 +51,11 @@ namespace xpTURN.Klotho
         [field: SerializeField] public int ReactiveEscalateCooldownTicks { get; set; } = 80;
         [field: SerializeField] public int ReactiveDeEscalateStableTicks { get; set; } = 160;
 
-        [Header("Rollback Burst")]
+        [field: Header("Rollback Burst")]
         [field: SerializeField] public int RollbackBurstCount { get; set; } = 3;
         [field: SerializeField] public int RollbackWindowTicks { get; set; } = 200;
 
-        [Header("Diagnostics")]
+        [field: Header("Diagnostics")]
         [field: SerializeField] public int EventDispatchWarnMs { get; set; } = 5;
         [field: SerializeField] public int TickDriftWarnMultiplier { get; set; } = 2;
     }

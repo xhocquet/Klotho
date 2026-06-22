@@ -16,19 +16,19 @@ namespace xpTURN.Samples.P2pSample
     {
         const string ConnectionKey = "xpTURN.P2pSample";
 
-        [Header("Logging")]
+        [field: Header("Logging")]
         [SerializeField] private KLogLevel _logLevel = KLogLevel.Information;
 
-        [Header("Network")]
+        [field: Header("Network")]
         [SerializeField] private string _hostAddress = "localhost";
         [SerializeField] private int _port = 777;
 
-        [Header("Configs")]
+        [field: Header("Configs")]
         [SerializeField] private USimulationConfig _simulationConfig;
         [SerializeField] private USessionConfig _sessionConfig;
         [SerializeField] private TextAsset _dataAsset;
 
-        [Header("Scene References")]
+        [field: Header("Scene References")]
         [SerializeField] private KlothoSessionDriver _sessionDriver;
         [SerializeField] private EntityViewUpdater _entityViewUpdater;
         [SerializeField] private P2pHud _hud;

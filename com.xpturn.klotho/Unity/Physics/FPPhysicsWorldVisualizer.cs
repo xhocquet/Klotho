@@ -14,26 +14,26 @@ namespace xpTURN.Klotho.Unity.Physics
     {
         // ---- Inspector ----
 
-        [Header("PhysicsBody Display")]
+        [field: Header("PhysicsBody Display")]
         public bool  showBodies          = true;
         public bool  showBodyShape       = true;
         public bool  showBodyAABB        = false;
         public bool  showBodyVelocity    = true;
         public float velocityArrowScale  = 0.2f;
 
-        [Header("StaticCollider Display")]
+        [field: Header("StaticCollider Display")]
         public bool showStaticColliders  = true;
         public bool showStaticShape      = true;
         public bool showStaticAABB       = false;
 
-        [Header("Collision Visualization")]
+        [field: Header("Collision Visualization")]
         public bool  showContacts           = true;
         public bool  showContactNormals     = true;
         public bool  showCollisionHighlight = true;
         public float contactNormalScale     = 0.5f;
         public float contactPointRadius     = 0.05f;
 
-        [Header("Colors — Body")]
+        [field: Header("Colors — Body")]
         public Color dynamicShapeColor    = new Color(1f,   0.8f, 0f,   0.9f);
         public Color staticBodyShapeColor = new Color(0.6f, 0.6f, 0.6f, 0.9f);
         public Color kinematicShapeColor  = new Color(0f,   0.6f, 1f,   0.9f);
@@ -41,17 +41,17 @@ namespace xpTURN.Klotho.Unity.Physics
         public Color aabbColor            = new Color(1f,   1f,   1f,   0.25f);
         public Color velocityColor        = new Color(1f,   0.3f, 0.3f, 1f);
 
-        [Header("Colors — Selection")]
+        [field: Header("Colors — Selection")]
         public Color selectedShapeColor = new Color(1f, 0.9f, 0f, 1f);
         public Color selectedAABBColor  = new Color(1f, 0.9f, 0f, 0.6f);
 
-        [Header("Colors — Collision")]
+        [field: Header("Colors — Collision")]
         public Color contactPointColor       = new Color(1f, 0f,   0f,   1f);
         public Color contactNormalColor      = new Color(1f, 0.5f, 0f,   1f);
         public Color collisionHighlightColor = new Color(1f, 0f,   0f,   0.5f);
         public Color triggerHighlightColor   = new Color(1f, 0f,   1f,   0.5f);
 
-        [Header("Rendering")]
+        [field: Header("Rendering")]
         public Camera targetCamera = null;
         public bool   alwaysOnTop  = true;
         public bool   showInSceneView = true;

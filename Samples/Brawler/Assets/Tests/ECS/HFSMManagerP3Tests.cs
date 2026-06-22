@@ -57,6 +57,7 @@ namespace xpTURN.Klotho.ECS.Tests
         [SetUp]
         public void SetUp()
         {
+            HFSMRoot.Clear(); // isolate the static registry between tests (each re-registers RootId)
             _frame  = new Frame(MaxEntities, _logger);
             _entity = _frame.CreateEntity();
 
@@ -182,7 +183,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(0, _chaseExit.CallCount);
 
             // verify ActiveState
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(P3StateId.RootLevel,   fsm.ActiveStateIds[0], "depth0 = RootLevel");
             Assert.AreEqual(P3StateId.CombatState, fsm.ActiveStateIds[1], "depth1 = CombatState");
             Assert.AreEqual(P3StateId.Chase,        fsm.ActiveStateIds[2], "depth2 = Chase");
@@ -224,7 +225,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(1, _deathEnter.CallCount, "DeathState OnEnter must run");
             Assert.AreEqual(0, _deathExit.CallCount);
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(P3StateId.RootLevel,  fsm.ActiveStateIds[0], "depth0 = RootLevel");
             Assert.AreEqual(P3StateId.DeathState, fsm.ActiveStateIds[1], "depth1 = DeathState");
             Assert.AreEqual(2, fsm.ActiveDepth);
@@ -249,7 +250,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(0, _chaseEnter.CallCount);
             Assert.AreEqual(0, _deathEnter.CallCount);
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(3, fsm.ActiveDepth, "ActiveDepth = 3 (RootLevel/CombatState/Idle)");
             Assert.AreEqual(P3StateId.RootLevel,   fsm.ActiveStateIds[0]);
             Assert.AreEqual(P3StateId.CombatState, fsm.ActiveStateIds[1]);
@@ -285,7 +286,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(0, _combatExit.CallCount,  "CombatState OnExit must NOT run");
             Assert.AreEqual(1, _combatEnter.CallCount, "CombatState OnEnter must NOT run again");
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(0, fsm.StateElapsedTicks, "StateElapsedTicks reset after self-transition");
             Assert.AreEqual(3, fsm.ActiveDepth);
             Assert.AreEqual(P3StateId.Idle, fsm.ActiveStateIds[2]);

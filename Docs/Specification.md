@@ -187,8 +187,6 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │                       StaticCollider (GodotFPStaticColliderExporter/Converter/Viewer),
 │   │                       DataAsset (KlothoDataAssetConvertTool, KlothoJsonContextMenu) · plugin.gd EditorPlugin
 │   ├── Plugins/Analyzers/  KlothoGenerator.dll (Roslyn source generator, RoslynAnalyzer label)
-│   ├── Prefabs/            debug/visualization prefabs (EcsDebugBridge,
-│   │                       FPPhysicsWorldVisualizer, FPStaticColliderVisualizer)
 │   ├── Plugins~/Logging.Mel/  opt-in MEL interop adapter (UPM "Import Sample" → MEL Logging Plugin)
 │   └── Server~/            dedicated-server build assets (per-assembly csproj mirroring client
 │                           asmdefs + KlothoServer/: KlothoServerBootstrap, ConfigPathResolver,
@@ -926,20 +924,32 @@ _state1 = s1 ^ s0 ^ (s1 >> 18) ^ (s0 >> 5)
 return result
 ```
 
+**Seeding / state**:
+
+| Method | Purpose |
+| ---- | ---- |
+| `new DeterministicRandom(int seed)` / `SetSeed(int seed)` | Initialize / reseed from an int seed (`Seed` property reads it back). |
+| `FromSeed(ulong worldSeed, ulong featureKey, ulong index = 0)` | Derive an independent stream per feature from a shared world seed. |
+| `SetFullState(ulong state0, ulong state1)` | Restore exact internal state (snapshot / rollback / resync). |
+
 **Distribution methods**:
 
 | Method | Returns | Algorithm |
 | ---- | ---- | ---- |
 | `NextInt()` | 0 ~ 2^31-1 | `NextUInt64() & 0x7FFFFFFF` |
 | `NextInt(min, max)` | [min, max) | Modular arithmetic |
-| `NextFP64()` | [0, 1) FP64 | `NextUInt64() & 0xFFFFFFFF` → fixed-point |
+| `NextIntInclusive(min, max)` | [min, max] | Modular arithmetic |
+| `NextFixed()` | [0, 1) FP64 | `NextUInt64() & 0xFFFFFFFF` → fixed-point |
+| `NextFixed(min, max)` | [min, max) FP64 | Scaled `NextFixed()` |
+| `NextFixedInclusive()` / `NextFixedInclusive(min, max)` | [0, 1] / [min, max] FP64 | Inclusive-bound variants |
 | `NextBool()` | true/false | LSB check |
 | `NextChance(percent)` | bool | Percentage chance |
-| `NextWeighted(weights)` | int (index) | Weighted selection |
-| `NextInsideUnitCircleFP()` | FPVector2 | [-1,1]² rejection sampling |
-| `NextInsideUnitSphereFP()` | FPVector3 | [-1,1]³ rejection sampling |
-| `NextDirection2DFP()` | FPVector2 | Uniform angle: `NextFP64() * TwoPi` |
-| `NextDirection3DFP()` | FPVector3 | Uniform spherical distribution (θ, z parameters) |
+| `NextWeighted(int[] weights)` | int (index) | Weighted selection |
+| `NextInsideUnitCircle()` | FPVector2 | [-1,1]² rejection sampling |
+| `NextInsideUnitSphere()` | FPVector3 | [-1,1]³ rejection sampling |
+| `NextDirection2D()` | FPVector2 | Uniform angle: `NextFixed() * TwoPi` |
+| `NextDirection3D()` | FPVector3 | Uniform spherical distribution (θ, z parameters) |
+| `NextRotation()` | FPQuaternion | Uniform random orientation |
 | `Shuffle<T>(array)` | void | Fisher-Yates shuffle |
 
 ---

@@ -161,14 +161,16 @@ Supports client-side prediction, rollback, and frame synchronization.
 
 ## Serialization
 
-- **SpanWriter / SpanReader** — ref-struct, GC-free binary serialization
-  - byte, bool, int16/32/64, float, double, string, FP64, FPVector3, etc.
+- **SpanWriter / SpanReader** — ref-struct, GC-free binary serialization (little-endian)
+  - primitives (byte, bool, int/uint 16/32/64, string [UTF-8], byte[]); FP types via `FPSpanExtensions` (FP64, FPVector2/3/4, FPQuaternion); ECS handles (EntityRef, DataAssetRef); composite physics (FPRigidBody, FPCollider). **No float/double** — fixed-point only, for determinism
 - **ISpanSerializable** — Span-based serialization interface
 - **SerializationBuffer** — managed byte buffer (pooled, IDisposable)
-- **[KlothoSerializable(typeId)]** — type-registration attribute for the source generator
+- **[KlothoSerializable(typeId)]** — type-registration attribute for the source generator (Entity / Command / Message / Event categories, inferred from the base class)
+- **[KlothoSerializableStruct]** — marks an `unmanaged partial struct` as a reusable inline field bundle (nested codec; no wire id / factory) embeddable in components and other serializable types
 - **[KlothoOrder]** — specifies field serialization order
 - **[KlothoIgnore]** — excludes a field from serialization
 - **[KlothoHashIgnore]** — excludes a field from hash computation
+- See **[Serialization.md](Serialization.md)** for the full codec, supported-type table, and diagnostics reference
 
 ## DataAsset
 
@@ -323,4 +325,4 @@ The Godot (.NET) adapter (`com.xpturn.klotho/Godot~/Adapters/`) mirrors the Unit
 
 ---
 
-*Last updated: 2026-05-25*
+*Last updated: 2026-06-20*

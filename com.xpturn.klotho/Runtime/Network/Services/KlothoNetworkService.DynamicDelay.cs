@@ -65,11 +65,9 @@ namespace xpTURN.Klotho.Network
 
         private void PushExtraDelayUpdate(int peerId, int playerId, int extraDelay, int avgRttMs, int prevDelay, string reason)
         {
-            var msg = new RecommendedExtraDelayUpdateMessage
-            {
-                RecommendedExtraDelay = extraDelay,
-                AvgRttMs = avgRttMs,
-            };
+            var msg = _recommendedExtraDelayCache;
+            msg.RecommendedExtraDelay = extraDelay;
+            msg.AvgRttMs = avgRttMs;
             // Broadcast to all peers and apply locally on the host. Transport.Broadcast does not
             // loop back to the sender, so the host needs the direct handler call to update its
             // own engine — same pattern as StartGame's GameStartMessage path.

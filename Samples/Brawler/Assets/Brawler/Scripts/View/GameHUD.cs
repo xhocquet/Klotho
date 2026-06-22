@@ -25,7 +25,7 @@ namespace Brawler
             public TMP_Text KnockbackLabel;
         }
 
-        [Header("References")]
+        [field: Header("References")]
         [SerializeField] private TMP_Text         _timerLabel;
         [SerializeField] private PlayerHUDPanel[] _playerPanels;
 

@@ -331,8 +331,7 @@ namespace Brawler
                 NavAgentComponent.Stop(ref nav);
             }
 
-            if (frame.Has<HFSMComponent>(entity))
-                frame.Remove<HFSMComponent>(entity);
+            HFSMManager.Deinit(ref frame, entity);
             HFSMManager.Init(ref frame, entity, BotHFSMRoot.Id);
         }
 

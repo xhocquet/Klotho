@@ -63,6 +63,7 @@ namespace xpTURN.Klotho.Network
         private readonly PlayerReadyMessage _playerReadyCache = new PlayerReadyMessage();
         private readonly RoomHandshakeMessage _roomHandshakeCache = new RoomHandshakeMessage();
         private readonly PongMessage _pongMessageCache = new PongMessage();
+        private readonly ReactiveExtraDelayReportMessage _reactiveExtraDelayCache = new ReactiveExtraDelayReportMessage();
 
         // ── IKlothoNetworkService properties ────────────────────
 
@@ -89,6 +90,15 @@ namespace xpTURN.Klotho.Network
         public bool IsHost => false;
         public int RandomSeed => _randomSeed;
         public IReadOnlyList<IPlayerInfo> Players => _players;
+
+        // Capture-free equivalent of _players.Find(p => p.PlayerId == id) (no closure allocation).
+        private PlayerInfo FindPlayerById(int playerId)
+        {
+            for (int i = 0; i < _players.Count; i++)
+                if (_players[i].PlayerId == playerId)
+                    return _players[i];
+            return null;
+        }
 
         // ── IServerDrivenNetworkService properties ────────────────
 
@@ -266,8 +276,8 @@ namespace xpTURN.Klotho.Network
         {
             if (effective == _lastReportedEffective) return;
             _lastReportedEffective = effective;
-            SendToServer(new ReactiveExtraDelayReportMessage { EffectiveExtraDelay = effective },
-                DeliveryMethod.ReliableOrdered);
+            _reactiveExtraDelayCache.EffectiveExtraDelay = effective;
+            SendToServer(_reactiveExtraDelayCache, DeliveryMethod.ReliableOrdered);
             _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"sd-client\",\"dir\":\"send\",\"effective\":{effective}}}");
         }
 
@@ -374,7 +384,7 @@ namespace xpTURN.Klotho.Network
             _players.Clear();
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
-            _unackedInputs.Clear();
+            DrainUnackedInputs();
             _sessionMagic = 0;
             _gameStartTime = 0;
             _localPlayerId = 0;
@@ -475,12 +485,13 @@ namespace xpTURN.Klotho.Network
                 _transport.Send(0, serialized.Data, serialized.Length, DeliveryMethod.Unreliable);
             }
 
-            // Store in resend queue (removed when server ACK is received)
-            byte[] cmdCopy = new byte[cmdWriter.Position];
-            Buffer.BlockCopy(cmdBuf, 0, cmdCopy, 0, cmdWriter.Position);
+            // Store in resend queue (returned to StreamPool when server ACK is received)
+            int len = cmdWriter.Position;
+            byte[] cmdCopy = StreamPool.GetBuffer(len);
+            Buffer.BlockCopy(cmdBuf, 0, cmdCopy, 0, len);
             if (_unackedInputs.Count == 0)
                 _lastResendTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            _unackedInputs.Enqueue(new UnackedInput { Tick = tick, CommandData = cmdCopy });
+            _unackedInputs.Enqueue(new UnackedInput { Tick = tick, CommandData = cmdCopy, Length = len });
 
             StreamPool.ReturnBuffer(cmdBuf);
         }
@@ -539,7 +550,7 @@ namespace xpTURN.Klotho.Network
 
         public void ClearUnackedInputs()
         {
-            _unackedInputs.Clear();
+            DrainUnackedInputs();
         }
 
         public int GetMinClientAckedTick()
@@ -772,7 +783,7 @@ namespace xpTURN.Klotho.Network
 
         private void HandlePlayerReadyMessage(PlayerReadyMessage msg)
         {
-            var player = _players.Find(p => p.PlayerId == msg.PlayerId);
+            var player = FindPlayerById(msg.PlayerId);
             if (player != null)
             {
                 bool prevReady = AllPlayersReady;
@@ -794,7 +805,10 @@ namespace xpTURN.Klotho.Network
         {
             // Remove ticks before ACK from the resend queue
             while (_unackedInputs.Count > 0 && _unackedInputs.Peek().Tick <= msg.AckedTick)
+            {
+                StreamPool.ReturnBuffer(_unackedInputs.Peek().CommandData);
                 _unackedInputs.Dequeue();
+            }
 
             OnInputAckReceived?.Invoke(msg.AckedTick);
         }
@@ -1130,7 +1144,7 @@ namespace xpTURN.Klotho.Network
             {
                 bundle.Entries[idx].Tick = input.Tick;
                 bundle.Entries[idx].CommandData = input.CommandData;
-                bundle.Entries[idx].CommandDataLength = input.CommandData.Length;
+                bundle.Entries[idx].CommandDataLength = input.Length;
                 idx++;
             }
 
@@ -1141,6 +1155,14 @@ namespace xpTURN.Klotho.Network
         }
 
         // ── Helpers ───────────────────────────────────────────
+
+        // Drain the unacked-input queue, returning each pooled command buffer to StreamPool.
+        // Equivalent to _unackedInputs.Clear() plus buffer reclamation.
+        private void DrainUnackedInputs()
+        {
+            while (_unackedInputs.Count > 0)
+                StreamPool.ReturnBuffer(_unackedInputs.Dequeue().CommandData);
+        }
 
         private void SendToServer(INetworkMessage message, DeliveryMethod deliveryMethod)
         {
@@ -1155,7 +1177,8 @@ namespace xpTURN.Klotho.Network
         private struct UnackedInput
         {
             public int Tick;
-            public byte[] CommandData;
+            public byte[] CommandData;   // StreamPool 대여 버퍼 (버킷 크기, Length != 유효길이)
+            public int Length;           // 유효 데이터 길이
         }
 
         // ── Suppress unused event warnings ─────────────────────────

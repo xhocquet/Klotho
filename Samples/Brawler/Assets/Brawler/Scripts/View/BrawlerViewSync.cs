@@ -14,10 +14,10 @@ namespace Brawler
         [SerializeField] private GameHUD _gameHUD;
         [SerializeField] private ResultScreen _resultScreen;
 
-        [Header("Camera")]
+        [field: Header("Camera")]
         [SerializeField] private BrawlerCameraController _cameraController;
 
-        [Header("VFX")]
+        [field: Header("VFX")]
         [SerializeField] private GameObject _trapVfxPrefab;
         [SerializeField] private GameObject _bombVfxPrefab;
 

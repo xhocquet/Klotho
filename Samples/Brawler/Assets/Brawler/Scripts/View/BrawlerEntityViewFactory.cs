@@ -13,11 +13,11 @@ namespace Brawler
     [CreateAssetMenu(menuName = "Brawler/EntityViewFactory", fileName = "BrawlerEntityViewFactory")]
     public class BrawlerEntityViewFactory : EntityViewFactory
     {
-        [Header("Character Prefabs (CharacterClass index)")]
+        [field: Header("Character Prefabs (CharacterClass index)")]
         [Tooltip("[0]=Warrior  [1]=Mage  [2]=Rogue  [3]=Knight")]
         [SerializeField] private GameObject[] _characterPrefabs;
 
-        [Header("Item Prefabs (ItemType index)")]
+        [field: Header("Item Prefabs (ItemType index)")]
         [Tooltip("[0]=Shield  [1]=Boost  [2]=Bomb")]
         [SerializeField] private GameObject[] _itemPrefabs;
 

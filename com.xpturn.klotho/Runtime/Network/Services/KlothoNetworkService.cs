@@ -164,6 +164,8 @@ namespace xpTURN.Klotho.Network
         private readonly ReconnectRequestMessage _reconnectRequestCache = new ReconnectRequestMessage();
         private readonly ReconnectAcceptMessage _reconnectAcceptCache = new ReconnectAcceptMessage();
         private readonly ReconnectRejectMessage _reconnectRejectCache = new ReconnectRejectMessage();
+        private readonly RecommendedExtraDelayUpdateMessage _recommendedExtraDelayCache = new RecommendedExtraDelayUpdateMessage();
+        private readonly ReactiveExtraDelayReportMessage _reactiveExtraDelayCache = new ReactiveExtraDelayReportMessage();
 
         private long _sessionMagic;
         private SharedTimeClock _sharedClock;
@@ -184,6 +186,15 @@ namespace xpTURN.Klotho.Network
         public bool IsHost { get; private set; }
         public int RandomSeed { get; private set; }
         public IReadOnlyList<IPlayerInfo> Players => _players;
+
+        // Capture-free equivalent of _players.Find(p => p.PlayerId == id) (no closure allocation).
+        private PlayerInfo FindPlayerById(int playerId)
+        {
+            for (int i = 0; i < _players.Count; i++)
+                if (_players[i].PlayerId == playerId)
+                    return _players[i];
+            return null;
+        }
 
         public SessionPhase Phase
         {
@@ -1021,8 +1032,8 @@ namespace xpTURN.Klotho.Network
             if (IsHost) return;
             if (effective == _lastReportedEffective) return;
             _lastReportedEffective = effective;
-            BroadcastMessagePooled(new ReactiveExtraDelayReportMessage { EffectiveExtraDelay = effective },
-                DeliveryMethod.ReliableOrdered);
+            _reactiveExtraDelayCache.EffectiveExtraDelay = effective;
+            BroadcastMessagePooled(_reactiveExtraDelayCache, DeliveryMethod.ReliableOrdered);
             _logger?.KInformation($"[Metrics][ReactiveReport] {{\"role\":\"p2p-guest\",\"dir\":\"send\",\"effective\":{effective}}}");
         }
 
@@ -1187,7 +1198,7 @@ namespace xpTURN.Klotho.Network
         {
             _logger?.KInformation($"[KlothoNetworkService][HandlePlayerReadyMessage] Player ready: playerId={msg.PlayerId}, isReady={msg.IsReady}, fromPeerId={fromPeerId}");
 
-            var player = _players.Find(p => p.PlayerId == msg.PlayerId);
+            var player = FindPlayerById(msg.PlayerId);
             if (player != null)
             {
                 bool prevReady = AllPlayersReady;
@@ -1225,7 +1236,7 @@ namespace xpTURN.Klotho.Network
 
             if (_peerToPlayer.TryGetValue(peerId, out int playerId))
             {
-                var player = _players.Find(p => p.PlayerId == playerId);
+                var player = FindPlayerById(playerId);
                 if (player != null)
                 {
                     player.Ping = (int)rtt;

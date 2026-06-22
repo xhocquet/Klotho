@@ -21,12 +21,12 @@ using xpTURN.Klotho.Logging;
 /// </summary>
 public class ServerDrivenDeterminismRunner : MonoBehaviour
 {
-    [Header("Settings")]
+    [field: Header("Settings")]
     [SerializeField] private string serverAddress = "localhost";
     [SerializeField] private int serverPort = 7777;
     [SerializeField] private int targetTicks = 1000;
 
-    [Header("Results")]
+    [field: Header("Results")]
     [SerializeField] private int verifiedTicks;
     [SerializeField] private int hashMismatches;
     [SerializeField] private bool completed;

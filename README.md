@@ -25,7 +25,8 @@ A deterministic-simulation framework supporting Client-Side Prediction (CSP), Ro
 | **Physics** | `FPPhysicsWorld` · Broadphase (SpatialGrid) · Narrowphase · CCD (Sweep) · Constraint Solver · Joints · Triggers · Static BVH |
 | **Navigation** | `FPNavMesh` · A* (triangle graph) · Funnel (SSFA) · ORCA avoidance · ECS-integrated `NavAgentComponent` |
 | **ECS** | Sparse-set `ComponentStorage<T>` · `Frame` (single byte[] heap) · `FilterWithout/Filter<T1..T5>` · `FrameRingBuffer` · `SystemRunner` |
-| **Serialization / Source Generator** | `SpanWriter/Reader` (ref struct, GC-free) · automatic code generation via `[KlothoComponent]` / `[KlothoSerializable]` / `[KlothoDataAsset]` |
+| **AI / HFSM** | Deterministic hierarchical FSM · `HFSMBuilder` (fluent) · `HFSMRoot` / `HFSMManager` · `HFSMComponent` (per-entity) · `HFSMDecision` / `AIAction` · Unity state-tree visualizer |
+| **Serialization / Source Generator** | `SpanWriter/Reader` (ref struct, GC-free) · automatic code generation via `[KlothoComponent]` / `[KlothoSerializable]` / `[KlothoDataAsset]` / `[KlothoSerializableStruct]` · build-time `DeterminismAnalyzer` (flags float / non-deterministic APIs in simulation code) |
 | **Data Assets** | `IDataAsset` · `DataAssetRegistry` · `DataAssetRef` · JSON serialization (`xpTURN.Klotho.DataAsset.Json`) |
 | **Replay** | Record / playback / seek / variable speed · LZ4 compression (`K4os.Compression.LZ4`) |
 | **Verification Tools** | `SyncTestRunner` (GGPO-style determinism verification) · `DeterminismVerificationRunner` · benchmark suite |
@@ -145,7 +146,6 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
 │   ├── Godot~/                    Godot (.NET) adapter
 │   │   └── Adapters/Editor/       Godot (.NET) editor tools
 │   ├── Plugins/Analyzers/         source generator
-│   ├── Prefabs/                   debug prefabs (Unity)
 │   ├── Plugins~/Logging.Mel/      MEL interop sample
 │   └── Server~/                   dedicated-server projects
 │
@@ -210,8 +210,16 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/GameDevAPI.md](Docs/GameDevAPI.md) | Game-developer API status |
 | [Docs/SimulationConfigGuide.md](Docs/SimulationConfigGuide.md) | SimulationConfig recommended-value guide (per genre / platform) |
 | [Docs/BaseLibraries.md](Docs/BaseLibraries.md) | List of base libraries used |
+| [Docs/ECS.md](Docs/ECS.md) | ECS guide (entities · components · systems · filters · Frame snapshot/hash · rollback) |
+| [Docs/Serialization.md](Docs/Serialization.md) | Serialization & source generator (`SpanWriter/Reader` · `[KlothoComponent]`/`[KlothoSerializable]`/`[KlothoDataAsset]` codegen · supported types · diagnostics) |
+| [Docs/DeterministicMath.md](Docs/DeterministicMath.md) | Deterministic math (`FP64` 32.32 fixed-point · `FPVector*`/`FPQuaternion`/`FPMatrix` · trig · geometry · `DeterministicRandom`) |
+| [Docs/Replay.md](Docs/Replay.md) | Replay (record inputs · save/load LZ4 · play/pause/seek/speed · determinism guarantees) |
 | [Docs/Navigation.md](Docs/Navigation.md) | Deterministic navigation (FPNavMesh · A* · Funnel · ORCA) |
+| [Docs/NavMeshVisualizer.Godot.md](Docs/NavMeshVisualizer.Godot.md) | `Godot (.NET)` editor tool — visualize a serialized `FPNavMesh` (`.bytes`) and validate pathfinding / agent simulation in the 3D viewport |
 | [Docs/PhysicsWorld.md](Docs/PhysicsWorld.md) | Deterministic physics (rigid bodies · colliders · contacts · triggers · CCD) |
+| [Docs/PhysicsVisualizer.Godot.md](Docs/PhysicsVisualizer.Godot.md) | `Godot (.NET)` runtime/editor tools — draw the live FPPhysics world (bodies · colliders · contacts), HUD inspector, static-collider viewer |
+| [Docs/DataAsset.md](Docs/DataAsset.md) | DataAsset authoring guide (define · author JSON · build `.bytes` · register · look up) |
+| [Docs/HFSM.md](Docs/HFSM.md) | Hierarchical FSM for agent/bot AI (`HFSMBuilder` · `HFSMRoot` · `HFSMManager` · decisions/actions) |
 | [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md) · [Docs/Samples/P2pSample.md](Docs/Samples/P2pSample.md) · [Docs/Samples/SdSample.md](Docs/Samples/SdSample.md) | `Unity` sample walkthroughs — Brawler, P2pSample, SdSample |
 | [Docs/Samples/GodotSdSample.md](Docs/Samples/GodotSdSample.md) · [Docs/Samples/GodotP2pSample.md](Docs/Samples/GodotP2pSample.md) | `Godot (.NET)` sample walkthroughs (architecture + Godot-specific gotchas) |
 

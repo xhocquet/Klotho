@@ -18,6 +18,9 @@ namespace xpTURN.Klotho.Generator.Analyzers
     internal static class ComponentAnalyzer
     {
         private const string IComponentInterface = "xpTURN.Klotho.ECS.IComponent";
+        private const string IHFSMHostInterface = "xpTURN.Klotho.ECS.FSM.IHFSMHost";
+        private const string HFSMStateType = "xpTURN.Klotho.ECS.FSM.HFSMState";
+        private const string KlothoSerializableStructAttribute = "xpTURN.Klotho.Serialization.KlothoSerializableStructAttribute";
         private const string StructLayoutAttribute = "System.Runtime.InteropServices.StructLayoutAttribute";
         private const string KlothoSingletonComponentAttribute = "xpTURN.Klotho.ECS.KlothoSingletonComponentAttribute";
         private const string IntPtrType = "System.IntPtr";
@@ -114,6 +117,18 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     continue;
                 }
 
+                // Nested [KlothoSerializableStruct] field — serialized by delegation (§ SerializableStruct).
+                if (IsNestedSerializableStruct(fs))
+                {
+                    info.Fields.Add(new ComponentFieldInfo
+                    {
+                        Name = fs.Name,
+                        TypeFullName = fs.Type.ToDisplayString(),
+                        IsNestedSerializable = true,
+                    });
+                    continue;
+                }
+
                 // Field-level guards (non-fixed fields only)
                 CheckFieldType(symbol, fs, result);
 
@@ -123,6 +138,9 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     TypeFullName = fs.Type.ToDisplayString(),
                 });
             }
+
+            // IHFSMHost: HFSMState must be the first field (offset 0) — HFSMManager reinterprets via Unsafe.As.
+            CheckHFSMHostFirstField(symbol, info, location, result);
 
             // Empty tag struct requires Size = 1
             if (info.Fields.Count == 0)
@@ -155,6 +173,9 @@ namespace xpTURN.Klotho.Generator.Analyzers
             // Check unsupported field types
             foreach (var field in info.Fields)
             {
+                if (field.IsNestedSerializable)
+                    continue;   // delegates to the nested struct's generated codec
+
                 if (field.IsFixed)
                 {
                     if (!TypeMappings.TryGetMapping(field.ElementType, out _))
@@ -184,6 +205,16 @@ namespace xpTURN.Klotho.Generator.Analyzers
 
             result.TypeInfo = info;
             return result;
+        }
+
+        internal static bool IsNestedSerializableStruct(IFieldSymbol field)
+        {
+            foreach (var attr in field.Type.GetAttributes())
+            {
+                if (attr.AttributeClass?.ToDisplayString() == KlothoSerializableStructAttribute)
+                    return true;
+            }
+            return false;
         }
 
         private static Location GetFieldLocation(INamedTypeSymbol symbol, string fieldName)
@@ -254,6 +285,25 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     location,
                     symbol.Name));
             }
+        }
+
+        // IHFSMHost reinterprets the host's first field as HFSMState via Unsafe.As, so HFSMState must be the
+        // first laid-out field (offset 0). With Sequential layout (KlothoStructLayoutMissing already enforced),
+        // declaration order == memory order, so checking the first collected field's type suffices.
+        private static void CheckHFSMHostFirstField(INamedTypeSymbol symbol, ComponentTypeInfo info, Location location, ComponentAnalyzeResult result)
+        {
+            bool isHost = symbol.AllInterfaces.Any(i => i.ToDisplayString() == IHFSMHostInterface);
+            if (!isHost) return;
+
+            var first = info.Fields.Count > 0 ? info.Fields[0] : null;
+            if (first != null && first.TypeFullName == HFSMStateType) return;
+
+            result.Diagnostics.Add(Diagnostic.Create(
+                DiagnosticDescriptors.HFSMHostFirstField,
+                first != null ? (GetFieldLocation(symbol, first.Name) ?? location) : location,
+                symbol.Name,
+                first?.Name ?? "(none)",
+                first?.TypeFullName ?? "(none)"));
         }
 
         private static void CheckEmptyStructSize(INamedTypeSymbol symbol, Location location, ComponentAnalyzeResult result)

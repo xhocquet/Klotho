@@ -45,6 +45,10 @@ namespace xpTURN.Klotho.Generator.Model
         public FieldSizeKind SizeKind { get; set; } = FieldSizeKind.Fixed;
         public bool IsUnsupported { get; set; }
 
+        /// <summary>Field type is a [KlothoSerializableStruct] — serialize by delegating to its
+        /// generated codec (fields only; size is a runtime expression).</summary>
+        public bool IsNestedSerializable { get; set; }
+
         // For collection types
         public string ElementTypeName { get; set; }
         public string KeyTypeName { get; set; }

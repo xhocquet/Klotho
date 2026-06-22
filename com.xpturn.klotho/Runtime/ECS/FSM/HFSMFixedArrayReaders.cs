@@ -12,22 +12,22 @@ namespace xpTURN.Klotho.ECS.FSM
             _registered = true;
 
             ComponentStorageRegistry.RegisterFixedArrayReader(
-                typeof(HFSMComponent), nameof(HFSMComponent.ActiveStateIds),
+                typeof(HFSMComponent), nameof(HFSMState.ActiveStateIds),
                 boxed =>
                 {
                     var comp = (HFSMComponent)boxed;
                     var buf = new int[HFSMComponent.MaxDepth];
-                    unsafe { for (int i = 0; i < HFSMComponent.MaxDepth; i++) buf[i] = comp.ActiveStateIds[i]; }
+                    unsafe { for (int i = 0; i < HFSMComponent.MaxDepth; i++) buf[i] = comp.State.ActiveStateIds[i]; }
                     return buf;
                 });
 
             ComponentStorageRegistry.RegisterFixedArrayReader(
-                typeof(HFSMComponent), nameof(HFSMComponent.PendingEventIds),
+                typeof(HFSMComponent), nameof(HFSMState.PendingEventIds),
                 boxed =>
                 {
                     var comp = (HFSMComponent)boxed;
                     var buf = new int[HFSMComponent.MaxPendingEvents];
-                    unsafe { for (int i = 0; i < HFSMComponent.MaxPendingEvents; i++) buf[i] = comp.PendingEventIds[i]; }
+                    unsafe { for (int i = 0; i < HFSMComponent.MaxPendingEvents; i++) buf[i] = comp.State.PendingEventIds[i]; }
                     return buf;
                 });
         }

@@ -300,7 +300,7 @@ namespace xpTURN.Klotho.Network
 
             if (_peerToPlayer.TryGetValue(peerId, out int playerId))
             {
-                var player = _players.Find(p => p.PlayerId == playerId);
+                var player = FindPlayerById(playerId);
                 if (player != null)
                 {
                     if (IsHost && Phase == SessionPhase.Playing)

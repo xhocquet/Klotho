@@ -19,5 +19,9 @@ namespace xpTURN.Klotho.Generator.Model
         public bool IsFixed { get; set; }
         public int FixedSize { get; set; }
         public string ElementType { get; set; }
+
+        /// <summary>Field type is a [KlothoSerializableStruct] — serialize by delegating to its
+        /// generated Serialize/Deserialize/GetSerializedSize/GetHash (size is non-constant).</summary>
+        public bool IsNestedSerializable { get; set; }
     }
 }

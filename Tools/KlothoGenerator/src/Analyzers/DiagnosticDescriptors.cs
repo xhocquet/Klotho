@@ -113,6 +113,15 @@ namespace xpTURN.Klotho.Generator.Analyzers
             isEnabledByDefault: true,
             description: "Frame heap redesign requires Pack=4 Sequential layout on every component struct. Pack=1 risks ARMv7 SIGBUS; Pack=8 is conditional on dropping ARMv7.");
 
+        public static readonly DiagnosticDescriptor HFSMHostFirstField = new DiagnosticDescriptor(
+            "KLOTHO_HFSM_HOST_FIRST_FIELD",
+            "IHFSMHost first field must be HFSMState",
+            "[KlothoComponent] struct '{0}' implements IHFSMHost but its first field is '{1}' of type '{2}', not HFSMState — HFSMManager reinterprets the host's first field via Unsafe.As, so HFSMState must be the first field (offset 0)",
+            "KlothoGenerator.ECS",
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true,
+            description: "An IHFSMHost component embeds HFSMState at offset 0; the generic HFSMManager<TComp> entry points reinterpret the host's first field as HFSMState via Unsafe.As. A field placed before HFSMState (or HFSMState not being first) silently reads/writes the wrong memory as FSM state — a determinism-class corruption no runtime check can catch generically. With Sequential layout (already enforced), first-field == HFSMState guarantees offset 0.");
+
         public static readonly DiagnosticDescriptor KlothoIntPtrForbidden = new DiagnosticDescriptor(
             "KLOTHO_INTPTR_FORBIDDEN",
             "Platform-variable size type forbidden",
@@ -200,6 +209,32 @@ namespace xpTURN.Klotho.Generator.Analyzers
             "Mixed user/generated DataAsset members",
             "[KlothoDataAsset] class '{0}' declares {1} but not {2}. Author both or neither — mixed user/generated ownership is unsupported (CS0200/CS0103 risk).",
             "KlothoGenerator.DataAsset",
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
+        // --- SerializableStruct diagnostics ---
+
+        public static readonly DiagnosticDescriptor SerializableStructMissingPartial = new DiagnosticDescriptor(
+            "KLSG_SS001",
+            "Missing partial keyword",
+            "[KlothoSerializableStruct] struct '{0}' must be declared as partial",
+            "KlothoGenerator.SerializableStruct",
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor SerializableStructNotUnmanaged = new DiagnosticDescriptor(
+            "KLSG_SS002",
+            "SerializableStruct not unmanaged",
+            "[KlothoSerializableStruct] struct '{0}' must be unmanaged (no managed reference fields)",
+            "KlothoGenerator.SerializableStruct",
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor SerializableStructStructLayoutMissing = new DiagnosticDescriptor(
+            "KLSG_SS003",
+            "Missing StructLayout attribute",
+            "[KlothoSerializableStruct] struct '{0}' must have [StructLayout(LayoutKind.Sequential, Pack = 4)] so it composes into a component's deterministic layout",
+            "KlothoGenerator.SerializableStruct",
             DiagnosticSeverity.Error,
             isEnabledByDefault: true);
     }

@@ -13,7 +13,8 @@ namespace xpTURN.Klotho.ECS
         private readonly int _sparseOffset;
         private readonly int _denseOffset;
         private readonly int _componentsOffset;
-        private readonly int _capacity;
+        private readonly int _capacity;       // entity-index domain: Sparse length + Has/Add entity bound
+        private readonly int _slotCapacity;   // concurrent slots: Dense/Components length + Add overflow bound
 
         public ComponentStorageFlat(byte[] heap, in StorageLayout layout)
         {
@@ -23,6 +24,7 @@ namespace xpTURN.Klotho.ECS
             _denseOffset      = layout.DenseOffset;
             _componentsOffset = layout.ComponentsOffset;
             _capacity         = layout.Capacity;
+            _slotCapacity     = layout.SlotCapacity;
         }
 
         public int Capacity => _capacity;
@@ -36,10 +38,10 @@ namespace xpTURN.Klotho.ECS
             MemoryMarshal.Cast<byte, int>(_heap.AsSpan(_sparseOffset, _capacity * 4));
 
         public Span<int> DenseSpan =>
-            MemoryMarshal.Cast<byte, int>(_heap.AsSpan(_denseOffset, _capacity * 4));
+            MemoryMarshal.Cast<byte, int>(_heap.AsSpan(_denseOffset, _slotCapacity * 4));
 
         public Span<T> ComponentsSpan =>
-            MemoryMarshal.Cast<byte, T>(_heap.AsSpan(_componentsOffset, _capacity * Unsafe.SizeOf<T>()));
+            MemoryMarshal.Cast<byte, T>(_heap.AsSpan(_componentsOffset, _slotCapacity * Unsafe.SizeOf<T>()));
 
         // For Filter iterators — a dense (entityIndex) view sliced to the active entity count.
         public ReadOnlySpan<int> DenseToSparse => DenseSpan.Slice(0, Count);
@@ -73,9 +75,9 @@ namespace xpTURN.Klotho.ECS
                     $"Entity {entityIndex} already has component {typeof(T).Name}");
 
             ref int count = ref CountRef;
-            if (count >= _capacity)
+            if (count >= _slotCapacity)
                 throw new InvalidOperationException(
-                    $"ComponentStorageFlat<{typeof(T).Name}> capacity exceeded ({_capacity})");
+                    $"ComponentStorageFlat<{typeof(T).Name}> capacity exceeded ({_slotCapacity})");
 
             SparseSpan[entityIndex] = count;
             DenseSpan[count]        = entityIndex;

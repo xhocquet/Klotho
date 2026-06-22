@@ -138,6 +138,8 @@ namespace xpTURN.Klotho.Network
         private readonly PongMessage _pongMessageCache = new PongMessage();
         private readonly VerifiedStateMessage _verifiedStateCache = new VerifiedStateMessage();
         private readonly InputAckMessage _inputAckCache = new InputAckMessage();
+        private readonly CommandRejectedMessage _commandRejectedCache = new CommandRejectedMessage();
+        private readonly RecommendedExtraDelayUpdateMessage _recommendedExtraDelayCache = new RecommendedExtraDelayUpdateMessage();
 
         // Cached serialized bytes of the last VerifiedState (for resend when promoting CatchingUp → Playing)
         private byte[] _lastVerifiedBytes;
@@ -248,6 +250,15 @@ namespace xpTURN.Klotho.Network
         public bool IsHost => true;
         public int RandomSeed => _randomSeed;
         public IReadOnlyList<IPlayerInfo> Players => _players;
+
+        // Capture-free equivalent of _players.Find(p => p.PlayerId == id) (no closure allocation).
+        private PlayerInfo FindPlayerById(int playerId)
+        {
+            for (int i = 0; i < _players.Count; i++)
+                if (_players[i].PlayerId == playerId)
+                    return _players[i];
+            return null;
+        }
 
         // ── IServerDrivenNetworkService properties ────────────────
 
@@ -1044,11 +1055,9 @@ namespace xpTURN.Klotho.Network
         {
             if (!ConsumeRejectToken(peerId)) return;
 
-            var msg = new CommandRejectedMessage
-            {
-                Tick = tick,
-                CommandTypeId = cmdTypeId,
-            };
+            var msg = _commandRejectedCache;
+            msg.Tick = tick;
+            msg.CommandTypeId = cmdTypeId;
             msg.ReasonEnum = reason;
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
@@ -1216,7 +1225,7 @@ namespace xpTURN.Klotho.Network
         {
             _logger?.KInformation($"[ServerNetworkService] Player ready: playerId={msg.PlayerId}, isReady={msg.IsReady}, fromPeerId={fromPeerId}");
 
-            var player = _players.Find(p => p.PlayerId == msg.PlayerId);
+            var player = FindPlayerById(msg.PlayerId);
             if (player != null)
             {
                 bool prevReady = AllPlayersReady;
@@ -1261,7 +1270,7 @@ namespace xpTURN.Klotho.Network
             long rtt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - msg.Timestamp;
             if (_peerToPlayer.TryGetValue(peerId, out int playerId))
             {
-                var player = _players.Find(p => p.PlayerId == playerId);
+                var player = FindPlayerById(playerId);
                 if (player != null)
                     player.Ping = (int)rtt;
 
@@ -1379,11 +1388,9 @@ namespace xpTURN.Klotho.Network
 
         private void PushExtraDelayUpdate(int peerId, int playerId, int extraDelay, int avgRttMs, int prevDelay, string reason)
         {
-            var msg = new RecommendedExtraDelayUpdateMessage
-            {
-                RecommendedExtraDelay = extraDelay,
-                AvgRttMs = avgRttMs,
-            };
+            var msg = _recommendedExtraDelayCache;
+            msg.RecommendedExtraDelay = extraDelay;
+            msg.AvgRttMs = avgRttMs;
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
@@ -1409,7 +1416,7 @@ namespace xpTURN.Klotho.Network
 
             if (_peerToPlayer.TryGetValue(peerId, out int playerId))
             {
-                var player = _players.Find(p => p.PlayerId == playerId);
+                var player = FindPlayerById(playerId);
                 if (player != null)
                 {
                     if (Phase == SessionPhase.Playing)
@@ -1732,7 +1739,7 @@ namespace xpTURN.Klotho.Network
                     info.Reset();
                     _disconnectedPlayerCount--;
 
-                    var player = _players.Find(p => p.PlayerId == playerId);
+                    var player = FindPlayerById(playerId);
                     if (player != null)
                     {
                         int prevCount = _players.Count;

@@ -55,7 +55,7 @@ namespace xpTURN.Klotho.Core
 
         private void HandleSyncTestDisabled()
         {
-            _logger?.KError($"[KlothoEngine][SyncTest] auto-disabled: {_syncTestRunner?.ConsecutiveFailLimit} consecutive failed checks — persistent non-determinism, further checks would repeat the same signal (IMP59 V2-H6)");
+            _logger?.KError($"[KlothoEngine][SyncTest] auto-disabled: {_syncTestRunner?.ConsecutiveFailLimit} consecutive failed checks — persistent non-determinism, further checks would repeat the same signal.");
             DisableSyncTest();
         }
 

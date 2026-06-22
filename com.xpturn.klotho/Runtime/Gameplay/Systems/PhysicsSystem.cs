@@ -40,12 +40,21 @@ namespace xpTURN.Klotho.ECS.Systems
         public Action<EntityRef, EntityRef> OnEntityTriggerStay;
         public Action<EntityRef, EntityRef> OnEntityTriggerExit;
 
+        // Cached raw trigger delegates (instance method-group conversion is not compiler-cached → cache once)
+        private readonly Action<int, int> _onTriggerEnter;
+        private readonly Action<int, int> _onTriggerStay;
+        private readonly Action<int, int> _onTriggerExit;
+
         public PhysicsSystem(int maxEntities, FPVector3 gravity)
         {
             _world = new FPPhysicsWorld(FP64.FromInt(10));
             _gravity = gravity;
             _bodies = new FPPhysicsBody[maxEntities];
             _bodyEntities = new EntityRef[maxEntities];
+
+            _onTriggerEnter = HandleRawTriggerEnter;
+            _onTriggerStay  = HandleRawTriggerStay;
+            _onTriggerExit  = HandleRawTriggerExit;
         }
 
         public PhysicsSystem(int maxEntities)
@@ -246,7 +255,7 @@ namespace xpTURN.Klotho.ECS.Systems
             // 2. Physics simulation
             FP64 dt = FP64.FromInt(frame.DeltaTimeMs) / FP64.FromInt(1000);
             _world.Step(_bodies, _bodyCount, dt, _gravity,
-                HandleRawTriggerEnter, HandleRawTriggerStay, HandleRawTriggerExit);
+                _onTriggerEnter, _onTriggerStay, _onTriggerExit);
 
             // 2-b. Snapshot copy for the visualizer (immediately after Step)
             _world.CopyContactsTo(_contactBuf, out _contactCount);

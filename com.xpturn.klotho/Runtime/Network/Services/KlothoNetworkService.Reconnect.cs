@@ -441,7 +441,7 @@ namespace xpTURN.Klotho.Network
                 return;
 
             int playerId = msg.PlayerId;
-            var player = _players.Find(p => p.PlayerId == playerId);
+            var player = FindPlayerById(playerId);
 
             switch ((PlayerStateChange)msg.State)
             {
@@ -504,7 +504,7 @@ namespace xpTURN.Klotho.Network
                 info.Reset();
                 _disconnectedPlayerCount--;
 
-                var player = _players.Find(p => p.PlayerId == playerId);
+                var player = FindPlayerById(playerId);
                 if (player != null)
                 {
                     int prevPlayerCount = _players.Count;
@@ -937,7 +937,7 @@ namespace xpTURN.Klotho.Network
                 _logger?.KDebug($"[KlothoNetworkService][ZombieCleanupSummary] reconnectPeerId={peerId}, disconnected={cleanupCount}, bundleMs={BUNDLE_WINDOW_MS}");
 
             // 10. Restore player state + raise events
-            var player = _players.Find(p => p.PlayerId == msg.PlayerId);
+            var player = FindPlayerById(msg.PlayerId);
             if (player != null)
                 player.ConnectionState = PlayerConnectionState.Connected;
             OnPlayerReconnected?.Invoke(player);

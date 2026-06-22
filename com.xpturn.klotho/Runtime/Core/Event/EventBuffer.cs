@@ -80,7 +80,7 @@ namespace xpTURN.Klotho.Core
         {
 #if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
             if (_slotTick[tick % _capacity] > tick)
-                _logger?.KError($"[EventBuffer] ClearTick({tick}) destroys a NEWER occupant (tick {_slotTick[tick % _capacity]}) — nominal-tick clear on a ring-wrapped slot (IMP59 V0-B bug pattern).");
+                _logger?.KError($"[EventBuffer] ClearTick({tick}) destroys a NEWER occupant (tick {_slotTick[tick % _capacity]}) — nominal-tick clear on a ring-wrapped slot.");
             _slotTick[tick % _capacity] = -1;
 #endif
             var list = _ring[tick % _capacity];

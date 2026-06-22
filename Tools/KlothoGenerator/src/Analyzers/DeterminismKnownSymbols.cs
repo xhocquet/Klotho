@@ -67,6 +67,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
             var bases = Collect(compilation,
                 "xpTURN.Klotho.ECS.FSM.AIAction",
                 "xpTURN.Klotho.ECS.FSM.HFSMDecision",
+                "xpTURN.Klotho.ECS.FSM.AIFunction`1",
                 "xpTURN.Klotho.Core.CommandBase",
                 "xpTURN.Klotho.Core.SimulationEvent");
 

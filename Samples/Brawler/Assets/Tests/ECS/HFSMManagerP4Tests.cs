@@ -37,6 +37,7 @@ namespace xpTURN.Klotho.ECS.Tests
         [SetUp]
         public void SetUp()
         {
+            HFSMRoot.Clear(); // isolate the static registry between tests (each re-registers RootId)
             _frame  = new Frame(MaxEntities, _logger);
             _entity = _frame.CreateEntity();
 
@@ -116,7 +117,7 @@ namespace xpTURN.Klotho.ECS.Tests
 
             // Update without event → no transition
             HFSMManager.Update(ref _frame, _entity);
-            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0],
+            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0],
                 "Without event, transition should not occur");
 
             // Inject event
@@ -125,7 +126,7 @@ namespace xpTURN.Klotho.ECS.Tests
 
             // Transition occurs on next Update
             HFSMManager.Update(ref _frame, _entity);
-            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0],
+            Assert.AreEqual(StateId.Chase, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0],
                 "Event-triggered transition should occur on next Update");
             Assert.AreEqual(1, _idleExit.CallCount);
             Assert.AreEqual(1, _chaseEnter.CallCount);
@@ -157,7 +158,7 @@ namespace xpTURN.Klotho.ECS.Tests
             HFSMManager.Update(ref _frame, _entity);
             HFSMManager.Update(ref _frame, _entity);
 
-            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0],
+            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0],
                 "Without matching event, transition must not occur");
             Assert.AreEqual(0, _idleExit.CallCount);
             Assert.AreEqual(0, _chaseEnter.CallCount);
@@ -184,12 +185,41 @@ namespace xpTURN.Klotho.ECS.Tests
                 "5th TriggerEvent should return false (queue full)");
 
             // Verify the existing 4 are retained
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(4, fsm.PendingEventCount, "PendingEventCount should remain 4");
             Assert.AreEqual(1, fsm.PendingEventIds[0]);
             Assert.AreEqual(2, fsm.PendingEventIds[1]);
             Assert.AreEqual(3, fsm.PendingEventIds[2]);
             Assert.AreEqual(4, fsm.PendingEventIds[3]);
+        }
+
+        // ─────────────────────────────────────────
+        // Scenario 3b: Duplicate event is deduped (membership semantics)
+        // ─────────────────────────────────────────
+
+        [Test]
+        public unsafe void Scenario3b_DuplicateEvent_IsDeduped()
+        {
+            BuildRoot();
+            HFSMManager.Init(ref _frame, _entity, RootId);
+
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 7));
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 7), "re-trigger is idempotent success");
+
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
+            Assert.AreEqual(1, fsm.PendingEventCount, "duplicate eventId must not consume a second slot");
+            Assert.AreEqual(7, fsm.PendingEventIds[0]);
+
+            // dedup freed capacity: 3 more distinct ids still fit (4 distinct total), none dropped
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 8));
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 9));
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 10));
+            fsm = ref _frame.Get<HFSMComponent>(_entity).State;
+            Assert.AreEqual(4, fsm.PendingEventCount);
+
+            // re-trigger of an already-pending id is success even when full; a new distinct id is dropped
+            Assert.IsTrue(HFSMManager.TriggerEvent(ref _frame, _entity, 7), "re-trigger while full is idempotent true");
+            Assert.IsFalse(HFSMManager.TriggerEvent(ref _frame, _entity, 11), "new distinct id while full is dropped");
         }
 
         // ─────────────────────────────────────────
@@ -206,13 +236,13 @@ namespace xpTURN.Klotho.ECS.Tests
             HFSMManager.TriggerEvent(ref _frame, _entity, EventHit);
             HFSMManager.TriggerEvent(ref _frame, _entity, EventStun);
 
-            ref var fsm = ref _frame.Get<HFSMComponent>(_entity);
+            ref var fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(2, fsm.PendingEventCount, "Events should be queued before Update");
 
             // Run Update → events cleared even if no transition occurred
             HFSMManager.Update(ref _frame, _entity);
 
-            fsm = ref _frame.Get<HFSMComponent>(_entity);
+            fsm = ref _frame.Get<HFSMComponent>(_entity).State;
             Assert.AreEqual(0, fsm.PendingEventCount,
                 "PendingEventCount should be 0 after Update regardless of transition");
         }
@@ -242,7 +272,7 @@ namespace xpTURN.Klotho.ECS.Tests
             HFSMManager.TriggerEvent(ref _frame, _entity, EventHit);
             HFSMManager.Update(ref _frame, _entity);
 
-            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).ActiveStateIds[0],
+            Assert.AreEqual(StateId.Idle, _frame.Get<HFSMComponent>(_entity).State.ActiveStateIds[0],
                 "Event matches but Decision false → no transition");
             Assert.AreEqual(0, _idleExit.CallCount);
             Assert.AreEqual(0, _chaseEnter.CallCount);

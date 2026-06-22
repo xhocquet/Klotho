@@ -13,6 +13,10 @@ namespace xpTURN.Klotho.Generator.Emitters
         /// </summary>
         public static (bool isFixed, int size, string variableExpr) GetSizeExpression(SerializableFieldInfo field)
         {
+            // Nested [KlothoSerializableStruct] — runtime size via its generated GetSerializedSize.
+            if (field.IsNestedSerializable)
+                return (false, 0, $"this.{field.Name}.GetSerializedSize()");
+
             // Direct mapped type
             if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping))
             {
@@ -62,6 +66,13 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         public static void EmitSerializeField(StringBuilder sb, SerializableFieldInfo field, string indent)
         {
+            // Nested [KlothoSerializableStruct] — delegate to its generated codec.
+            if (field.IsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}this.{field.Name}.Serialize(ref writer);");
+                return;
+            }
+
             // Direct mapped type
             if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping))
             {
@@ -105,6 +116,13 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         public static void EmitDeserializeField(StringBuilder sb, SerializableFieldInfo field, string indent, string instancePrefix)
         {
+            // Nested [KlothoSerializableStruct] — delegate to its generated codec (field is addressable).
+            if (field.IsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}{instancePrefix}.{field.Name}.Deserialize(ref reader);");
+                return;
+            }
+
             // Direct mapped type
             if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping))
             {
@@ -175,6 +193,10 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         public static string GetHashExpression(SerializableFieldInfo field)
         {
+            // Nested [KlothoSerializableStruct] — fold via its generated GetHash.
+            if (field.IsNestedSerializable)
+                return $"hash = this.{field.Name}.GetHash(hash);";
+
             if (TypeMappings.TryGetMapping(field.TypeFullName, out var mapping) && mapping.HashExpression != null)
             {
                 return "hash = " + string.Format(mapping.HashExpression, "hash", $"this.{field.Name}") + ";";

@@ -51,4 +51,8 @@
 **/SdSample/*.sln
 **/SdSample/*.slnx
 
+**/Unity2022/*.csproj
+**/Unity2022/*.sln
+**/Unity2022/*.slnx
+
 **/export_presets.cfg

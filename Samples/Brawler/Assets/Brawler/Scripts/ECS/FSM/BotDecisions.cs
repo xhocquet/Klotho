@@ -11,13 +11,16 @@ namespace Brawler
     /// </summary>
     public class ShouldEvadeDecision : HFSMDecision
     {
-        readonly BotBehaviorAsset    _behavior;
-        readonly BotDifficultyAsset[] _diffAssets;
+        // Value sources resolved through AIParam: difficulty-driven margin/threshold + stage boundary.
+        readonly AIParam<FP64> _evadeMargin;
+        readonly AIParam<int>  _evadeKnockbackPct;
+        readonly AIParam<FP64> _stageBoundary;
 
-        public ShouldEvadeDecision(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets)
+        public ShouldEvadeDecision(AIParam<FP64> evadeMargin, AIParam<int> evadeKnockbackPct, AIParam<FP64> stageBoundary)
         {
-            _behavior   = behavior;
-            _diffAssets = diffAssets;
+            _evadeMargin       = evadeMargin;
+            _evadeKnockbackPct = evadeKnockbackPct;
+            _stageBoundary     = stageBoundary;
         }
 
         public override bool Decide(ref AIContext context)
@@ -28,13 +31,13 @@ namespace Brawler
 
             if (bot.EvadeCooldown > 0) return false;
 
-            var diffAsset    = _diffAssets[bot.Difficulty];
-            FP64 evadeMargin  = diffAsset.EvadeMargin;
-            int  knockbackPct = diffAsset.EvadeKnockbackPct;
+            FP64 evadeMargin   = _evadeMargin.Resolve(ref context);
+            int  knockbackPct  = _evadeKnockbackPct.Resolve(ref context);
+            FP64 stageBoundary = _stageBoundary.Resolve(ref context);
 
             FPVector3 pos = transform.Position;
-            bool nearEdge     = FP64.Abs(pos.x) >= _behavior.StageBoundary - evadeMargin
-                             || FP64.Abs(pos.z) >= _behavior.StageBoundary - evadeMargin;
+            bool nearEdge     = FP64.Abs(pos.x) >= stageBoundary - evadeMargin
+                             || FP64.Abs(pos.z) >= stageBoundary - evadeMargin;
             bool highKnockback = character.KnockbackPower >= knockbackPct;
 
             return nearEdge || highKnockback;
@@ -80,11 +83,11 @@ namespace Brawler
     /// </summary>
     public class InAttackRangeDecision : HFSMDecision
     {
-        readonly BasicAttackConfigAsset _attack;
+        readonly AIParam<FP64> _meleeRangeSqr;
 
-        public InAttackRangeDecision(BasicAttackConfigAsset attack)
+        public InAttackRangeDecision(AIParam<FP64> meleeRangeSqr)
         {
-            _attack = attack;
+            _meleeRangeSqr = meleeRangeSqr;
         }
 
         public override bool Decide(ref AIContext context)
@@ -100,7 +103,7 @@ namespace Brawler
             ref readonly var selfT   = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
             ref readonly var targetT = ref context.Frame.GetReadOnly<TransformComponent>(targetRef);
             FPVector3 d = targetT.Position - selfT.Position;
-            return d.x * d.x + d.z * d.z <= _attack.MeleeRangeSqr;
+            return d.x * d.x + d.z * d.z <= _meleeRangeSqr.Resolve(ref context);
         }
     }
 

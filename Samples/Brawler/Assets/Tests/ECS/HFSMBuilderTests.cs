@@ -208,5 +208,124 @@ namespace xpTURN.Klotho.ECS.Tests
             var root = new HFSMBuilder(9118).Default(0).State(0).To(0, True, priority: 10).Build();
             Assert.IsNotNull(root);
         }
+
+        // ── Hierarchy structural failures (throw regardless of logger) ─────────
+
+        [Test]
+        public void DepthExceedsMaxDepth_Throws()
+        {
+            // 9-deep default-child chain (states 0..8) > MaxDepth (8). Consistent + anchored, so the depth
+            // rule is what fires.
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9119).Default(0)
+                    .State(0, defaultChildId: 1)
+                    .State(1, parentId: 0, defaultChildId: 2)
+                    .State(2, parentId: 1, defaultChildId: 3)
+                    .State(3, parentId: 2, defaultChildId: 4)
+                    .State(4, parentId: 3, defaultChildId: 5)
+                    .State(5, parentId: 4, defaultChildId: 6)
+                    .State(6, parentId: 5, defaultChildId: 7)
+                    .State(7, parentId: 6, defaultChildId: 8)
+                    .State(8, parentId: 7)
+                    .Build());
+        }
+
+        [Test]
+        public void ParentCycle_Throws()
+        {
+            // states 1↔2 form a ParentId cycle (default 0 is a root so anchoring passes first).
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9120).Default(0)
+                    .State(0)
+                    .State(1, parentId: 2)
+                    .State(2, parentId: 1)
+                    .Build());
+        }
+
+        [Test]
+        public void SelfParent_Throws()
+        {
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9121).Default(0).State(0).State(1, parentId: 1).Build());
+        }
+
+        [Test]
+        public void SelfDefaultChild_Throws()
+        {
+            // state 1 declares itself as default child → its ParentId (-1) != 1 (consistency).
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9122).Default(0).State(0).State(1, defaultChildId: 1).Build());
+        }
+
+        [Test]
+        public void DefaultChildParentInconsistent_Throws()
+        {
+            // state 0's default child is 1, but 1.ParentId is -1 (not 0).
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9123).Default(0).State(0, defaultChildId: 1).State(1).Build());
+        }
+
+        [Test]
+        public void DefaultStateNotRoot_Throws()
+        {
+            // consistent tree (0 composite → child 1), but default points to non-root child 1 (anchoring).
+            Assert.Throws<HFSMValidationException>(() =>
+                new HFSMBuilder(9124).Default(1).State(0, defaultChildId: 1).State(1, parentId: 0).Build());
+        }
+
+        // ── Hierarchy valid cases (no false positives) ────────────────────────
+
+        [Test]
+        public void ValidComposite_Builds()
+        {
+            var root = new HFSMBuilder(9125).Default(0)
+                .State(0, defaultChildId: 1)
+                .State(1, parentId: 0)
+                .Build();
+            Assert.IsNotNull(root);
+            Assert.AreEqual(1, root.States[0].DefaultChildId);
+            Assert.AreEqual(0, root.States[1].ParentId);
+        }
+
+        [Test]
+        public void NonRootTransitionTarget_Builds()
+        {
+            // transition from root 0 into non-root child 2 (hierarchical entry) — anchoring must NOT reject this.
+            var root = new HFSMBuilder(9126).Default(0)
+                .State(0).To(2, True, priority: 50)
+                .State(1, defaultChildId: 2)
+                .State(2, parentId: 1)
+                .Build();
+            Assert.IsNotNull(root);
+        }
+
+        [Test]
+        public void MultiRoot_Builds()
+        {
+            // several top-level (ParentId == -1) states, Brawler-style.
+            var root = new HFSMBuilder(9127).Default(0)
+                .State(0).To(1, True, priority: 50)
+                .State(1).To(2, True, priority: 50)
+                .State(2).To(0, True, priority: 50)
+                .Build();
+            Assert.IsNotNull(root);
+        }
+
+        [Test]
+        public void DepthExactlyMaxDepth_Builds()
+        {
+            // 8-deep chain (states 0..7) == MaxDepth, must pass the boundary.
+            var root = new HFSMBuilder(9128).Default(0)
+                .State(0, defaultChildId: 1)
+                .State(1, parentId: 0, defaultChildId: 2)
+                .State(2, parentId: 1, defaultChildId: 3)
+                .State(3, parentId: 2, defaultChildId: 4)
+                .State(4, parentId: 3, defaultChildId: 5)
+                .State(5, parentId: 4, defaultChildId: 6)
+                .State(6, parentId: 5, defaultChildId: 7)
+                .State(7, parentId: 6)
+                .Build();
+            Assert.IsNotNull(root);
+        }
     }
 }

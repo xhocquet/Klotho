@@ -432,13 +432,13 @@ namespace xpTURN.Klotho.ECS.Tests
         {
             // RootId(4) + ActiveStateIds(8*4=32) + ActiveDepth(4)
             // + PendingEventIds(4*4=16) + PendingEventCount(4) + StateElapsedTicks(4) = 64
-            Assert.AreEqual(64, new FSM.HFSMComponent().GetSerializedSize());
+            Assert.AreEqual(64, new FSM.HFSMState().GetSerializedSize());
         }
 
         [Test]
         public unsafe void HFSMComponent_SerializeDeserialize_RoundTrip()
         {
-            var original = new FSM.HFSMComponent
+            var original = new FSM.HFSMState
             {
                 RootId = 1,
                 ActiveDepth = 3,
@@ -466,7 +466,7 @@ namespace xpTURN.Klotho.ECS.Tests
             Assert.AreEqual(64, writer.Position);
 
             var reader = new SpanReader(span);
-            var restored = new FSM.HFSMComponent();
+            var restored = new FSM.HFSMState();
             restored.Deserialize(ref reader);
 
             Assert.AreEqual(original.RootId, restored.RootId);
@@ -483,7 +483,7 @@ namespace xpTURN.Klotho.ECS.Tests
         [Test]
         public unsafe void HFSMComponent_GetHash_Deterministic()
         {
-            var a = new FSM.HFSMComponent { RootId = 1, ActiveDepth = 2, StateElapsedTicks = 10 };
+            var a = new FSM.HFSMState { RootId = 1, ActiveDepth = 2, StateElapsedTicks = 10 };
             a.ActiveStateIds[0] = 100;
             a.ActiveStateIds[1] = 200;
 
@@ -496,7 +496,7 @@ namespace xpTURN.Klotho.ECS.Tests
         [Test]
         public unsafe void HFSMComponent_GetHash_DiffersOnChange()
         {
-            var a = new FSM.HFSMComponent { RootId = 1, ActiveDepth = 1, StateElapsedTicks = 0 };
+            var a = new FSM.HFSMState { RootId = 1, ActiveDepth = 1, StateElapsedTicks = 0 };
             a.ActiveStateIds[0] = 100;
 
             var b = a;

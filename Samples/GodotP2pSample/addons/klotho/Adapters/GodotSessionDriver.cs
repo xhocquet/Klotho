@@ -3,8 +3,9 @@
 // pumps the session each frame with pre/post hooks. The view interpolation is self-driven by
 // EntityViewUpdaterNode._Process, so the driver knows nothing about views.
 //
-// dt is wall-clock (DateTimeOffset.UtcNow) — the session clock is wall-clock based, not engine-frame based. _Process computes it; Tick(dt) is the explicit-drive
-// entry for deterministic-step or headless tick loops.
+// dt source is selectable via DtSource (default WallClock): WallClock measures real elapsed time
+// (DateTimeOffset.UtcNow, engine-independent), EngineFrame uses Godot's _Process delta. _Process computes it;
+// Tick(dt) is the explicit-drive entry for deterministic-step or headless tick loops.
 //
 // An in-flight KlothoConnection (registered via TrackConnection) is pumped each frame so its Update()
 // enforces the client-side connect/reconnect timeout. The same in-flight state also gates the
@@ -17,9 +18,16 @@ using xpTURN.Klotho.Network;
 
 namespace xpTURN.Klotho.Godot
 {
+    // Source of the per-frame dt that drives the session. WallClock measures real elapsed time
+    // (engine-independent); EngineFrame uses Godot's _Process delta (honors engine frame pacing).
+    public enum SessionDtSource { WallClock, EngineFrame }
+
     public partial class GodotSessionDriver : Node
     {
         public KlothoSession Session { get; private set; }
+
+        // dt source for the session step. Default: WallClock (engine-independent real time).
+        public SessionDtSource DtSource { get; set; } = SessionDtSource.WallClock;
 
         // Steady-state hooks (fired with the same dt that drives the session). PreSessionUpdate is the
         // place to capture input. Exceptions propagate.
@@ -68,7 +76,8 @@ namespace xpTURN.Klotho.Godot
             finally { s.Stop(keepReconnectCredentials, saveReplay); Session = null; _stopping = false; }
         }
 
-        public override void _Process(double delta) => Tick(StepDt());
+        public override void _Process(double delta)
+            => Tick(DtSource == SessionDtSource.EngineFrame ? (float)delta : StepDt());
 
         // Drive one step. Public so headless/deterministic loops can pump with an explicit dt.
         public void Tick(float dt)

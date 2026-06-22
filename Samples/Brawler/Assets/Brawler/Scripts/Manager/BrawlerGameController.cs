@@ -24,18 +24,18 @@ namespace Brawler
     [Serializable]
     public class BrawlerSettings
     {
-        [Header("ServerSettings")]
+        [field: Header("ServerSettings")]
         [SerializeField] public string _hostAddress = "localhost";
         [SerializeField] public int _port = 777;
 
-        [Header("ServerDriven")]
+        [field: Header("ServerDriven")]
         [SerializeField] public int _roomId = 0;
 
-        [Header("P2P")]
+        [field: Header("P2P")]
         [SerializeField] public bool _isHost = true;
         [SerializeField] public int _botCount = 0;
 
-        [Header("PlayerSettings")]
+        [field: Header("PlayerSettings")]
         [SerializeField] public int _characterClass = 0; // 0=Warrior, 1=Mage, 2=Rogue, 3=Knight
     }
 
@@ -48,15 +48,15 @@ namespace Brawler
     {
         const string KLOTHO_CONNECTION_KEY = "xpTURN.Brawler";
 
-        [Header("Debug")]
+        [field: Header("Debug")]
         [SerializeField] private KLogLevel _logLevel = KLogLevel.Information;
 
-        [Header("Settings")]
+        [field: Header("Settings")]
         [SerializeField] private BrawlerSettings _brawlerSettings = new BrawlerSettings();
         [SerializeField] private USimulationConfig _simulationConfig;
         [SerializeField] private USessionConfig _sessionConfig;
 
-        [Header("Scene References")]
+        [field: Header("Scene References")]
         [SerializeField] private GameMenu _gameMenu;
         [SerializeField] private BrawlerViewSync _viewSync;
 
@@ -71,13 +71,13 @@ namespace Brawler
         // to keep prefab serialization stable; Attach is the only call gated by the define.
         [SerializeField] private xpTURN.Klotho.Diagnostics.FaultInjectionHotkeyDriver _faultInjectionHotkey;
 
-        [Header("Static Colliders")]
+        [field: Header("Static Colliders")]
         [SerializeField] private TextAsset _staticCollidersAsset;
 
-        [Header("NavMesh")]
+        [field: Header("NavMesh")]
         [SerializeField] private TextAsset _navMeshAsset;
 
-        [Header("DataAssets")]
+        [field: Header("DataAssets")]
         [SerializeField] private TextAsset _dataAsset;
 
         private IKLogger _logger;

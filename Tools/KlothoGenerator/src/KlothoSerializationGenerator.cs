@@ -24,6 +24,9 @@ namespace xpTURN.Klotho.Generator
         private const string KlothoDataAssetAttribute =
             "xpTURN.Klotho.ECS.KlothoDataAssetAttribute";
 
+        private const string KlothoSerializableStructAttribute =
+            "xpTURN.Klotho.Serialization.KlothoSerializableStructAttribute";
+
         public void Initialize(IncrementalGeneratorInitializationContext context)
         {
             // === [KlothoComponent] pipeline ===
@@ -31,6 +34,9 @@ namespace xpTURN.Klotho.Generator
 
             // === [KlothoDataAsset] pipeline ===
             InitializeDataAssetPipeline(context);
+
+            // === [KlothoSerializableStruct] pipeline ===
+            InitializeSerializableStructPipeline(context);
 
 
             // 1. Collect [KlothoSerializable] partial classes
@@ -380,6 +386,41 @@ namespace xpTURN.Klotho.Generator
                             dup.FullTypeName));
                     }
                 }
+            });
+        }
+
+        // === [KlothoSerializableStruct] pipeline ===
+
+        private void InitializeSerializableStructPipeline(IncrementalGeneratorInitializationContext context)
+        {
+            // 1. Collect [KlothoSerializableStruct] structs
+            var targets = context.SyntaxProvider.ForAttributeWithMetadataName(
+                KlothoSerializableStructAttribute,
+                predicate: static (node, _) => node is StructDeclarationSyntax,
+                transform: static (ctx, ct) => SerializableStructAnalyzer.Analyze(ctx, ct));
+
+            // 2. Report diagnostics
+            var diagnostics = targets.Where(static r => r.Diagnostics.Count > 0);
+            context.RegisterSourceOutput(diagnostics, static (spc, result) =>
+            {
+                foreach (var diag in result.Diagnostics)
+                    spc.ReportDiagnostic(diag);
+            });
+
+            // 3. Per-struct codec generation (Serialize/Deserialize/GetSerializedSize/GetHash; no TYPE_ID/registrar)
+            var valid = targets.Where(static r => r.TypeInfo != null);
+            var validWithCompilation = valid.Combine(context.CompilationProvider);
+
+            context.RegisterSourceOutput(validWithCompilation, static (spc, pair) =>
+            {
+                var (result, compilation) = pair;
+                var info = result.TypeInfo;
+                var code = SerializableStructEmitter.Emit(info);
+
+                var fileName = info.FullTypeName.Replace('.', '_').Replace('<', '_').Replace('>', '_');
+                spc.AddSource($"{fileName}.g.cs", code);
+
+                EmitToFile(compilation, fileName + ".g.cs", code);
             });
         }
 

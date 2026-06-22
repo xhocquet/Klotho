@@ -448,7 +448,7 @@ namespace xpTURN.Klotho.ECS
             int count = countRef;
             if (denseIdx >= count) return;   // guard against stale sparse
 
-            var dense = MemoryMarshal.Cast<byte, int>(heap.AsSpan(layout.DenseOffset, layout.Capacity * 4));
+            var dense = MemoryMarshal.Cast<byte, int>(heap.AsSpan(layout.DenseOffset, layout.SlotCapacity * 4));
             if (dense[denseIdx] != entityIndex) return;   // sparse-dense mismatch
 
             int lastIdx = count - 1;

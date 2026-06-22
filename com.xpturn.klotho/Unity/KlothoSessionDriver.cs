@@ -20,9 +20,19 @@ namespace xpTURN.Klotho.Unity
     /// Multi-cast invocation follows C# default: first throw in the invocation list stops
     /// subsequent subscribers from firing.
     /// </summary>
+    /// <summary>
+    /// Source of the per-frame dt that drives the session.
+    /// <see cref="WallClock"/> measures real elapsed time (engine-independent); <see cref="EngineFrame"/>
+    /// uses Unity's <c>Time.deltaTime</c> (honors timeScale / engine frame pacing).
+    /// </summary>
+    public enum SessionDtSource { WallClock, EngineFrame }
+
     public sealed class KlothoSessionDriver : MonoBehaviour
     {
         public KlothoSession Session { get; private set; }
+
+        // dt source for the session step. Default: WallClock (engine-independent real time).
+        public SessionDtSource DtSource { get; set; } = SessionDtSource.WallClock;
 
         public event Action<KlothoSession, float> PreSessionUpdate;
         public event Action<KlothoSession, float> PostSessionUpdate;
@@ -106,9 +116,7 @@ namespace xpTURN.Klotho.Unity
                 return;
             }
 
-            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            float dt = (_lastTicks > 0) ? (now - _lastTicks) * 0.001f : 0f;
-            _lastTicks = now;
+            float dt = DtSource == SessionDtSource.EngineFrame ? Time.deltaTime : WallClockDt();
 
             PreSessionUpdate?.Invoke(s, dt);
             if (s.IsStopped) { SelfDetach(s); return; }
@@ -117,6 +125,15 @@ namespace xpTURN.Klotho.Unity
             if (s.IsStopped) { SelfDetach(s); return; }
 
             PostSessionUpdate?.Invoke(s, dt);
+        }
+
+        // Real elapsed time since the previous step (engine-independent). 0 on the first step after Attach.
+        float WallClockDt()
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            float dt = (_lastTicks > 0) ? (now - _lastTicks) * 0.001f : 0f;
+            _lastTicks = now;
+            return dt;
         }
 
         // Unity teardown — preserve cold-start Reconnect credentials so a relaunch can attempt Reconnect.

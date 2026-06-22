@@ -1,19 +1,21 @@
 # Brawler Appendix D — Bot HFSM Builder & Decision Predicates
 
-> Related: [Brawler.md](Brawler.md) §10 (Phase 7 — Bot HFSM)
+> Related: [Brawler.md](Brawler.md) §10 (Phase 7 — Bot HFSM) · [HFSM.md](../HFSM.md) (engine HFSM framework)
 > Target: `BotHFSMRoot.Build()` assembly + Decision criteria
 >
-> ⚠️ **Note**: The Decision logic in §D-3 is **an example reflecting design intent**; the exact predicates in the actual source may vary depending on the difficulty / asset combination. Type names, method signatures, states, and transition priorities match the actual source.
+> ⚠️ **Note**: The snippets in §D-3 / §D-5 match the actual source (decisions derive `HFSMDecision`, actions derive `AIAction`, both taking `ref AIContext`; values flow through `AIParam<T>` / `AIFunction<T>`). Per-class skill logic lives in `BotFSMHelper` (§D-6). Threshold *values* (margin, knockback %, cooldowns) come from `BotDifficultyAsset` JSON and may change.
 
 ---
 
 ## D-1. Structure Overview
 
 ```
-BotFSMSystem (PreUpdate)
-   │ — HFSM Tick for every entity holding BotComponent
+BotFSMSystem (Update, multi-pass)
+   │ — Pass 1 runs HFSMManager.Update(frame, entity, ref AIContext) for every entity
+   │   matching <Transform, Character, Bot, PhysicsBody, HFSMComponent>
    ▼
-HFSMRoot (ECS.FSM namespace, registered by Id, Build() once)
+HFSMManager + per-entity HFSMComponent (drives the graph registered under BotHFSMRoot.Id=1)
+   │   graph is built once via BotHFSMRoot.Build() and registered into the HFSMRoot registry
    │
    ├── 5 states: Idle(0) / Chase(1) / Attack(2) / Evade(3) / Skill(4)
    │
@@ -55,142 +57,170 @@ State-transition diagram:
 ```csharp
 using xpTURN.Klotho.ECS.FSM;
 
-public static class BotHFSMRoot
+namespace Brawler
 {
-    public const int Id = 1; // HFSMRoot registry key
-
-    public const int Idle   = BotStateId.Idle;   // 0
-    public const int Chase  = BotStateId.Chase;  // 1
-    public const int Attack = BotStateId.Attack; // 2
-    public const int Evade  = BotStateId.Evade;  // 3
-    public const int Skill  = BotStateId.Skill;  // 4
-
-    // Singleton Decisions / Actions
-    static ShouldEvadeDecision     _shouldEvade;
-    static IsKnockbackDecision     _isKnockback   = new IsKnockbackDecision();
-    static InAttackRangeDecision   _inAttackRange;
-    static ShouldUseSkillDecision  _shouldUseSkill;
-    static HasTargetDecision       _hasTarget     = new HasTargetDecision();
-    static NoTargetDecision        _noTarget      = new NoTargetDecision();
-    static EvadeArrivedDecision    _evadeArrived  = new EvadeArrivedDecision();
-    static SkillActionDoneDecision _skillDone     = new SkillActionDoneDecision();
-
-    static ClearDestinationAction _clearDest  = new ClearDestinationAction();
-    static EvadeEnterAction       _evadeEnter;
-    static SkillUpdateAction      _skillUpdate;
-
-    public static void Build(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets,
-                             BasicAttackConfigAsset attack, SkillConfigAsset[][] skills)
+    public static class BotHFSMRoot
     {
-        if (HFSMRoot.Has(Id)) return;   // prevent duplicate build
+        public const int Id = 1; // HFSMRoot registry key
 
-        // 1) Lazily initialize Decisions / Actions
-        _shouldEvade    = new ShouldEvadeDecision(behavior, diffAssets);
-        _inAttackRange  = new InAttackRangeDecision(attack);
-        _shouldUseSkill = new ShouldUseSkillDecision(behavior, diffAssets, skills);
-        _evadeEnter     = new EvadeEnterAction(behavior);
-        _skillUpdate    = new SkillUpdateAction(behavior, diffAssets, skills);
+        public const int Idle   = BotStateId.Idle;   // 0
+        public const int Chase  = BotStateId.Chase;  // 1
+        public const int Attack = BotStateId.Attack; // 2
+        public const int Evade  = BotStateId.Evade;  // 3
+        public const int Skill  = BotStateId.Skill;  // 4
 
-        // 2) Assemble the graph fluently — each State() omits its own self-transition.
-        //    To(...) adds a transition; Build() validates the graph (duplicate / dangling /
-        //    non-dense ids, default-not-set, reachability) and stably sorts each state's
-        //    transitions by descending priority before registering it under Id.
-        new HFSMBuilder(Id)
-            .Default(Idle)
-            .State(Idle)                                       // excludes the self transition
-                .OnEnter(_clearDest)
-                .To(Evade,  _shouldEvade,    priority: 90)
-                .To(Chase,  _isKnockback,    priority: 80)
-                .To(Attack, _inAttackRange,  priority: 70)
-                .To(Skill,  _shouldUseSkill, priority: 60)
-                .To(Chase,  _hasTarget,      priority: 50)
-            .State(Chase)                                      // excludes the hasTarget transition
-                .To(Evade,  _shouldEvade,    priority: 90)
-                .To(Chase,  _isKnockback,    priority: 80)
-                .To(Attack, _inAttackRange,  priority: 70)
-                .To(Skill,  _shouldUseSkill, priority: 60)
-                .To(Idle,   _noTarget,       priority: 40)
-            .State(Attack)                                     // excludes the self transition
-                .OnEnter(_clearDest)
-                .To(Evade,  _shouldEvade,    priority: 90)
-                .To(Chase,  _isKnockback,    priority: 80)
-                .To(Skill,  _shouldUseSkill, priority: 60)
-                .To(Chase,  _hasTarget,      priority: 50)
-                .To(Idle,   _noTarget,       priority: 40)
-            .State(Evade)                                      // committed: single exit transition
-                .OnEnter(_evadeEnter)
-                .To(Idle,   _evadeArrived,   priority: 50)
-            .State(Skill)                                      // committed: returns to Chase once the action lock clears
-                .OnEnter(_clearDest)
-                .OnUpdate(_skillUpdate)
-                .To(Chase,  _skillDone,      priority: 100)
-            .Build();
+        // Singleton Decisions / Actions (graph is shared by every entity, so these are stateless)
+        static ShouldEvadeDecision     _shouldEvade;
+        static IsKnockbackDecision     _isKnockback   = new IsKnockbackDecision();
+        static InAttackRangeDecision   _inAttackRange;
+        static ShouldUseSkillDecision  _shouldUseSkill;
+        static HasTargetDecision       _hasTarget     = new HasTargetDecision();
+        static NoTargetDecision        _noTarget      = new NoTargetDecision();
+        static EvadeArrivedDecision    _evadeArrived  = new EvadeArrivedDecision();
+        static SkillActionDoneDecision _skillDone     = new SkillActionDoneDecision();
+
+        static ClearDestinationAction _clearDest  = new ClearDestinationAction();
+        static EvadeEnterAction       _evadeEnter;
+        static SkillUpdateAction      _skillUpdate;
+
+        public static void Build(BotBehaviorAsset behavior, BotDifficultyAsset[] diffAssets,
+                                 BasicAttackConfigAsset attack, SkillConfigAsset[][] skills)
+        {
+            if (HFSMRoot.Has(Id)) return;   // prevent duplicate build
+
+            // 1) Initialize Decisions / Actions. Difficulty-driven values flow through AIParam:
+            //    AIParam.From(AIFunction) reads per-entity difficulty at Decide-time; AIParam.Const
+            //    captures a fixed value. The Decision logic itself never touches the asset arrays.
+            _shouldEvade    = new ShouldEvadeDecision(
+                                  AIParam.From(new EvadeMarginByDifficulty(diffAssets)),
+                                  AIParam.From(new EvadeKnockbackPctByDifficulty(diffAssets)),
+                                  AIParam.Const(behavior.StageBoundary));
+            _inAttackRange  = new InAttackRangeDecision(AIParam.Const(attack.MeleeRangeSqr));
+            _shouldUseSkill = new ShouldUseSkillDecision(behavior, diffAssets, skills);
+            _evadeEnter     = new EvadeEnterAction(behavior);
+            _skillUpdate    = new SkillUpdateAction(behavior, diffAssets, skills);
+
+            // 2) Assemble the graph fluently — each State() omits its own self-transition.
+            //    To(...) adds a transition; Build() validates the graph (duplicate / dangling /
+            //    non-dense ids, default-not-set, reachability) and stably sorts each state's
+            //    transitions by descending priority before registering it under Id.
+            //    Priorities are named constants in BotPriority (below).
+            new HFSMBuilder(Id)
+                .Default(Idle)
+                .State(Idle)                                       // excludes the self transition
+                    .OnEnter(_clearDest)
+                    .To(Evade,  _shouldEvade,    priority: BotPriority.Evade)
+                    .To(Chase,  _isKnockback,    priority: BotPriority.Knockback)
+                    .To(Attack, _inAttackRange,  priority: BotPriority.Attack)
+                    .To(Skill,  _shouldUseSkill, priority: BotPriority.Skill)
+                    .To(Chase,  _hasTarget,      priority: BotPriority.HasTarget)
+                .State(Chase)                                      // excludes the hasTarget transition
+                    .To(Evade,  _shouldEvade,    priority: BotPriority.Evade)
+                    .To(Chase,  _isKnockback,    priority: BotPriority.Knockback)
+                    .To(Attack, _inAttackRange,  priority: BotPriority.Attack)
+                    .To(Skill,  _shouldUseSkill, priority: BotPriority.Skill)
+                    .To(Idle,   _noTarget,       priority: BotPriority.NoTarget)
+                .State(Attack)                                     // excludes the self transition
+                    .OnEnter(_clearDest)
+                    .To(Evade,  _shouldEvade,    priority: BotPriority.Evade)
+                    .To(Chase,  _isKnockback,    priority: BotPriority.Knockback)
+                    .To(Skill,  _shouldUseSkill, priority: BotPriority.Skill)
+                    .To(Chase,  _hasTarget,      priority: BotPriority.HasTarget)
+                    .To(Idle,   _noTarget,       priority: BotPriority.NoTarget)
+                .State(Evade)                                      // committed: single exit transition
+                    .OnEnter(_evadeEnter)
+                    .To(Idle,   _evadeArrived,   priority: BotPriority.EvadeArrived)
+                .State(Skill)                                      // committed: returns to Chase once the action lock clears
+                    .OnEnter(_clearDest)
+                    .OnUpdate(_skillUpdate)
+                    .To(Chase,  _skillDone,      priority: BotPriority.SkillDone)
+                .Build();
+        }
     }
-}
 
-public static class BotStateId
-{
-    public const int Idle   = 0;
-    public const int Chase  = 1;
-    public const int Attack = 2;
-    public const int Evade  = 3;
-    public const int Skill  = 4;
+    public static class BotStateId
+    {
+        public const int Idle   = 0;
+        public const int Chase  = 1;
+        public const int Attack = 2;
+        public const int Evade  = 3;
+        public const int Skill  = 4;
+    }
+
+    // Transition priorities — higher is evaluated first (Build sorts each state's
+    // transitions by descending priority).
+    public static class BotPriority
+    {
+        public const int SkillDone    = 100; // Skill → Chase (committed exit)
+        public const int Evade        = 90;
+        public const int Knockback    = 80;  // → Chase
+        public const int Attack       = 70;
+        public const int Skill        = 60;
+        public const int HasTarget    = 50;  // → Chase
+        public const int EvadeArrived = 50;  // Evade → Idle (committed exit)
+        public const int NoTarget     = 40;  // → Idle
+    }
 }
 ```
 
 **Key types**:
 - `HFSMBuilder` — Fluent assembler (`Default`, `State`, `OnEnter / OnUpdate / OnExit`, `To`, `Build`). `Build()` validates the graph at registration and fails fast on structural defects (duplicate / dangling / non-dense state ids, default-not-set), runs a reachability BFS, and stably sorts each state's transitions by descending priority — the runtime evaluates transitions in array order, so the sort is what gives `priority` its meaning. Advisory findings (unreachable / duplicate priority / self-transition) warn via `IKLogger` by default; `Build(strict: true)` promotes them to throws.
-- `HFSMRoot` — Root registry (`.Register`, `.Has`) + the instance type itself (`RootId`, `DefaultStateId`, `States`). `HFSMBuilder.Build()` constructs and registers it for you.
-- `HFSMStateNode` / `HFSMTransitionNode` — The node structs the builder emits (`OnEnter / OnUpdate / OnExit Actions`, `Transitions`; `Priority`, `TargetStateId`, `Decision`). Author via the builder rather than constructing arrays by hand.
-- `AIAction` — Base for state enter / update actions
-- `IBotDecision` — Predicate interface for transitions
+- `HFSMRoot` — Root registry (`.Register`, `.Has`, `.Get`) + the instance type itself (`RootId`, `DefaultStateId`, `States`). `HFSMBuilder.Build()` constructs and registers it for you.
+- `HFSMManager` — Static driver over a per-entity HFSM component. `Init` / `Deinit` / `Update(ref Frame, EntityRef, ref AIContext)` / `GetLeafStateId` / `TriggerEvent`. The non-generic overloads operate on `HFSMComponent`; the generic `HFSMManager.Update<TComp>` form supports multiple HFSM axes per entity.
+- `HFSMComponent` — Per-entity HFSM runtime state (active state chain, elapsed ticks, pending events) added by `HFSMManager.Init`. The bot filter requires it.
+- `AIContext` — `ref struct` passed to every Decide/Execute call. Carries `Frame`, `Entity`, `NavQuery`, `CommandSystem`, `RayCaster`, `Logger`. Built fresh by `BotFSMSystem` each tick.
+- `AIParam<T>` / `AIFunction<T>` — A value that resolves to a build-time constant (`AIParam.Const`) or a runtime source (`AIParam.From(AIFunction<T>)`). GC-free, no boxing. `AIFunction<T>` must be deterministic and stateless (singleton shared across entities, not rollback-tracked).
+- `HFSMDecision` — Base for transition predicates: `bool Decide(ref AIContext context)`.
+- `AIAction` — Base for state enter / update / exit actions: `void Execute(ref AIContext context)`.
 
-Build timing: called once from `BrawlerSimulationCallbacks.RegisterSystems()` immediately after DataAssets are loaded.
+Build timing: `BotHFSMRoot.Build()` is called once from `BotFSMSystem.OnInit()` (`IInitSystem`) after the DataAssets are resolved from the registry; `OnInit` then calls `HFSMManager.Init(ref frame, entity, BotHFSMRoot.Id)` for every pre-existing `BotComponent`.
 
 ---
 
-## D-3. Decisions (Design Intent)
+## D-3. Decisions
+
+All decisions derive `HFSMDecision` and implement `bool Decide(ref AIContext context)`. They read state through `context.Frame` / `context.Entity` and resolve difficulty-driven values through their `AIParam<T>` fields.
 
 ### D-3-1. ShouldEvadeDecision (Priority 90)
 
 ```csharp
-public class ShouldEvadeDecision : IBotDecision
+public class ShouldEvadeDecision : HFSMDecision
 {
-    private readonly BotBehaviorAsset _behavior;
-    private readonly BotDifficultyAsset[] _difficulties;
+    readonly AIParam<FP64> _evadeMargin;        // From(EvadeMarginByDifficulty)
+    readonly AIParam<int>  _evadeKnockbackPct;  // From(EvadeKnockbackPctByDifficulty)
+    readonly AIParam<FP64> _stageBoundary;      // Const(behavior.StageBoundary)
 
-    public bool Evaluate(ref Frame frame, EntityRef entity)
+    public override bool Decide(ref AIContext context)
     {
-        ref readonly var bot = ref frame.GetReadOnly<BotComponent>(entity);
-        ref readonly var c   = ref frame.GetReadOnly<CharacterComponent>(entity);
-        ref readonly var t   = ref frame.GetReadOnly<TransformComponent>(entity);
+        ref readonly var bot       = ref context.Frame.GetReadOnly<BotComponent>(context.Entity);
+        ref readonly var character = ref context.Frame.GetReadOnly<CharacterComponent>(context.Entity);
+        ref readonly var transform = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
 
         if (bot.EvadeCooldown > 0) return false;
 
-        var diff = _difficulties[(int)bot.Difficulty];
+        FP64 evadeMargin   = _evadeMargin.Resolve(ref context);
+        int  knockbackPct  = _evadeKnockbackPct.Resolve(ref context);
+        FP64 stageBoundary = _stageBoundary.Resolve(ref context);
 
-        // 1) Near the boundary
-        FP64 boundary = _behavior.StageBoundary - diff.EvadeMargin;
-        bool nearEdge = FP64.Abs(t.Position.x) >= boundary
-                     || FP64.Abs(t.Position.z) >= boundary;
-
-        // 2) Knockback accumulation high
-        bool highKnockback = c.KnockbackPower >= diff.EvadeKnockbackPct;
+        FPVector3 pos = transform.Position;
+        bool nearEdge      = FP64.Abs(pos.x) >= stageBoundary - evadeMargin
+                          || FP64.Abs(pos.z) >= stageBoundary - evadeMargin;
+        bool highKnockback = character.KnockbackPower >= knockbackPct;
 
         return nearEdge || highKnockback;
     }
 }
 ```
 
-**Thresholds**:
-- Boundary: `StageBoundary(18) - EvadeMargin(Easy 1 / Normal 2 / Hard 3)` or higher
-- Knockback: per-difficulty `EvadeKnockbackPct` (Easy 120% / Normal 80% / Hard 50%) or higher
+**Thresholds** (from `BotDifficultyAsset` — `Assets/Brawler/Data/BrawlerAssets.json`):
+- Boundary: `StageBoundary - EvadeMargin` where `EvadeMargin` = Easy 1.0 / Normal 2.0 / Hard 3.0
+- Knockback: `EvadeKnockbackPct` = Easy 50 / Normal 70 / Hard 85
 
 ### D-3-2. IsKnockbackDecision (Priority 80)
 
 ```csharp
-public bool Evaluate(ref Frame frame, EntityRef entity)
-    => frame.Has<KnockbackComponent>(entity);
+public override bool Decide(ref AIContext context)
+    => context.Frame.Has<KnockbackComponent>(context.Entity);
 ```
 
 If currently in knockback, transition to Chase (interrupting any attack / skill).
@@ -198,53 +228,74 @@ If currently in knockback, transition to Chase (interrupting any attack / skill)
 ### D-3-3. InAttackRangeDecision (Priority 70)
 
 ```csharp
-public bool Evaluate(ref Frame frame, EntityRef entity)
+readonly AIParam<FP64> _meleeRangeSqr;   // Const(attack.MeleeRangeSqr)
+
+public override bool Decide(ref AIContext context)
 {
-    ref readonly var bot = ref frame.GetReadOnly<BotComponent>(entity);
-    if (bot.AttackCooldown > 0) return false;
+    ref readonly var bot = ref context.Frame.GetReadOnly<BotComponent>(context.Entity);
+    if (bot.AttackCooldown != 0) return false;
+    ref readonly var character = ref context.Frame.GetReadOnly<CharacterComponent>(context.Entity);
+    if (character.ActionLockTicks > 0) return false;
 
-    ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(entity);
-    if (c.ActionLockTicks > 0) return false;
+    var targetRef = bot.Target;
+    if (!targetRef.IsValid || !context.Frame.Has<TransformComponent>(targetRef)) return false;
 
-    if (!bot.Target.IsValid) return false;
-    if (!frame.Entities.IsAlive(bot.Target)) return false;
-
-    ref readonly var tSelf = ref frame.GetReadOnly<TransformComponent>(entity);
-    ref readonly var tTgt  = ref frame.GetReadOnly<TransformComponent>(bot.Target);
-    FPVector2 diff = new FPVector2(tTgt.Position.x - tSelf.Position.x,
-                                   tTgt.Position.z - tSelf.Position.z);
-    return diff.sqrMagnitude <= _attack.MeleeRangeSqr;   // default 4.0
+    ref readonly var selfT   = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
+    ref readonly var targetT = ref context.Frame.GetReadOnly<TransformComponent>(targetRef);
+    FPVector3 d = targetT.Position - selfT.Position;
+    return d.x * d.x + d.z * d.z <= _meleeRangeSqr.Resolve(ref context);
 }
 ```
 
 ### D-3-4. ShouldUseSkillDecision (Priority 60)
 
-Combined check on target validity, cooldown, per-difficulty delay, and (for ranged skills) line-of-sight. See `BotFSMHelper` for the detailed skill-selection logic.
+Delegates the per-class cooldown / range / danger check to `BotFSMHelper.ShouldUseSkill` (§D-6), then — only when the class has a **ranged** skill planned (per-class `RangedSlotMask`) and a `RayCaster` is available — runs a static-geometry line-of-sight ray and **fails the transition if the line is blocked**.
 
 ```csharp
-public bool Evaluate(ref Frame frame, EntityRef entity)
+// Per-class ranged-slot bitmask (bit0=Slot0, bit1=Slot1):
+// Warrior(0): none / Mage(1): Slot0 / Rogue(2): Slot1 / Knight(3): none
+static readonly int[] RangedSlotMask = { 0b00, 0b01, 0b10, 0b00 };
+
+readonly BotBehaviorAsset     _behavior;
+readonly BotDifficultyAsset[] _diffAssets;
+readonly SkillConfigAsset[][] _skills;
+
+public override bool Decide(ref AIContext context)
 {
-    ref readonly var bot = ref frame.GetReadOnly<BotComponent>(entity);
-    ref readonly var c   = ref frame.GetReadOnly<CharacterComponent>(entity);
-    if (c.ActionLockTicks > 0) return false;
-    if (!bot.Target.IsValid) return false;
+    ref var          bot       = ref context.Frame.Get<BotComponent>(context.Entity);
+    ref readonly var character = ref context.Frame.GetReadOnly<CharacterComponent>(context.Entity);
+    if (character.ActionLockTicks > 0) return false;
+    ref readonly var transform = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
 
-    // Skill selection (distance / knockback / type-based)
-    var skill = BotFSMHelper.SelectBestSkill(ref frame, entity, bot.Target, _skills, _behavior);
-    if (skill == null) return false;
+    var targetRef = bot.Target;
+    if (!targetRef.IsValid || !context.Frame.Has<TransformComponent>(targetRef)) return false;
 
-    // Cooldown
-    ref readonly var cd = ref frame.GetReadOnly<SkillCooldownComponent>(entity);
-    int remaining = skill.Value.Slot == 0 ? cd.Skill0Cooldown : cd.Skill1Cooldown;
-    if (remaining > 0) return false;
+    ref readonly var targetT = ref context.Frame.GetReadOnly<TransformComponent>(targetRef);
+    FPVector3 d       = targetT.Position - transform.Position;
+    FP64      distSqr = d.x * d.x + d.z * d.z;
 
-    // Per-difficulty extra delay
-    var diff = _difficulties[(int)bot.Difficulty];
-    if (new DeterministicRandom(frame.GetReadOnlySingleton<RandomSeedComponent>().Seed).NextInt(100) < diff.SkillExtraDelay) return false;
-
-    // LOS check for ranged skills
-    if (skill.Value.RequireLOS && !BotFSMHelper.HasLineOfSight(ref frame, entity, bot.Target, _behavior))
+    if (!BotFSMHelper.ShouldUseSkill(ref context.Frame, context.Entity, ref bot, in character,
+                                     transform.Position, targetRef, distSqr,
+                                     in _behavior, in _diffAssets[bot.Difficulty], _skills))
         return false;
+
+    // LOS check only when a ranged skill is planned for this class.
+    int classIdx = character.CharacterClass;
+    int mask     = (uint)classIdx < (uint)RangedSlotMask.Length ? RangedSlotMask[classIdx] : 0;
+    if (mask != 0 && context.RayCaster != null)
+    {
+        FPVector3 eyeOffset = FPVector3.Up * _behavior.EyeHeight;
+        FPVector3 from = transform.Position + eyeOffset;
+        FPVector3 to   = targetT.Position   + eyeOffset;
+        FPVector3 dir  = to - from;
+        FP64      dist = dir.magnitude;
+        if (dist > FP64.Zero)
+        {
+            var ray = new FPRay3(from, dir.normalized);
+            if (context.RayCaster.RayCastStatic(ray, dist, out _, out _, out _))
+                return false;   // static geometry between bot and target → don't fire
+        }
+    }
 
     return true;
 }
@@ -253,39 +304,41 @@ public bool Evaluate(ref Frame frame, EntityRef entity)
 ### D-3-5. HasTargetDecision / NoTargetDecision (Priority 50 / 40)
 
 ```csharp
-public class HasTargetDecision : IBotDecision {
-    public bool Evaluate(ref Frame frame, EntityRef entity) {
-        ref readonly var bot = ref frame.GetReadOnly<BotComponent>(entity);
-        return bot.Target.IsValid && frame.Entities.IsAlive(bot.Target);
+public class HasTargetDecision : HFSMDecision {
+    public override bool Decide(ref AIContext context) {
+        ref readonly var bot = ref context.Frame.GetReadOnly<BotComponent>(context.Entity);
+        return bot.Target.IsValid;
     }
 }
 
-public class NoTargetDecision : IBotDecision {
-    public bool Evaluate(ref Frame frame, EntityRef entity) {
-        ref readonly var bot = ref frame.GetReadOnly<BotComponent>(entity);
-        return !bot.Target.IsValid || !frame.Entities.IsAlive(bot.Target);
+public class NoTargetDecision : HFSMDecision {
+    public override bool Decide(ref AIContext context) {
+        ref readonly var bot = ref context.Frame.GetReadOnly<BotComponent>(context.Entity);
+        return !bot.Target.IsValid;
     }
 }
 ```
 
-> **Target re-acquisition**: Use `BotComponent.DecisionCooldown` to periodically call `BotFSMHelper.FindBestTarget` from `BotFSMSystem` (or a separate routine) and update `bot.Target`. The Decision itself only reads the current `bot.Target`.
+> **Target lifecycle** (in `BotFSMSystem`, not the decisions): each tick `BotFSMHelper.ValidateTarget` clears `bot.Target` if the target is dead/missing, and when `DecisionCooldown` elapses with no valid target `BotFSMHelper.SelectTarget` picks a new one before `HFSMManager.Update` runs. The decisions above only read the current `bot.Target.IsValid`.
 
 ### D-3-6. EvadeArrivedDecision / SkillActionDoneDecision
 
 ```csharp
-public class EvadeArrivedDecision : IBotDecision {
-    public bool Evaluate(ref Frame frame, EntityRef entity) {
-        if (!frame.Has<NavAgentComponent>(entity)) return true;
-        ref readonly var nav = ref frame.GetReadOnly<NavAgentComponent>(entity);
-        return nav.Status == (byte)FPNavAgentStatus.Arrived
-            || nav.Status == (byte)FPNavAgentStatus.Idle;
+public class EvadeArrivedDecision : HFSMDecision {
+    public override bool Decide(ref AIContext context) {
+        ref readonly var bot       = ref context.Frame.GetReadOnly<BotComponent>(context.Entity);
+        ref readonly var transform = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
+        if (!bot.HasDestination) return true;
+        FPVector3 pos = transform.Position, dest = bot.Destination;
+        FP64 dx = pos.x - dest.x, dz = pos.z - dest.z;
+        return dx * dx + dz * dz <= FP64.FromInt(1);   // within 1m of the evade point
     }
 }
 
-public class SkillActionDoneDecision : IBotDecision {
-    public bool Evaluate(ref Frame frame, EntityRef entity) {
-        ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(entity);
-        return c.ActionLockTicks <= 0;
+public class SkillActionDoneDecision : HFSMDecision {
+    public override bool Decide(ref AIContext context) {
+        ref readonly var character = ref context.Frame.GetReadOnly<CharacterComponent>(context.Entity);
+        return character.ActionLockTicks <= 0;
     }
 }
 ```
@@ -320,96 +373,127 @@ public partial struct BotComponent : IComponent
 
 ## D-5. Action Implementations
 
+All actions derive `AIAction` and implement `void Execute(ref AIContext context)`. Note the actions only mutate `BotComponent` (destination / cooldown) and emit commands — they do **not** touch `NavAgentComponent` directly. `BotFSMSystem` owns the `BotComponent.Destination → NavAgentComponent` sync (§D-7, Pass 2).
+
 ### ClearDestinationAction
 
 ```csharp
 public class ClearDestinationAction : AIAction {
-    public override void Execute(ref Frame frame, EntityRef entity) {
-        ref var bot = ref frame.Get<BotComponent>(entity);
+    public override void Execute(ref AIContext context) {
+        ref var bot = ref context.Frame.Get<BotComponent>(context.Entity);
         bot.HasDestination = false;
-        if (frame.Has<NavAgentComponent>(entity)) {
-            ref var nav = ref frame.Get<NavAgentComponent>(entity);
-            nav.HasNavDestination = false;
-            nav.Status = (byte)FPNavAgentStatus.Idle;
-        }
     }
 }
 ```
+
+Used as `OnEnter` for Idle, Attack, and Skill.
 
 ### EvadeEnterAction
 
 ```csharp
 public class EvadeEnterAction : AIAction
 {
-    private readonly BotBehaviorAsset _behavior;
+    readonly BotBehaviorAsset _behavior;
     public EvadeEnterAction(BotBehaviorAsset behavior) { _behavior = behavior; }
 
-    public override void Execute(ref Frame frame, EntityRef entity)
+    public override void Execute(ref AIContext context)
     {
-        ref var bot = ref frame.Get<BotComponent>(entity);
-        ref readonly var t = ref frame.GetReadOnly<TransformComponent>(entity);
+        ref var          bot       = ref context.Frame.Get<BotComponent>(context.Entity);
+        ref readonly var transform = ref context.Frame.GetReadOnly<TransformComponent>(context.Entity);
+        ref readonly var character = ref context.Frame.GetReadOnly<CharacterComponent>(context.Entity);
 
-        // Pick the EvadePoint farthest from the current position
-        FPVector3 bestPt = _behavior.EvadePoints[0];
-        FP64 bestDist = FP64.Zero;
-        for (int i = 0; i < _behavior.EvadePoints.Length; i++) {
-            FPVector3 diff = _behavior.EvadePoints[i] - t.Position;
-            FP64 d = diff.sqrMagnitude;
-            if (d > bestDist) { bestDist = d; bestPt = _behavior.EvadePoints[i]; }
-        }
-
-        bot.Destination    = bestPt;
-        bot.HasDestination = true;
+        // Pick the EvadePoint farthest from the current position, then snap it onto the NavMesh.
+        var evadeRaw     = BotFSMHelper.PickEvadePoint(transform.Position, in _behavior);
+        var evadeSnapped = BotFSMHelper.SnapDestination(evadeRaw, transform.Position,
+                                                        context.NavQuery, _behavior.NavSnapMaxDist,
+                                                        out bool ok, character.PlayerId, "Evade");
+        bot.Destination    = evadeSnapped;
+        bot.HasDestination = ok;
         bot.EvadeCooldown  = _behavior.EvadeCooldownTicks;
-
-        if (frame.Has<NavAgentComponent>(entity)) {
-            ref var nav = ref frame.Get<NavAgentComponent>(entity);
-            nav.Destination       = bestPt;
-            nav.HasNavDestination = true;
-        }
     }
 }
 ```
 
 ### SkillUpdateAction
 
-`OnUpdate` Action — invoked every tick while in the Skill state. Picks the best skill via `BotFSMHelper.SelectBestSkill` and injects a `UseSkillCommand` directly into the command buffer (bots emit commands internally instead of going through `OnPollInput`).
+`OnUpdate` Action — runs every tick while in the Skill state. It selects the slot via `BotFSMHelper.SelectSkillSlot`, builds an aim direction toward the target (flipped for Mage Slot 1 "danger evasion"), and emits a **`PlayerInputCommand`** with `HAS_SKILL_BIT` (plus `SKILL_SLOT_BIT` for slot 1) through `context.CommandSystem.OnCommand` — i.e. bots feed the same command path as players, bypassing `OnPollInput`. No `HAS_MOVE_BIT` is set, so the move handler is skipped and velocity is preserved. (Emitting in `OnUpdate`, before the transition is evaluated, avoids the dropped-command race.)
 
 ---
 
 ## D-6. BotFSMHelper — Key Utilities
 
+Pure, stateless logic shared by `BotFSMSystem`, the decisions, and the actions (deterministic; FP64/int only):
+
 ```csharp
 public static class BotFSMHelper
 {
-    public static EntityRef FindBestTarget(ref Frame frame, EntityRef self, BotBehaviorAsset cfg);
+    // Target lifecycle
+    public static void      ValidateTarget(ref Frame frame, ref BotComponent bot);
+    public static EntityRef SelectTarget(ref Frame frame, EntityRef self,
+                                         in CharacterComponent selfChar, FPVector3 selfPos,
+                                         BotDifficulty difficulty, in BotBehaviorAsset behavior);
 
-    public static (int Slot, bool RequireLOS, FP64 Range)? SelectBestSkill(
-        ref Frame frame, EntityRef self, EntityRef target,
-        SkillConfigAsset[][] skills, BotBehaviorAsset cfg);
+    // Destination
+    public static void      UpdateDestination(ref Frame frame, EntityRef entity, ref BotComponent bot,
+                                              in CharacterComponent character, FPNavMeshQuery query,
+                                              in BotBehaviorAsset behavior, IKLogger logger = null);
+    public static FPVector3 SnapDestination(FPVector3 desired, FPVector3 fallbackPos,
+                                            FPNavMeshQuery query, FP64 navSnapMaxDist, out bool snapOk,
+                                            int playerId = -1, string context = null, IKLogger logger = null);
+    public static FPVector3 PickEvadePoint(FPVector3 position, in BotBehaviorAsset behavior);
 
-    public static bool HasLineOfSight(ref Frame frame, EntityRef self, EntityRef target, BotBehaviorAsset cfg);
+    // Skill selection (per class / difficulty)
+    public static bool ShouldUseSkill(ref Frame frame, EntityRef entity, ref BotComponent bot,
+                                      in CharacterComponent character, FPVector3 position,
+                                      EntityRef target, FP64 distSqr, in BotBehaviorAsset behavior,
+                                      in BotDifficultyAsset diffAsset, SkillConfigAsset[][] skills);
+    public static int  SelectSkillSlot(ref Frame frame, EntityRef entity, ref BotComponent bot,
+                                       in CharacterComponent character, FPVector3 position, EntityRef target,
+                                       in SkillCooldownComponent cooldown, byte diff, int extraDelay, int classIdx,
+                                       in BotBehaviorAsset behavior, in BotDifficultyAsset diffAsset,
+                                       SkillConfigAsset[][] skills);   // returns -1 if no slot is usable
+    public static int  CountNearEnemies(ref Frame frame, EntityRef self, int selfPlayerId,
+                                        FPVector3 position, FP64 rangeSqr);
 }
 ```
+
+- **`SelectTarget`** scores candidates by squared distance, biased per difficulty: Normal subtracts a knockback factor; Hard additionally adds a stock-count factor (favoring high-knockback / low-stock targets). Ties break on lower entity index for determinism.
+- **`ShouldUseSkill` / `SelectSkillSlot`** branch on `CharacterClass` (0 Warrior / 1 Mage / 2 Rogue / 3 Knight): range bands, `SkillExtraDelay`-relaxed cooldowns, Mage danger-evasion, Knight near-enemy count (`CountNearEnemies`), with extra slot-1 behavior gated on `Normal`/`Hard`.
 
 ---
 
 ## D-7. Spawn & Registration
 
-Inside `BrawlerSimSetup.InitializeWorldState`, spawn `_botCount` entities with `BotComponent` + `NavAgentComponent`:
+`BrawlerSimSetup.SpawnBots` spawns each bot from a class prototype (chosen by a seeded `DeterministicRandom`), adds a `BotComponent`, and registers it with the HFSM via `HFSMManager.Init`. **No `NavAgentComponent` is added at spawn** — `BotFSMSystem` attaches one lazily the first frame the bot has a destination (§D-7, Pass 2).
 
 ```csharp
-for (int i = 0; i < botCount; i++)
-{
-    var entity = frame.CreateEntity(WarriorPrototype.Id);   // or random class
-    frame.Add(entity, new BotComponent {
-        Difficulty       = (byte)BotDifficulty.Normal,
-        DecisionCooldown = 20,
-    });
-    frame.Add(entity, new NavAgentComponent());
-    ref var nav = ref frame.Get<NavAgentComponent>(entity);
-    NavAgentComponent.Init(ref nav, spawnPositions[maxPlayers + i]);
-}
+int botPlayerId = maxPlayers + 1 + i;
+int classIdx    = rng.NextIntInclusive(0, stats.Length - 1);
+var spawnPos    = rules.SpawnPositions[botPlayerId % rules.SpawnPositions.Length];
+
+EntityRef entity = classIdx switch {
+    0 => frame.CreateEntity(new WarriorPrototype { SpawnPosition = spawnPos }),
+    1 => frame.CreateEntity(new MagePrototype    { SpawnPosition = spawnPos }),
+    2 => frame.CreateEntity(new RoguePrototype   { SpawnPosition = spawnPos }),
+    3 => frame.CreateEntity(new KnightPrototype  { SpawnPosition = spawnPos }),
+    _ => throw new System.ArgumentOutOfRangeException(nameof(classIdx)),
+};
+// ... set PlayerId / StockCount / OwnerId ...
+frame.Add(entity, new BotComponent {
+    State      = (byte)BotStateId.Idle,
+    Difficulty = (byte)BotDifficulty.Easy,   // DecisionCooldown/AttackCooldown come from BotDifficultyAsset
+});
+HFSMManager.Init(ref frame, entity, BotHFSMRoot.Id);
 ```
 
-Every PreUpdate, `BotFSMSystem` filters entities holding `BotComponent` and runs `HFSMRoot.Get(Id=1).Tick(ref frame, entity, ref bot.State, ref bot.StateTimer)`.
+> `DecisionCooldown` and `AttackCooldown` are **not** seeded at spawn; `BotFSMSystem` refills them from `BotDifficultyAsset` (`DecisionCooldown` / `AttackCooldownBase`) per tick.
+
+Each tick, `BotFSMSystem.Update` runs over the filter `<TransformComponent, CharacterComponent, BotComponent, PhysicsBodyComponent, HFSMComponent>` in five passes:
+
+1. **FSM decision** — `ValidateTarget`, decrement `EvadeCooldown`; on `DecisionCooldown` expiry pick a target (`SelectTarget`) and run `HFSMManager.Update(ref frame, entity, ref context)`, then `UpdateDestination`; otherwise just `UpdateDestination`.
+2. **NavAgent sync** — when `bot.HasDestination`, lazily add + position-sync a `NavAgentComponent` and push `bot.Destination`; otherwise `NavAgentComponent.Stop`.
+3. **Nav simulation** — `_navSystem.Update` over the collected nav entities.
+4. **Result feedback** — clear `bot.HasDestination` for agents that reached `Arrived`.
+5. **Command injection** — translate nav velocity (with a PathFailed straight-line fallback) plus the Attack-state basic attack into a single `PlayerInputCommand` via `CommandSystem.OnCommand`.
+
+Dead bots are reset via `ResetBotState` (clears target/destination, `HFSMManager.Deinit` → `Init`).

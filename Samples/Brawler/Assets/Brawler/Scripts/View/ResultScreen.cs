@@ -11,7 +11,7 @@ namespace Brawler
     /// </summary>
     public class ResultScreen : MonoBehaviour
     {
-        [Header("References")]
+        [field: Header("References")]
         [SerializeField] private GameObject _panel;
         [SerializeField] private TMP_Text   _resultLabel;
         [SerializeField] private TMP_Text   _reasonLabel;

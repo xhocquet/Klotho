@@ -19,6 +19,10 @@ KLOTHO_EMPTY_STRUCT_SIZE | KlothoGenerator.ECS | Error | Empty KlothoComponent t
 KLOTHO_ENUM_UNDERLYING | KlothoGenerator.ECS | Warning | Enum field without explicit underlying type
 KLOTHO_BOOL_FIELD | KlothoGenerator.ECS | Warning | bool field in KlothoComponent (cross-platform verification)
 KLOTHO_CHAR_FIELD | KlothoGenerator.ECS | Warning | char field in KlothoComponent (2B Managed vs Native)
+KLOTHO_HFSM_HOST_FIRST_FIELD | KlothoGenerator.ECS | Error | IHFSMHost component's first field must be HFSMState (Unsafe.As offset-0 reinterpret)
 KLOTHO_DET002 | KlothoGenerator.Determinism | Warning | Floating-point type in deterministic context
 KLOTHO_DET003 | KlothoGenerator.Determinism | Warning | Non-deterministic API or type in deterministic context
 KLOTHO_DET004 | KlothoGenerator.Determinism | Warning | Wall-clock time in deterministic context
+KLSG_SS001 | KlothoGenerator.SerializableStruct | Error | [KlothoSerializableStruct] missing partial keyword
+KLSG_SS002 | KlothoGenerator.SerializableStruct | Error | [KlothoSerializableStruct] not unmanaged
+KLSG_SS003 | KlothoGenerator.SerializableStruct | Error | [KlothoSerializableStruct] missing [StructLayout(Sequential, Pack=4)]

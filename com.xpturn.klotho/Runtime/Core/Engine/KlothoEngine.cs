@@ -524,7 +524,7 @@ namespace xpTURN.Klotho.Core
             if (_initialized)
                 throw new InvalidOperationException(
                     "KlothoEngine.Initialize called again without Stop — this double-subscribes network handlers " +
-                    "(duplicate command dispatch, IMP59-F2). Create a new engine per session, or call Stop() first.");
+                    "(duplicate command dispatch). Create a new engine per session, or call Stop() first.");
             _initialized = true;
         }
 

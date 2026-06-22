@@ -9,7 +9,7 @@ namespace Brawler
         [SerializeField] private CinemachineCamera _cinemachineCamera;
         [SerializeField] private Transform _proxy;
 
-        [Header("Zoom")]
+        [field: Header("Zoom")]
         [SerializeField] private float _zoomMin = 12f;
         [SerializeField] private float _zoomMax = 30f;
         [SerializeField] private float _zoomSpeed = 3f;

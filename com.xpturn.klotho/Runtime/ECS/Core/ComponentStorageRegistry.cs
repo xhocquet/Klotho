@@ -301,13 +301,17 @@ namespace xpTURN.Klotho.ECS
                 if (!_idToType.TryGetValue(typeId, out var type)) continue;
                 int componentSize = _componentSizes[type];
 
+                // Sparse is entity-indexed (maxEntities); singletons hold at most one carrier,
+                // so dense/components shrink to a single slot.
+                int slotCapacity = _isSingleton[typeId] ? 1 : maxEntities;
+
                 int countOffset      = offset;
                 int sparseOffset     = AlignTo(countOffset + 4, kAlignment);
                 int denseOffset      = AlignTo(sparseOffset + maxEntities * 4, kAlignment);
-                int componentsOffset = AlignTo(denseOffset + maxEntities * 4, kAlignment);
-                int end              = componentsOffset + maxEntities * componentSize;
+                int componentsOffset = AlignTo(denseOffset + slotCapacity * 4, kAlignment);
+                int end              = componentsOffset + slotCapacity * componentSize;
 
-                _layouts[typeId] = new StorageLayout(typeId, maxEntities, countOffset, sparseOffset,
+                _layouts[typeId] = new StorageLayout(typeId, maxEntities, slotCapacity, countOffset, sparseOffset,
                                                      denseOffset, componentsOffset, componentSize,
                                                      end - countOffset);
                 offset = AlignTo(end, kAlignment);   // Next storage boundary (Pack=4 mandate → 4-byte sufficient)
