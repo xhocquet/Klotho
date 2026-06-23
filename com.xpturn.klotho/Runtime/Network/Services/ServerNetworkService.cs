@@ -1480,6 +1480,28 @@ namespace xpTURN.Klotho.Network
                         OnPlayerLeft?.Invoke(player);
                         RaisePlayerCountIfChanged(prevCount);
                         RaiseAllPlayersReadyIfChanged(prevReady);
+
+                        // Notify remaining clients (and spectators) of the lobby leave. This server has no
+                        // RelayMessage helper, so iterate _peerToPlayer directly, excluding the leaving peer
+                        // (still present here; removed below). The server is always the authority.
+                        var leaveNotification = new PlayerLeaveNotificationMessage { PlayerId = playerId };
+                        using (var serialized = _messageSerializer.SerializePooled(leaveNotification))
+                        {
+                            foreach (var kvp in _peerToPlayer)
+                            {
+                                if (kvp.Key != peerId)
+                                    _transport.Send(kvp.Key, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                            }
+                            for (int i = 0; i < _spectators.Count; i++)
+                                _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                        }
+
+                        // A not-ready player leaving can make the remaining roster all-ready.
+                        // Re-evaluate the start condition here so the room is not stuck waiting
+                        // for another PlayerReadyMessage (the only other trigger).
+                        int minStartPlayers = Math.Min(_sessionConfig.MinPlayers, MaxPlayersPerRoom);
+                        if (!_gameStarted && AllPlayersReady && _players.Count >= minStartPlayers)
+                            StartGame();
                     }
                 }
                 _peerToPlayer.Remove(peerId);
@@ -1502,7 +1524,7 @@ namespace xpTURN.Klotho.Network
             // All players left → return to Lobby
             if (_peerToPlayer.Count == 0 && _pendingPeers.Count == 0
                 && _peerSyncStates.Count == 0 && _disconnectedPlayerCount == 0
-                && Phase != SessionPhase.Playing)
+                && Phase != SessionPhase.Playing && Phase != SessionPhase.Countdown)
             {
                 Phase = SessionPhase.Lobby;
             }
@@ -1625,6 +1647,15 @@ namespace xpTURN.Klotho.Network
                 ClockOffset = avgOffset,
                 RecommendedExtraDelay = seedExtraDelay,
             };
+            // Attach the pre-game roster snapshot (including the just-added newPlayer) so the joining
+            // client builds its full player list immediately. KlothoConnection forwards these into
+            // ConnectionResult, then ServerDrivenClientService.InitializeFromConnection rebuilds the list.
+            for (int i = 0; i < _players.Count; i++)
+            {
+                syncComplete.PlayerIds.Add(_players[i].PlayerId);
+                syncComplete.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
+                syncComplete.ReadyStates.Add(_players[i].IsReady ? (byte)1 : (byte)0);
+            }
             // Seed push baseline with the handshake-time value sent in SyncCompleteMessage so the
             // first MaybePushExtraDelayUpdate compares against the value the client already applied.
             _lastPushedExtraDelay[peerId] = seedExtraDelay;
@@ -1636,6 +1667,26 @@ namespace xpTURN.Klotho.Network
 
             // Propagate SimulationConfig to SD client (host authority model)
             SendSimulationConfig(peerId);
+
+            // Notify existing clients (and spectators) of the new player. This server has no RelayMessage
+            // helper, so iterate _peerToPlayer directly. The new player's peer is already registered above,
+            // so exclude it; it received the full roster via the SyncCompleteMessage.
+            var joinNotification = new PlayerJoinNotificationMessage
+            {
+                PlayerId = newPlayerId,
+                ConnectionState = (byte)newPlayer.ConnectionState,
+                IsReady = newPlayer.IsReady,
+            };
+            using (var serialized = _messageSerializer.SerializePooled(joinNotification))
+            {
+                foreach (var kvp in _peerToPlayer)
+                {
+                    if (kvp.Key != peerId)
+                        _transport.Send(kvp.Key, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                }
+                for (int i = 0; i < _spectators.Count; i++)
+                    _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+            }
 
             // Handshake complete → Synchronized (if no other pending handshakes)
             _peerStates[peerId].State = ServerPeerState.Playing; // Initial connection goes directly to Playing

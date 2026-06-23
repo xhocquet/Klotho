@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5] - 2026-06-23
+
+### Pre-game lobby consistency
+
+- **Players now see each other the moment they join or leave the lobby** — until a match started, the room only became consistent once the game began: a player who had just joined saw only itself, players already waiting were never told someone new had arrived, and a player leaving the lobby went unnoticed by the rest. Each peer now receives the full roster as it joins and is notified of every later join and leave, so the lobby reflects who is actually present — together with their ready state and names — well before the game starts. Applies to both peer-to-peer and server-driven sessions.
+- **A room no longer gets stuck when an unready player leaves** — if everyone else had readied up and the last unready player left, the room could end up all-ready with nothing left to trigger the start, so the only way out was for everyone to leave and try again. A departure from the lobby now re-checks the start condition, so the match begins as soon as the remaining players are all ready. The check is guarded so a player leaving mid-countdown can neither restart nor cancel a start already under way.
+
 ## [0.3.4] - 2026-06-22
 
 ### Hierarchical FSM — framework upgrade

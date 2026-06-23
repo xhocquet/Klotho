@@ -154,6 +154,9 @@ namespace xpTURN.Klotho.Network
         // Cached list (GC avoidance)
         private readonly List<(int tick, int playerId)> _hashKeysToRemoveCache = new List<(int tick, int playerId)>();
 
+        // Cached scratch for preserving PlayerName across the GameStart roster rebuild — one-shot per match, reused.
+        private readonly List<string> _gameStartNameCache = new List<string>();
+
         // Cached message objects (GC avoidance)
         private readonly CommandMessage _commandMessageCache = new CommandMessage();
         private readonly SyncHashMessage _syncHashMessageCache = new SyncHashMessage();
@@ -379,6 +382,15 @@ namespace xpTURN.Klotho.Network
             LocalPlayerId = result.LocalPlayerId;
             _sessionMagic = result.SessionMagic;
             _sharedClock = new SharedTimeClock(result.SharedEpoch, result.ClockOffset);
+
+            // Build the lobby roster from the SyncComplete snapshot forwarded via ConnectionResult on a
+            // normal join. Without this the joining guest's player list stays empty until GameStartMessage.
+            // LateJoin and Reconnect carry their roster separately, so this is guarded on the normal join.
+            if (result.Kind == JoinKind.Normal && result.PlayerIds != null && result.PlayerIds.Count > 0)
+            {
+                RebuildPlayerList(result.PlayerIds.Count, result.PlayerIds, result.PlayerConnectionStates, result.ReadyStates);
+            }
+
             Phase = SessionPhase.Synchronized;
 
             // Buffer the server-recommended extra delay until SubscribeEngine wires the engine.
@@ -1008,6 +1020,14 @@ namespace xpTURN.Klotho.Network
                     HandlePlayerStateNotification(playerStateMsg);
                     break;
 
+                case PlayerJoinNotificationMessage joinNotification:
+                    HandlePlayerJoinNotification(joinNotification);
+                    break;
+
+                case PlayerLeaveNotificationMessage leaveNotification:
+                    HandlePlayerLeaveNotification(leaveNotification);
+                    break;
+
                 case SpectatorInputMessage catchupMsg:
                     HandleCatchupInputMessage(catchupMsg);
                     break;
@@ -1172,19 +1192,25 @@ namespace xpTURN.Klotho.Network
                 cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
             }
 
-            // Update the player list
+            // Update the player list, preserving each existing PlayerName by PlayerId across the
+            // Clear+rebuild. FindPlayerById reads the pre-clear list, so the names are captured before
+            // Clear; otherwise the host's own names would be wiped to null at GameStart.
             int prevCount = _players.Count;
             bool prevReady = AllPlayersReady;
+            for (int i = 0; i < msg.PlayerIds.Count; i++)
+                _gameStartNameCache.Add(FindPlayerById(msg.PlayerIds[i])?.PlayerName);
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
                 var player = new PlayerInfo
                 {
                     PlayerId = msg.PlayerIds[i],
+                    PlayerName = _gameStartNameCache[i],
                     IsReady = true
                 };
                 _players.Add(player);
             }
+            _gameStartNameCache.Clear();
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
 
@@ -1214,6 +1240,58 @@ namespace xpTURN.Klotho.Network
             {
                 StartGame();
             }
+        }
+
+        // Receiver for a new player that completed the normal-join (lobby) handshake on the host. Adds it
+        // to this guest's player list so the roster stays consistent before StartGame. The host owns its
+        // own roster (added in CompletePeerSync), so a host instance rejects this to keep a forged guest
+        // notification from slipping past the duplicate guard. A duplicate (reliable retry) is a no-op.
+        private void HandlePlayerJoinNotification(PlayerJoinNotificationMessage msg)
+        {
+            if (IsHost)
+                return;
+
+            if (FindPlayerById(msg.PlayerId) != null)
+            {
+                _logger?.KDebug($"[KlothoNetworkService][HandlePlayerJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                return;
+            }
+
+            var newPlayer = new PlayerInfo
+            {
+                PlayerId = msg.PlayerId,
+                PlayerName = $"Player{msg.PlayerId}",
+                IsReady = msg.IsReady,
+                ConnectionState = (PlayerConnectionState)msg.ConnectionState,
+            };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+
+            OnPlayerJoined?.Invoke(newPlayer);
+            _logger?.KInformation($"[KlothoNetworkService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");
+        }
+
+        // Receiver for a player that left during the lobby. Removes it from this guest's player list.
+        // The host owns its own roster, so a host instance rejects this. An unknown PlayerId is a no-op.
+        private void HandlePlayerLeaveNotification(PlayerLeaveNotificationMessage msg)
+        {
+            if (IsHost)
+                return;
+
+            var player = FindPlayerById(msg.PlayerId);
+            if (player == null)
+                return;
+
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Remove(player);
+            OnPlayerLeft?.Invoke(player);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+            _logger?.KInformation($"[KlothoNetworkService][HandlePlayerLeaveNotification] Lobby player removed: playerId={msg.PlayerId}");
         }
 
         // ── Periodic RTT measurement ──────────────────────

@@ -32,6 +32,8 @@ namespace xpTURN.Klotho.Network
 
         // Player management
         private readonly List<PlayerInfo> _players = new List<PlayerInfo>();
+        // Cached scratch for preserving PlayerName across the GameStart roster rebuild — one-shot per match, reused.
+        private readonly List<string> _gameStartNameCache = new List<string>();
 
         // Session
         private long _sessionMagic;
@@ -222,6 +224,32 @@ namespace xpTURN.Klotho.Network
             _sessionMagic = result.SessionMagic;
             _roomId = roomId;
             _sharedClock = new SharedTimeClock(result.SharedEpoch, result.ClockOffset);
+
+            // Build the lobby roster from the SyncComplete snapshot forwarded via ConnectionResult on a
+            // normal join. This service has no shared RebuildPlayerList helper, so build it inline. IsReady
+            // comes from ReadyStates (default false in the lobby) rather than being hardcoded true as on the
+            // LateJoin path.
+            if (result.Kind == JoinKind.Normal && result.PlayerIds != null && result.PlayerIds.Count > 0)
+            {
+                int prevCount = _players.Count;
+                bool prevReady = AllPlayersReady;
+                _players.Clear();
+                for (int i = 0; i < result.PlayerIds.Count; i++)
+                {
+                    _players.Add(new PlayerInfo
+                    {
+                        PlayerId = result.PlayerIds[i],
+                        PlayerName = $"Player{result.PlayerIds[i]}",
+                        ConnectionState = (i < result.PlayerConnectionStates.Count)
+                            ? (PlayerConnectionState)result.PlayerConnectionStates[i]
+                            : PlayerConnectionState.Connected,
+                        IsReady = result.ReadyStates != null && i < result.ReadyStates.Count && result.ReadyStates[i] != 0,
+                    });
+                }
+                RaisePlayerCountIfChanged(prevCount);
+                RaiseAllPlayersReadyIfChanged(prevReady);
+            }
+
             Phase = SessionPhase.Synchronized;
 
             // KlothoConnection consumes the handshake messages before this service is wired up, so the
@@ -625,6 +653,14 @@ namespace xpTURN.Klotho.Network
                     HandleLateJoinNotification(peerId, lateJoinNotification);
                     break;
 
+                case PlayerJoinNotificationMessage joinNotification:
+                    HandlePlayerJoinNotification(peerId, joinNotification);
+                    break;
+
+                case PlayerLeaveNotificationMessage leaveNotification:
+                    HandlePlayerLeaveNotification(peerId, leaveNotification);
+                    break;
+
                 case FullStateResponseMessage fullStateMsg:
                     HandleFullStateResponse(fullStateMsg);
                     break;
@@ -747,17 +783,23 @@ namespace xpTURN.Klotho.Network
                 cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
             }
 
+            // Preserve each existing PlayerName by PlayerId across the Clear+rebuild, capturing names
+            // before Clear. Without this the locally derived "Player{id}" names are wiped to null at GameStart.
             int prevPlayerCount0 = _players.Count;
             bool prevAllReady0 = AllPlayersReady;
+            for (int i = 0; i < msg.PlayerIds.Count; i++)
+                _gameStartNameCache.Add(FindPlayerById(msg.PlayerIds[i])?.PlayerName);
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
                 _players.Add(new PlayerInfo
                 {
                     PlayerId = msg.PlayerIds[i],
+                    PlayerName = _gameStartNameCache[i],
                     IsReady = true
                 });
             }
+            _gameStartNameCache.Clear();
             RaisePlayerCountIfChanged(prevPlayerCount0);
             RaiseAllPlayersReadyIfChanged(prevAllReady0);
 
@@ -887,6 +929,66 @@ namespace xpTURN.Klotho.Network
             OnPlayerJoined?.Invoke(newPlayer);
 
             _logger?.KInformation($"[SDClientService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
+        }
+
+        // Receiver for a new player that completed the normal-join (lobby) handshake on the server. Adds
+        // it to the player list so the roster stays consistent before StartGame. Only the server (peerId 0)
+        // is a valid source, and a duplicate is a no-op.
+        private void HandlePlayerJoinNotification(int peerId, PlayerJoinNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SDClientService][HandlePlayerJoinNotification] Ignored from non-server peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _players.Count; i++)
+            {
+                if (_players[i].PlayerId == msg.PlayerId)
+                {
+                    _logger?.KDebug($"[SDClientService][HandlePlayerJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
+
+            var newPlayer = new PlayerInfo
+            {
+                PlayerId = msg.PlayerId,
+                PlayerName = $"Player{msg.PlayerId}",
+                IsReady = msg.IsReady,
+                ConnectionState = (PlayerConnectionState)msg.ConnectionState,
+            };
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Add(newPlayer);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+
+            OnPlayerJoined?.Invoke(newPlayer);
+            _logger?.KInformation($"[SDClientService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");
+        }
+
+        // Receiver for a player that left during the lobby. Removes it from the player list. Only the
+        // server (peerId 0) is a valid source, and an unknown PlayerId is a no-op.
+        private void HandlePlayerLeaveNotification(int peerId, PlayerLeaveNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SDClientService][HandlePlayerLeaveNotification] Ignored from non-server peerId={peerId}");
+                return;
+            }
+
+            var player = FindPlayerById(msg.PlayerId);
+            if (player == null)
+                return;
+
+            int prevPlayerCount = _players.Count;
+            bool prevAllReady = AllPlayersReady;
+            _players.Remove(player);
+            OnPlayerLeft?.Invoke(player);
+            RaisePlayerCountIfChanged(prevPlayerCount);
+            RaiseAllPlayersReadyIfChanged(prevAllReady);
+            _logger?.KInformation($"[SDClientService][HandlePlayerLeaveNotification] Lobby player removed: playerId={msg.PlayerId}");
         }
 
         private void HandleFullStateResponse(FullStateResponseMessage msg)

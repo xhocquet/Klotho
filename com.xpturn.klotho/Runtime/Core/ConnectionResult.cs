@@ -58,5 +58,15 @@ namespace xpTURN.Klotho.Core
         /// Cold-start Reconnect-specific payload. Valid only when Kind == JoinKind.Reconnect.
         /// </summary>
         public ReconnectPayload ReconnectPayload { get; set; }
+
+        /// <summary>
+        /// Pre-game roster snapshot forwarded from SyncCompleteMessage on a normal join. The joining
+        /// guest builds its full player list from these so the lobby roster is consistent immediately;
+        /// InitializeFromConnection rebuilds from them. These are null/empty for LateJoin and Reconnect,
+        /// which carry the roster in their own AcceptMessage payloads instead.
+        /// </summary>
+        public System.Collections.Generic.List<int> PlayerIds { get; set; }
+        public System.Collections.Generic.List<byte> PlayerConnectionStates { get; set; }
+        public System.Collections.Generic.List<byte> ReadyStates { get; set; }
     }
 }

@@ -220,6 +220,15 @@ namespace xpTURN.Klotho.Network
                 ClockOffset = avgOffset,
                 RecommendedExtraDelay = 0,
             };
+            // Attach the pre-game roster snapshot (including the just-added newPlayer) so the joining
+            // guest builds its full player list immediately. KlothoConnection forwards these into
+            // ConnectionResult, then InitializeFromConnection rebuilds the player list from them.
+            for (int i = 0; i < _players.Count; i++)
+            {
+                msg.PlayerIds.Add(_players[i].PlayerId);
+                msg.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
+                msg.ReadyStates.Add(_players[i].IsReady ? (byte)1 : (byte)0);
+            }
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
@@ -227,6 +236,26 @@ namespace xpTURN.Klotho.Network
 
             // Send SimulationConfig (host authority model)
             SendSimulationConfig(peerId);
+
+            // Notify existing peers (and spectators) of the new player so their player list stays
+            // consistent before StartGame. Exclude the new joiner, which already received the full
+            // roster via the SyncCompleteMessage above.
+            var joinNotification = new PlayerJoinNotificationMessage
+            {
+                PlayerId = newPlayerId,
+                ConnectionState = (byte)newPlayer.ConnectionState,
+                IsReady = newPlayer.IsReady,
+            };
+            RelayMessage(joinNotification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
+            // RelayMessage only reaches _peerToPlayer; spectators (_spectators, disjoint) need a separate send.
+            if (_spectators.Count > 0)
+            {
+                using (var serialized = _messageSerializer.SerializePooled(joinNotification))
+                {
+                    for (int i = 0; i < _spectators.Count; i++)
+                        _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                }
+            }
 
             Phase = SessionPhase.Synchronized;
             OnPlayerJoined?.Invoke(newPlayer);
@@ -374,6 +403,23 @@ namespace xpTURN.Klotho.Network
                         OnPlayerLeft?.Invoke(player);
                         RaisePlayerCountIfChanged(prevPlayerCount);
                         RaiseAllPlayersReadyIfChanged(prevAllReady);
+
+                        // Notify remaining peers of the lobby leave so their player list stays consistent
+                        // before StartGame. BroadcastMessagePooled (host → _transport.Broadcast) reaches
+                        // players and spectators in one call, and the leaving peer is already disconnected.
+                        // This runs host-only; the branch also runs guest-side, where IsHost is false.
+                        if (IsHost)
+                        {
+                            BroadcastMessagePooled(
+                                new PlayerLeaveNotificationMessage { PlayerId = playerId },
+                                DeliveryMethod.ReliableOrdered);
+
+                            // A not-ready player leaving can make the remaining roster all-ready.
+                            // Re-evaluate the start condition here so the room is not stuck waiting
+                            // for another PlayerReadyMessage (the only other trigger).
+                            if (!_gameStarted && AllPlayersReady && _players.Count >= _sessionConfig.MinPlayers)
+                                StartGame();
+                        }
                     }
                 }
                 _peerToPlayer.Remove(peerId);
@@ -404,9 +450,10 @@ namespace xpTURN.Klotho.Network
                 // BEFORE disconnecting the peer, so every count above is zero when the cut's
                 // disconnect event lands — previously only the pool-exhaustion immediate
                 // leave could reach here while Playing.
-                if (Phase == SessionPhase.Playing)
+                if (Phase == SessionPhase.Playing || Phase == SessionPhase.Countdown)
                 {
-                    // Skip — see above.
+                    // Skip — see above. Countdown is also skipped: a lobby-leave re-eval may have
+                    // just called StartGame() above, and resetting Phase here would revert it.
                 }
                 else
                 {

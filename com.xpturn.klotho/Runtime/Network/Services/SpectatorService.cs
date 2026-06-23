@@ -38,10 +38,11 @@ namespace xpTURN.Klotho.Network
         private readonly Queue<(int tick, byte[] data, int dataLen)> _pendingVerifiedStates
             = new Queue<(int, byte[], int)>();
 
-        // Player count surface — seeded from SpectatorAcceptMessage.PlayerIds, mutated by
-        // LateJoinNotificationMessage arrivals. UI/Session layer reads via PlayerCount /
-        // OnPlayerCountChanged; mid-match LateJoin accumulation lives here (not in
-        // _pendingStartInfo, which is cleared after first OnSpectatorStarted fire).
+        // Player count surface — seeded from SpectatorAcceptMessage.PlayerIds, then mutated by lobby
+        // PlayerJoinNotification / PlayerLeaveNotification (pre-game) and LateJoinNotification (mid-match)
+        // arrivals. UI/Session layer reads via PlayerCount / OnPlayerCountChanged; this is the live roster
+        // (not _pendingStartInfo, which is cleared after the first OnSpectatorStarted fire). The pending
+        // start roster is reconciled from this list just before delivery — see ReconcileStartInfoRoster.
         private readonly List<int> _playerIds = new List<int>();
 
         public SpectatorState State => _state;
@@ -187,6 +188,7 @@ namespace xpTURN.Klotho.Network
                     if (_state == SpectatorState.Synchronizing && _pendingStartInfo != null)
                     {
                         _state = SpectatorState.Watching;
+                        ReconcileStartInfoRoster();
                         OnSpectatorStarted?.Invoke(_pendingStartInfo);
                         _pendingStartInfo = null;
                     }
@@ -197,6 +199,7 @@ namespace xpTURN.Klotho.Network
                     // 1. StartSpectator first (initialize engine state)
                     if (_pendingStartInfo != null)
                     {
+                        ReconcileStartInfoRoster();
                         OnSpectatorStarted?.Invoke(_pendingStartInfo);
                         _pendingStartInfo = null;
                     }
@@ -243,6 +246,14 @@ namespace xpTURN.Klotho.Network
                     HandleLateJoinNotification(peerId, notification);
                     break;
 
+                case PlayerJoinNotificationMessage joinNotification:
+                    HandlePlayerJoinNotification(peerId, joinNotification);
+                    break;
+
+                case PlayerLeaveNotificationMessage leaveNotification:
+                    HandlePlayerLeaveNotification(peerId, leaveNotification);
+                    break;
+
                 // SD server sends VerifiedStateMessage each tick instead of SpectatorInputMessage
                 case VerifiedStateMessage verifiedMsg:
                     if (_state == SpectatorState.Synchronizing)
@@ -282,6 +293,19 @@ namespace xpTURN.Klotho.Network
             _latestReceivedTick = Math.Max(_latestReceivedTick, executionTick);
         }
 
+        // Sync the pending start roster from the live _playerIds just before it is delivered to the
+        // engine. _pendingStartInfo.PlayerIds was seeded from the SpectatorAccept snapshot, but lobby
+        // joins/leaves between accept and game start mutate _playerIds only, so without this the engine's
+        // _activePlayerIds would be built from a stale roster while PlayerCount is already current.
+        private void ReconcileStartInfoRoster()
+        {
+            if (_pendingStartInfo == null)
+                return;
+            _pendingStartInfo.PlayerIds.Clear();
+            _pendingStartInfo.PlayerIds.AddRange(_playerIds);
+            _pendingStartInfo.PlayerCount = _playerIds.Count;
+        }
+
         private void HandleLateJoinNotification(int peerId, LateJoinNotificationMessage msg)
         {
             // Spectator only receives from host. In client-mode LiteNetLibTransport the server
@@ -305,6 +329,53 @@ namespace xpTURN.Klotho.Network
             OnPlayerCountChanged?.Invoke(_playerIds.Count);
 
             _logger?.KInformation($"[SpectatorService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
+        }
+
+        // A player completed the normal-join (lobby) handshake on the host/server. Add it to the
+        // spectator's roster so PlayerCount stays consistent before StartGame. Only the host/server
+        // (peerId 0) is a valid source, and a duplicate is a no-op.
+        private void HandlePlayerJoinNotification(int peerId, PlayerJoinNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SpectatorService][HandlePlayerJoinNotification] Ignored from non-host peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _playerIds.Count; i++)
+            {
+                if (_playerIds[i] == msg.PlayerId)
+                {
+                    _logger?.KDebug($"[SpectatorService][HandlePlayerJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
+
+            _playerIds.Add(msg.PlayerId);
+            OnPlayerCountChanged?.Invoke(_playerIds.Count);
+            _logger?.KInformation($"[SpectatorService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");
+        }
+
+        // A player left during the lobby. Remove it from the spectator's roster. Only the host/server
+        // (peerId 0) is a valid source, and an unknown PlayerId is a no-op.
+        private void HandlePlayerLeaveNotification(int peerId, PlayerLeaveNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SpectatorService][HandlePlayerLeaveNotification] Ignored from non-host peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _playerIds.Count; i++)
+            {
+                if (_playerIds[i] == msg.PlayerId)
+                {
+                    _playerIds.RemoveAt(i);
+                    OnPlayerCountChanged?.Invoke(_playerIds.Count);
+                    _logger?.KInformation($"[SpectatorService][HandlePlayerLeaveNotification] Lobby player removed: playerId={msg.PlayerId}");
+                    return;
+                }
+            }
         }
 
         private void ProcessSpectatorInput(int startTick, int tickCount, byte[] inputData, int dataLength)

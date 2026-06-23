@@ -337,8 +337,12 @@ namespace xpTURN.Klotho.Core
                 SharedEpoch = msg.SharedEpoch,
                 ClockOffset = msg.ClockOffset,
                 RecommendedExtraDelay = msg.RecommendedExtraDelay,
+                // Forward the pre-game roster snapshot so InitializeFromConnection can build the player list.
+                PlayerIds = msg.PlayerIds,
+                PlayerConnectionStates = msg.PlayerConnectionStates,
+                ReadyStates = msg.ReadyStates,
             };
-            _logger?.KInformation($"[KlothoConnection] SyncComplete: playerId={msg.PlayerId}, waiting for SimulationConfig");
+            _logger?.KInformation($"[KlothoConnection] SyncComplete: playerId={msg.PlayerId}, players={msg.PlayerIds.Count}, waiting for SimulationConfig");
         }
 
         private void HandleSimulationConfig(SimulationConfigMessage msg)

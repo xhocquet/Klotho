@@ -706,6 +706,11 @@ namespace xpTURN.Klotho.Network
         }
 
         private void RebuildPlayerList(int playerCount, List<int> playerIds, List<byte> connectionStates)
+            => RebuildPlayerList(playerCount, playerIds, connectionStates, null);
+
+        // readyStates lets a normal (lobby) join carry per-player IsReady so a newly joining guest sees
+        // the existing Ready flags. When null (the LateJoin and Reconnect callers) IsReady stays false.
+        private void RebuildPlayerList(int playerCount, List<int> playerIds, List<byte> connectionStates, List<byte> readyStates)
         {
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
@@ -715,7 +720,8 @@ namespace xpTURN.Klotho.Network
                 var player = new PlayerInfo
                 {
                     PlayerId = playerIds[i],
-                    ConnectionState = (PlayerConnectionState)connectionStates[i]
+                    ConnectionState = (PlayerConnectionState)connectionStates[i],
+                    IsReady = readyStates != null && i < readyStates.Count && readyStates[i] != 0,
                 };
                 _players.Add(player);
             }

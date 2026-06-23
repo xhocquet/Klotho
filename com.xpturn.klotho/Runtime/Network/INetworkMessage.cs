@@ -22,6 +22,7 @@ namespace xpTURN.Klotho.Network
         Command = 20,
         CommandAck = 21,
         CommandRequest = 22,
+        
         // Reliable command submit — client/guest → authority (server-driven server / P2P host),
         // reliably-ordered. Carries a serialized IReliableCommand with no client-assigned tick; the
         // authority assigns the execution tick. (CommandAck=21 / CommandRequest=22 are unused reserved
@@ -78,6 +79,11 @@ namespace xpTURN.Klotho.Network
         // disconnect / reconnect / leave, so guests exclude a departed peer from the timing vote.
         PlayerStateNotification = 78,
 
+        // Pre-game (lobby) roster notifications — host (P2P) / server (SD) → existing peers/clients
+        // when a player completes the normal-join handshake or leaves the lobby, so every peer's
+        // _players stays consistent before StartGame (in-game leave uses PlayerStateNotification).
+        PlayerJoinNotification = 79,
+
         // Server-driven
         ClientInput = 80,
         VerifiedState = 81,
@@ -86,6 +92,7 @@ namespace xpTURN.Klotho.Network
         PlayerBootstrapReady = 84,
         BootstrapBegin = 85,
         CommandRejected = 86,
+        PlayerLeaveNotification = 87,
 
         // Config layer
         SimulationConfig = 90,

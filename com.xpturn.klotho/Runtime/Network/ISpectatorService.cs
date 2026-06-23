@@ -39,8 +39,9 @@ namespace xpTURN.Klotho.Network
         int LatestReceivedTick { get; }
 
         /// <summary>
-        /// Player count snapshot. Seeded from <see cref="SpectatorAcceptMessage.PlayerIds"/> on
-        /// bootstrap, mutated by <c>LateJoinNotificationMessage</c> arrivals.
+        /// Live player count. Seeded from <see cref="SpectatorAcceptMessage.PlayerIds"/> on bootstrap,
+        /// then mutated by lobby join/leave notifications (pre-game) and <c>LateJoinNotificationMessage</c>
+        /// arrivals (mid-match).
         /// </summary>
         int PlayerCount { get; }
 

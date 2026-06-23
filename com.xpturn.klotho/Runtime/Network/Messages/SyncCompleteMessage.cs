@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using xpTURN.Klotho.Serialization;
 
 namespace xpTURN.Klotho.Network
@@ -24,5 +25,18 @@ namespace xpTURN.Klotho.Network
         // Trailing field — backward-compat with older clients via deserialize underrun (server-first deploy assumption).
         [KlothoOrder]
         public int RecommendedExtraDelay;
+
+        // Pre-game roster snapshot so the joining guest builds its full player list immediately.
+        // Appended after RecommendedExtraDelay to keep prior field offsets stable. The lists are
+        // inline-initialized because the generated deserializer calls .Clear()/.Capacity and the
+        // serializer reads .Count, both of which throw on a null list.
+        [KlothoOrder]
+        public List<int> PlayerIds = new List<int>();
+
+        [KlothoOrder]
+        public List<byte> PlayerConnectionStates = new List<byte>();
+
+        [KlothoOrder]
+        public List<byte> ReadyStates = new List<byte>();
     }
 }
