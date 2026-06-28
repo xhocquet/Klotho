@@ -19,7 +19,7 @@ namespace xpTURN.Klotho.ECS.Tests
     }
 
     /// <summary>
-    /// 일감 B — MED-1 (Init context injection) + MINOR-b (Deinit: OnExit chain + component removal).
+    /// Work item B — MED-1 (Init context injection) + MINOR-b (Deinit: OnExit chain + component removal).
     /// </summary>
     [TestFixture]
     public class HFSMLifecycleTests

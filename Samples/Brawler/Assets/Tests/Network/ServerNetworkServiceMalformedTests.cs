@@ -80,7 +80,7 @@ namespace xpTURN.Klotho.Network.Tests
             byte[] data = SerializeMessage(new PlayerJoinMessage { DeviceId = "device-A" });
             InvokeHandleDataReceived(peerId, data, data.Length);
 
-            Assert.IsFalse(GetPendingPeers().Contains(peerId), "pending must be cleared after dispatch");
+            Assert.IsFalse(GetPendingPeers().ContainsKey(peerId), "pending must be cleared after dispatch");
             Assert.AreEqual(0, _transport.DisconnectPeerCallCount, "valid PlayerJoin must not disconnect");
             Assert.IsTrue(GetPeerDeviceIds().TryGetValue(peerId, out var dev) && dev == "device-A",
                 "_peerDeviceIds must reflect the valid DeviceId");
@@ -102,7 +102,7 @@ namespace xpTURN.Klotho.Network.Tests
             });
             InvokeHandleDataReceived(peerId, data, data.Length);
 
-            Assert.IsFalse(GetPendingPeers().Contains(peerId), "pending must be cleared");
+            Assert.IsFalse(GetPendingPeers().ContainsKey(peerId), "pending must be cleared");
             Assert.AreEqual(0, _transport.DisconnectPeerCallCount, "valid ReconnectRequest must not disconnect");
         }
 
@@ -117,7 +117,7 @@ namespace xpTURN.Klotho.Network.Tests
             byte[] data = SerializeMessage(new SpectatorJoinMessage { SpectatorName = "spec" });
             InvokeHandleDataReceived(peerId, data, data.Length);
 
-            Assert.IsFalse(GetPendingPeers().Contains(peerId), "pending must be cleared");
+            Assert.IsFalse(GetPendingPeers().ContainsKey(peerId), "pending must be cleared");
             Assert.AreEqual(0, _transport.DisconnectPeerCallCount, "valid SpectatorJoin must not disconnect");
         }
 
@@ -132,7 +132,7 @@ namespace xpTURN.Klotho.Network.Tests
             byte[] data = MalformedPayloadFactory.EmptyBody(NetworkMessageType.PlayerJoin);
             InvokeHandleDataReceived(peerId, data, data.Length);
 
-            Assert.IsFalse(GetPendingPeers().Contains(peerId), "pending must be cleared even on malformed");
+            Assert.IsFalse(GetPendingPeers().ContainsKey(peerId), "pending must be cleared even on malformed");
             Assert.AreEqual(1, _transport.DisconnectPeerCallCount, "malformed first message must disconnect");
             Assert.IsTrue(_logger.Contains(KLogLevel.Warning, "Malformed/unknown first message"),
                 "L2 should log a malformed-first-message warning");
@@ -151,7 +151,7 @@ namespace xpTURN.Klotho.Network.Tests
             // EmptyBody on ClientInput → L1 returns null (deserialize body throws), goes to else → disconnect.
             InvokeHandleDataReceived(peerId, data, data.Length);
 
-            Assert.IsFalse(GetPendingPeers().Contains(peerId));
+            Assert.IsFalse(GetPendingPeers().ContainsKey(peerId));
             Assert.AreEqual(1, _transport.DisconnectPeerCallCount);
         }
 
@@ -242,12 +242,12 @@ namespace xpTURN.Klotho.Network.Tests
 
         private void AddPending(int peerId)
         {
-            GetPendingPeers().Add(peerId);
+            GetPendingPeers()[peerId] = 0L; // value = connectedAtMs (irrelevant for these L2 dispatch tests)
         }
 
-        private HashSet<int> GetPendingPeers()
+        private Dictionary<int, long> GetPendingPeers()
         {
-            return (HashSet<int>)_pendingPeersField.GetValue(_svc);
+            return (Dictionary<int, long>)_pendingPeersField.GetValue(_svc);
         }
 
         private Dictionary<int, string> GetPeerDeviceIds()

@@ -46,6 +46,9 @@ namespace xpTURN.Klotho.Generator.Utils
             // ECS types
             ["xpTURN.Klotho.ECS.EntityRef"] = new TypeMapping { WriteMethod = "WriteEntityRef", ReadMethod = "ReadEntityRef", Size = 8, HashExpression = "FPHash.Hash({0}, {1}.ToId())" },
             ["xpTURN.Klotho.ECS.DataAssetRef"] = new TypeMapping { WriteMethod = "WriteDataAssetRef", ReadMethod = "ReadDataAssetRef", Size = 4, HashExpression = "FPHash.Hash({0}, {1}.Id)" },
+            // Fixed-width strings (full buffer + int16 length = constant 32/64 bytes)
+            ["xpTURN.Klotho.ECS.FixedString32"] = new TypeMapping { WriteMethod = "WriteFixedString32", ReadMethod = "ReadFixedString32", Size = 32, HashExpression = "FPHash.Hash({0}, {1})" },
+            ["xpTURN.Klotho.ECS.FixedString64"] = new TypeMapping { WriteMethod = "WriteFixedString64", ReadMethod = "ReadFixedString64", Size = 64, HashExpression = "FPHash.Hash({0}, {1})" },
             // Composite physics types
             ["xpTURN.Klotho.Deterministic.Physics.FPRigidBody"] = new TypeMapping { WriteMethod = "WriteFPRigidBody", ReadMethod = "ReadFPRigidBody", Size = 146, HashExpression = "FPHash.Hash({0}, {1})" },
             ["xpTURN.Klotho.Deterministic.Physics.FPCollider"] = new TypeMapping { WriteMethod = "WriteFPCollider", ReadMethod = "ReadFPCollider", Size = 81, HashExpression = "FPHash.Hash({0}, {1})" },

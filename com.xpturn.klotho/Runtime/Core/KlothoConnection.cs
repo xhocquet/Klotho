@@ -43,6 +43,9 @@ namespace xpTURN.Klotho.Core
         private PersistedReconnectCredentials _reconnectCreds;        // null = Normal/LateJoin mode
         private ReconnectAcceptMessage _pendingReconnect;
         private string _deviceId = string.Empty;
+        // Lobby identity carriage: loaded at Connect and sent in PlayerJoinMessage.
+        private string _ticket = string.Empty;
+        private string _claimedDisplayName = string.Empty;
 
         // Timeout
         private long _connectStartMs;
@@ -72,7 +75,9 @@ namespace xpTURN.Klotho.Core
             IKLogger logger = null,
             NetworkMessageBase preJoinMessage = null,
             IDeviceIdProvider deviceIdProvider = null,
-            int connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS)
+            int connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS,
+            IPlayerIdentityProvider identityProvider = null,
+            string claimedDisplayName = null)
         {
             if (connectTimeoutMs <= 0)
                 throw new ArgumentOutOfRangeException(nameof(connectTimeoutMs), connectTimeoutMs, "connectTimeoutMs must be positive.");
@@ -82,6 +87,9 @@ namespace xpTURN.Klotho.Core
             connection._onFailed = onFailed;
             connection._preJoinMessage = preJoinMessage;
             connection._deviceId = deviceIdProvider?.GetDeviceId() ?? string.Empty;
+            // The lobby ticket and the no-lobby claimed display name are independent client inputs.
+            connection._ticket = identityProvider?.GetTicket() ?? string.Empty;
+            connection._claimedDisplayName = claimedDisplayName ?? string.Empty;
             connection._connectTimeoutMs = connectTimeoutMs;
 
             transport.OnConnected += connection.HandleConnected;
@@ -230,8 +238,8 @@ namespace xpTURN.Klotho.Core
             // PlayerJoinMessage must arrive first so the host can determine the pending-peer role
             // (KlothoNetworkService.HandleDataReceived → triggers StartHandshake).
             // The host then initiates SyncRequest, and the guest only responds in HandleSyncRequest.
-            var msg = new PlayerJoinMessage { DeviceId = _deviceId };
-            _logger?.KInformation($"[KlothoConnection] Connect: sending PlayerJoinMessage (deviceId='{msg.DeviceId}')");
+            var msg = new PlayerJoinMessage { DeviceId = _deviceId, Ticket = _ticket, ClaimedDisplayName = _claimedDisplayName };
+            _logger?.KInformation($"[KlothoConnection] Connect: sending PlayerJoinMessage (deviceId='{msg.DeviceId}', hasTicket={!string.IsNullOrEmpty(msg.Ticket)}, claimedName='{msg.ClaimedDisplayName}')");
             
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
@@ -337,12 +345,11 @@ namespace xpTURN.Klotho.Core
                 SharedEpoch = msg.SharedEpoch,
                 ClockOffset = msg.ClockOffset,
                 RecommendedExtraDelay = msg.RecommendedExtraDelay,
-                // Forward the pre-game roster snapshot so InitializeFromConnection can build the player list.
-                PlayerIds = msg.PlayerIds,
-                PlayerConnectionStates = msg.PlayerConnectionStates,
-                ReadyStates = msg.ReadyStates,
+                // Forward the pre-game roster snapshot (incl. ReadyState + authoritative identity) so
+                // InitializeFromConnection can build the player list.
+                Roster = msg.Roster,
             };
-            _logger?.KInformation($"[KlothoConnection] SyncComplete: playerId={msg.PlayerId}, players={msg.PlayerIds.Count}, waiting for SimulationConfig");
+            _logger?.KInformation($"[KlothoConnection] SyncComplete: playerId={msg.PlayerId}, players={msg.Roster.Count}, waiting for SimulationConfig");
         }
 
         private void HandleSimulationConfig(SimulationConfigMessage msg)

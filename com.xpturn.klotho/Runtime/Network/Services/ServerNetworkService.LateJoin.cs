@@ -19,7 +19,7 @@ namespace xpTURN.Klotho.Network
             if (_sessionConfig != null && !_sessionConfig.AllowLateJoin)
             {
                 _logger?.KWarning($"[ServerNetworkService] Late join not allowed, peer {peerId} rejected");
-                DisconnectWithReason(peerId, 4); // LateJoinDisabled
+                DisconnectWithReason(peerId, JoinFailReason.LateJoinDisabled.ToWireCode());
                 return;
             }
 
@@ -28,7 +28,7 @@ namespace xpTURN.Klotho.Network
             if (EffectivePlayerCount >= MaxPlayerCapacity)
             {
                 _logger?.KWarning($"[ServerNetworkService][HandleLateJoin] Room full, peer {peerId} rejected: gameStarted={_gameStarted}, players={_players.Count}, assigned={_assignedPlayerIdCount}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                DisconnectWithReason(peerId, 2); // RoomFull
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                 return;
             }
 
@@ -53,19 +53,30 @@ namespace xpTURN.Klotho.Network
         /// </summary>
         private void CompleteLateJoinSync(int peerId, PeerSyncState state)
         {
+            // Identity validation gate — before slot reservation (reject ⇒ no slot consumed).
+            // FinalizeLateJoin runs the rest (inline now, or from the poll-drain later for async redeem).
+            RunJoinValidation(peerId, state, isLateJoin: true);
+        }
+
+        private void FinalizeLateJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName)
+        {
             // PlayerId allocation goes through TryReservePlayerSlot — the Post-GameStart
             // path bumps _nextPlayerId and _assignedPlayerIdCount; on overflow it rejects + cleans up.
             if (!TryReservePlayerSlot(peerId, out int newPlayerId))
                 return;
 
             state.Completed = true;
+            state.AwaitingValidation = false;
 
             state.GetBestSample(out int avgRtt, out long avgOffset);
 
+            // Identity: validated value when a validator ran (claimed name ignored), else the
+            // claimed name, else a fabricated fallback. Account stays empty unless validated.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = newPlayerId,
-                PlayerName = $"Player{newPlayerId}",
+                DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, displayName),
+                Account = validatorRan ? (account ?? string.Empty) : string.Empty,
                 Ping = avgRtt,
                 IsReady = true
             };
@@ -115,12 +126,12 @@ namespace xpTURN.Klotho.Network
             _lastPushedExtraDelay[peerId] = lateJoinSeedExtraDelay;
             for (int i = 0; i < _players.Count; i++)
             {
-                accept.PlayerIds.Add(_players[i].PlayerId);
-                accept.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
+                accept.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState));
             }
 
             // Concat existing player PlayerConfigs — new player is excluded as config is not yet received.
-            // accept.PlayerIds order and PlayerConfigLengths order must match (client parses i-th length ↔ PlayerIds[i]).
+            // accept.Roster order and PlayerConfigLengths order must match (client parses i-th length ↔ Roster[i].PlayerId).
             int totalConfigBytes = 0;
             for (int i = 0; i < _players.Count; i++)
             {
@@ -193,10 +204,13 @@ namespace xpTURN.Klotho.Network
 
             // Notify existing peers of the new player so their _players list stays consistent.
             // Exclude the new joiner — they already received the full roster via LateJoinAcceptMessage.
+            var ljNewInfo = FindPlayerById(newPlayerId);  // propagate the new player's authoritative identity
             var notification = new LateJoinNotificationMessage
             {
                 PlayerId = newPlayerId,
                 JoinTick = joinTick,
+                Account = ljNewInfo?.Account ?? string.Empty,
+                DisplayName = ljNewInfo?.DisplayName ?? string.Empty,
             };
             using (var notificationSerialized = _messageSerializer.SerializePooled(notification))
             {

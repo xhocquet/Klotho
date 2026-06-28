@@ -2,6 +2,7 @@ using System;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Geometry;
 using xpTURN.Klotho.Deterministic.Physics;
+using xpTURN.Klotho.ECS;
 
 namespace xpTURN.Klotho.Deterministic
 {
@@ -145,6 +146,18 @@ namespace xpTURN.Klotho.Deterministic
                 current *= FNV_PRIME;
             }
             return current;
+        }
+
+        public static unsafe ulong Hash(ulong current, FixedString32 value)
+        {
+            current = Hash(current, value.Length);
+            return HashBytes(current, new ReadOnlySpan<byte>(value.Bytes, 30));
+        }
+
+        public static unsafe ulong Hash(ulong current, FixedString64 value)
+        {
+            current = Hash(current, value.Length);
+            return HashBytes(current, new ReadOnlySpan<byte>(value.Bytes, 62));
         }
 
         public static ulong Hash(ulong current, FPRigidBody value)

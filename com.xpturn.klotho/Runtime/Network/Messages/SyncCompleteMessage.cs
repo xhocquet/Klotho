@@ -27,16 +27,10 @@ namespace xpTURN.Klotho.Network
         public int RecommendedExtraDelay;
 
         // Pre-game roster snapshot so the joining guest builds its full player list immediately.
-        // Appended after RecommendedExtraDelay to keep prior field offsets stable. The lists are
-        // inline-initialized because the generated deserializer calls .Clear()/.Capacity and the
-        // serializer reads .Count, both of which throw on a null list.
+        // Inline-initialized because the generated deserializer calls .Clear()/.Capacity and the
+        // serializer reads .Count, both of which throw on a null list. ReadyState is meaningful here
+        // (normal-join path) so per-player Ready flags reach the joining guest.
         [KlothoOrder]
-        public List<int> PlayerIds = new List<int>();
-
-        [KlothoOrder]
-        public List<byte> PlayerConnectionStates = new List<byte>();
-
-        [KlothoOrder]
-        public List<byte> ReadyStates = new List<byte>();
+        public List<RosterEntry> Roster = new List<RosterEntry>();
     }
 }

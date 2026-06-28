@@ -27,7 +27,7 @@ namespace xpTURN.Klotho.Network
         public void SeedLateJoinPlayers(LateJoinPayload payload)
         {
             var msg = payload.AcceptMessage;
-            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster);
         }
 
         /// <summary>
@@ -38,7 +38,7 @@ namespace xpTURN.Klotho.Network
         public void SeedReconnectPlayers(ReconnectPayload payload)
         {
             var msg = payload.AcceptMessage;
-            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster);
         }
 
         /// <summary>
@@ -46,18 +46,23 @@ namespace xpTURN.Klotho.Network
         /// Restores _players / RandomSeed, sets Phase = Playing, and switches to CatchingUp so subsequent
         /// catchup input batches flow into _inputBuffer.
         /// </summary>
-        private void SeedPlayersFromCatchupPayload(int randomSeed, int playerCount, List<int> playerIds, List<byte> playerConnectionStates)
+        private void SeedPlayersFromCatchupPayload(int randomSeed, List<RosterEntry> roster)
         {
             RandomSeed = randomSeed;
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Clear();
-            for (int i = 0; i < playerCount && i < playerIds.Count; i++)
+            for (int i = 0; i < roster.Count; i++)
             {
-                var p = new PlayerInfo { PlayerId = playerIds[i], IsReady = true };
-                if (playerConnectionStates != null && i < playerConnectionStates.Count)
-                    p.ConnectionState = (PlayerConnectionState)playerConnectionStates[i];
-                _players.Add(p);
+                var e = roster[i];
+                // IsReady hardcoded true on this catchup-seed path (preserves prior behavior).
+                // Names omitted to match the prior P2P seed (identity arrives via a separate Notification).
+                _players.Add(new PlayerInfo
+                {
+                    PlayerId = e.PlayerId,
+                    IsReady = true,
+                    ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                });
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -139,7 +144,9 @@ namespace xpTURN.Klotho.Network
 
             LocalPlayerId = msg.PlayerId;
             _sharedClock = new SharedTimeClock(msg.SharedEpoch, msg.ClockOffset);
-            RebuildPlayerList(msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            // P2P carries identity via a separate Notification, so the LateJoin handler ignores roster
+            // names and IsReady stays false (preserves prior behavior).
+            RebuildPlayerList(msg.Roster);
             RandomSeed = msg.RandomSeed;
 
             _lateJoinState = LateJoinState.WaitingForFullState;
@@ -169,13 +176,15 @@ namespace xpTURN.Klotho.Network
                 }
             }
 
-            // PlayerName mirrors the host's CompleteLateJoinSync construction (empty string in P2P)
+            // DisplayName mirrors the host's CompleteLateJoinSync construction (empty string in P2P)
             // so the same PlayerId reads identically across peers. Ping is unmeasurable on guests
             // and stays at default 0.
+            // Use the authority-propagated identity instead of an empty name.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                PlayerName = "",
+                DisplayName = msg.DisplayName ?? string.Empty,
+                Account = msg.Account ?? string.Empty,
                 IsReady = true,
                 ConnectionState = PlayerConnectionState.Connected,
             };
@@ -194,6 +203,10 @@ namespace xpTURN.Klotho.Network
 
         private void CompleteLateJoinSync(int peerId, PeerSyncState state)
         {
+            // Identity validation gate — before slot reservation. P2P validation is synchronous.
+            if (!TryValidateIdentityP2P(peerId, isLateJoin: true, out bool validatorRan, out string vAccount, out string vDisplayName))
+                return;
+
             // PlayerId allocation goes through TryReservePlayerSlot — the Post-GameStart
             // path bumps _nextPlayerId and _assignedPlayerIdCount; on overflow it rejects + cleans up.
             if (!TryReservePlayerSlot(peerId, out int newPlayerId))
@@ -203,10 +216,14 @@ namespace xpTURN.Klotho.Network
 
             state.GetBestSample(out int avgRtt, out long avgOffset);
 
+            // Identity: validated value when a validator ran (claimed name ignored), else the client-claimed
+            // name, else empty (P2P late-join uses no fabricated name — preserved). Account empty unless validated.
+            var ljClaimedName = _peerClaimedDisplayNames.TryGetValue(peerId, out var __ljcn) ? __ljcn : string.Empty;
             var newPlayer = new PlayerInfo
             {
                 PlayerId = newPlayerId,
-                PlayerName = "",
+                DisplayName = validatorRan ? (vDisplayName ?? string.Empty) : (ljClaimedName ?? string.Empty),
+                Account = validatorRan ? (vAccount ?? string.Empty) : string.Empty,
                 Ping = avgRtt,
                 IsReady = true
             };
@@ -254,8 +271,8 @@ namespace xpTURN.Klotho.Network
             };
             for (int i = 0; i < _players.Count; i++)
             {
-                accept.PlayerIds.Add(_players[i].PlayerId);
-                accept.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
+                accept.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState));
             }
             using (var serialized = _messageSerializer.SerializePooled(accept))
             {
@@ -283,6 +300,8 @@ namespace xpTURN.Klotho.Network
             {
                 PlayerId = newPlayerId,
                 JoinTick = joinTick,
+                Account = newPlayer.Account ?? string.Empty,
+                DisplayName = newPlayer.DisplayName ?? string.Empty,
             };
             RelayMessage(notification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
 
@@ -310,7 +329,7 @@ namespace xpTURN.Klotho.Network
             if (_sessionConfig != null && !_sessionConfig.AllowLateJoin)
             {
                 _logger?.KWarning($"[KlothoNetworkService][HandleLateJoin] Late join not allowed, peer {peerId} rejected");
-                DisconnectWithReason(peerId, 4); // LateJoinDisabled
+                DisconnectWithReason(peerId, JoinFailReason.LateJoinDisabled.ToWireCode());
                 return;
             }
 
@@ -328,7 +347,7 @@ namespace xpTURN.Klotho.Network
             if (EffectivePlayerCount >= MaxPlayerCapacity)
             {
                 _logger?.KWarning($"[KlothoNetworkService][HandleLateJoin] Room full, peer {peerId} rejected: gameStarted={_gameStarted}, players={_players.Count}, assigned={_assignedPlayerIdCount}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                DisconnectWithReason(peerId, 2); // RoomFull
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                 return;
             }
 

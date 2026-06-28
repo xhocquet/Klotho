@@ -5,7 +5,7 @@
   in the consumer's project against the consumer's own GodotSharp avoids any version coupling. The package
   carries Adapters/**/*.cs under src/ and a buildTransitive props that adds them as Compile items + sets
   AllowUnsafeBlocks. Depends on the core package (xpTURN.Klotho.Runtime), which transitively brings the
-  generator analyzer and the Newtonsoft/K4os/LiteNetLib runtime deps.
+  generator analyzer and the Newtonsoft/LiteNetLib runtime deps.
 -->
 <Project Sdk="Microsoft.NET.Sdk">
 
@@ -20,7 +20,7 @@
 
   <PropertyGroup>
     <PackageId>xpTURN.Klotho.Runtime.Godot</PackageId>
-    <Version>0.3.5</Version>
+    <Version>0.5.0</Version>
     <Authors>xpTURN</Authors>
     <Description>Godot (.NET) adapter for the Klotho deterministic lockstep core — shipped as source so it compiles against the consumer's GodotSharp.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
@@ -30,7 +30,7 @@
   <!-- Core package dependency. PrivateAssets=none so the core's analyzer (KlothoGenerator) and runtime
        deps flow transitively — a consumer that references only the adapter still gets the generator. -->
   <ItemGroup>
-    <PackageReference Include="xpTURN.Klotho.Runtime" Version="0.3.5" PrivateAssets="none" />
+    <PackageReference Include="xpTURN.Klotho.Runtime" Version="0.5.0" PrivateAssets="none" />
   </ItemGroup>
 
   <!-- Ship adapter sources + the buildTransitive props that compiles them in the consumer. -->

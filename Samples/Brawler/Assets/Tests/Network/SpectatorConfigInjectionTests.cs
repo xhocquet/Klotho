@@ -136,8 +136,8 @@ namespace xpTURN.Klotho.Network.Tests
                 CurrentTick = 100,
                 LastVerifiedTick = 99,
             };
-            original.PlayerIds.Add(0);
-            original.PlayerIds.Add(1);
+            original.Roster.Add(new RosterEntry { PlayerId = 0 });
+            original.Roster.Add(new RosterEntry { PlayerId = 1 });
             original.CopySimulationConfigFrom(simConfig);
 
             var restored = RoundTrip(original);
@@ -147,7 +147,9 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.AreEqual(original.RandomSeed, restored.RandomSeed);
             Assert.AreEqual(original.CurrentTick, restored.CurrentTick);
             Assert.AreEqual(original.LastVerifiedTick, restored.LastVerifiedTick);
-            CollectionAssert.AreEqual(original.PlayerIds, restored.PlayerIds);
+            Assert.AreEqual(original.Roster.Count, restored.Roster.Count);
+            for (int ri = 0; ri < original.Roster.Count; ri++)
+                Assert.AreEqual(original.Roster[ri].PlayerId, restored.Roster[ri].PlayerId);
 
             // 13 SimulationConfig
             Assert.AreEqual(original.TickIntervalMs, restored.TickIntervalMs);

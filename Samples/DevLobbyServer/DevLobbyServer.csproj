@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>xpTURN.Samples.DevLobby</RootNamespace>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <!-- Core DLL (LiteNetLibTransport / SpanWriter / logging) + its runtime NuGet deps. -->
+  <Import Project="../GodotSdSample/addons/klotho/Klotho.Server.props" />
+
+  <ItemGroup>
+    <!-- Ed25519 (BcEd25519Backend) — same NuGet the Godot samples use. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuse the identity reference sources (codec / issuer / Ed25519 backend) + the SD lobby core.
+         The lobby holds the private key and the redeem/match authority via DevLobbyCore. -->
+    <Compile Include="../IdentityP2pRef/Runtime/*.cs" Link="IdentityP2pRef/%(Filename)%(Extension)" />
+    <Compile Include="../IdentitySdRef/Runtime/*.cs" Link="IdentitySdRef/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

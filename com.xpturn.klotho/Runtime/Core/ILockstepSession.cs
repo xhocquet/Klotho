@@ -13,6 +13,9 @@ namespace xpTURN.Klotho.Core
         int LocalPlayerId { get; }
         KlothoState State { get; }
         int PlayerCount { get; }
+        // Current roster (PlayerId / DisplayName / Account / IsReady / Ping / ConnectionState per player).
+        // Empty on the spectator path (spectators track only player ids, not full player info).
+        System.Collections.Generic.IReadOnlyList<Network.IPlayerInfo> Players { get; }
         Network.SessionPhase Phase { get; }
         bool AllPlayersReady { get; }
         bool IsStopped { get; }

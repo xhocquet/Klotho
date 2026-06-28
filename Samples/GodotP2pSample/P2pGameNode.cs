@@ -58,15 +58,20 @@ namespace xpTURN.Samples.P2pSample
 			_hud  = GetNode<GodotP2pHud>("UILayer/Hud");
 			_viewCallbacks = new GodotP2pViewCallbacks(_hud);
 
-			_flow = new KlothoSessionFlow(
-				new KlothoFlowSetupBuilder((s, ss) =>
+			var flowBuilder = new KlothoFlowSetupBuilder((s, ss) =>
 						new SessionCallbacks(new P2pSimulationCallbacks(_input), _viewCallbacks))
 					.WithLogger(_logger)
 					.WithTransport(_transport)
 					.WithAssetRegistry(_registry)
-					.WithGodotDefaults()
-					.Build()
-			);
+					.WithGodotDefaults();
+#if DEBUG
+			// Dev lobby identity (signed Ed25519 ticket). Debug/dev only (P2pDevIdentity is build-gated).
+			// Built once for host+guest; the validator is unused on a guest (host-only verification).
+			flowBuilder = flowBuilder
+				.WithLobbyIdentity(P2pDevIdentity.CreateProvider())
+				.WithIdentityValidator(P2pDevIdentity.CreateValidator());
+#endif
+			_flow = new KlothoSessionFlow(flowBuilder.Build());
 
 			var playerScene = GD.Load<PackedScene>("res://player.tscn");
 			_factory = new P2pEntityViewFactory(playerScene);

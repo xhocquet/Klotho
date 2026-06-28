@@ -32,6 +32,23 @@ namespace xpTURN.Klotho.Network
         LateJoinDisabled     = 10,
         /// <summary>Server rejected: the room is ending or not active.</summary>
         RoomClosing          = 11,
+
+        // Identity validation rejections. Delivered via the disconnect packet payload (wire codes 6~11),
+        // distinct from these enum values. Unlike RoomFull (which the game retries via a late join),
+        // these mean the credential is bad or already spent — the game should re-acquire a lobby ticket
+        // rather than blindly retrying with the same one.
+        /// <summary>Identity rejected: ticket signature / format invalid.</summary>
+        IdentityInvalid          = 12,
+        /// <summary>Identity rejected: ticket expired.</summary>
+        IdentityExpired          = 13,
+        /// <summary>Identity rejected: ticket sessionId does not match this session.</summary>
+        IdentitySessionMismatch  = 14,
+        /// <summary>Identity rejected: lobby redeem denied (ban / sanction / nonce consumed).</summary>
+        IdentityRejected         = 15,
+        /// <summary>Identity rejected: a validator is configured but no ticket was provided.</summary>
+        IdentityRequired         = 16,
+        /// <summary>Identity rejected: validation timed out or errored.</summary>
+        IdentityValidationFailed = 17,
     }
 
     public static class JoinFailReasonExtensions
@@ -51,21 +68,49 @@ namespace xpTURN.Klotho.Network
             }
         }
 
+        // Single source of truth for the server-reject subset of JoinFailReason and its disconnect-payload
+        // wire byte. Both ToWireCode (server encode) and FromJoinReject (client decode) derive from this
+        // table, so the two directions cannot silently diverge. The wire codes are a separate, compact
+        // numbering (1~11) distinct from the enum's underlying values; 0 = Unknown/unmapped. Keep the code
+        // list in JoinRejectMessage in sync with this table.
+        private static readonly (JoinFailReason Reason, byte Wire)[] WireRejectMap =
+        {
+            (JoinFailReason.RoomNotFound,             1),
+            (JoinFailReason.RoomFull,                 2),
+            (JoinFailReason.ServerFull,               3),
+            (JoinFailReason.LateJoinDisabled,         4),
+            (JoinFailReason.RoomClosing,              5),
+            (JoinFailReason.IdentityInvalid,          6),
+            (JoinFailReason.IdentityExpired,          7),
+            (JoinFailReason.IdentitySessionMismatch,  8),
+            (JoinFailReason.IdentityRejected,         9),
+            (JoinFailReason.IdentityRequired,         10),
+            (JoinFailReason.IdentityValidationFailed, 11),
+        };
+
         /// <summary>
         /// Maps a server reject reason byte (carried on the disconnect packet payload) to a JoinFailReason.
         /// The wire reason codes are defined by the server's reject path and differ from these values.
+        /// Inverse of <see cref="ToWireCode"/>.
         /// </summary>
         public static JoinFailReason FromJoinReject(byte wireReason)
         {
-            switch (wireReason)
-            {
-                case 1:  return JoinFailReason.RoomNotFound;
-                case 2:  return JoinFailReason.RoomFull;
-                case 3:  return JoinFailReason.ServerFull;
-                case 4:  return JoinFailReason.LateJoinDisabled;
-                case 5:  return JoinFailReason.RoomClosing;
-                default: return JoinFailReason.Unknown;   // 0 and any unmapped value
-            }
+            for (int i = 0; i < WireRejectMap.Length; i++)
+                if (WireRejectMap[i].Wire == wireReason)
+                    return WireRejectMap[i].Reason;
+            return JoinFailReason.Unknown;   // 0 and any unmapped value
+        }
+
+        /// <summary>
+        /// Encodes a server-reject reason to its disconnect-payload wire byte (inverse of
+        /// <see cref="FromJoinReject"/>). Non-reject reasons (transport/handshake-local) map to 0.
+        /// </summary>
+        public static byte ToWireCode(this JoinFailReason reason)
+        {
+            for (int i = 0; i < WireRejectMap.Length; i++)
+                if (WireRejectMap[i].Reason == reason)
+                    return WireRejectMap[i].Wire;
+            return 0; // Unknown / not a wire-reject reason
         }
 
         /// <summary>
@@ -76,18 +121,24 @@ namespace xpTURN.Klotho.Network
         {
             switch (reason)
             {
-                case JoinFailReason.TransportStartFailed: return "TransportStartFailed";
-                case JoinFailReason.TimedOut:             return "TimedOut";
-                case JoinFailReason.ConnectionLost:       return "ConnectionLost";
-                case JoinFailReason.Rejected:             return "Rejected";
-                case JoinFailReason.HostClosed:           return "HostClosed";
-                case JoinFailReason.Unknown:              return "Unknown";
-                case JoinFailReason.RoomNotFound:         return "RoomNotFound";
-                case JoinFailReason.RoomFull:             return "RoomFull";
-                case JoinFailReason.ServerFull:           return "ServerFull";
-                case JoinFailReason.LateJoinDisabled:     return "LateJoinDisabled";
-                case JoinFailReason.RoomClosing:          return "RoomClosing";
-                default:                                  return "Unknown";
+                case JoinFailReason.TransportStartFailed:       return "TransportStartFailed";
+                case JoinFailReason.TimedOut:                   return "TimedOut";
+                case JoinFailReason.ConnectionLost:             return "ConnectionLost";
+                case JoinFailReason.Rejected:                   return "Rejected";
+                case JoinFailReason.HostClosed:                 return "HostClosed";
+                case JoinFailReason.Unknown:                    return "Unknown";
+                case JoinFailReason.RoomNotFound:               return "RoomNotFound";
+                case JoinFailReason.RoomFull:                   return "RoomFull";
+                case JoinFailReason.ServerFull:                 return "ServerFull";
+                case JoinFailReason.LateJoinDisabled:           return "LateJoinDisabled";
+                case JoinFailReason.RoomClosing:                return "RoomClosing";
+                case JoinFailReason.IdentityInvalid:            return "IdentityInvalid";
+                case JoinFailReason.IdentityExpired:            return "IdentityExpired";
+                case JoinFailReason.IdentitySessionMismatch:    return "IdentitySessionMismatch";
+                case JoinFailReason.IdentityRejected:           return "IdentityRejected";
+                case JoinFailReason.IdentityRequired:           return "IdentityRequired";
+                case JoinFailReason.IdentityValidationFailed:   return "IdentityValidationFailed";
+                default:                                        return "Unknown";
             }
         }
 
@@ -99,18 +150,24 @@ namespace xpTURN.Klotho.Network
         {
             switch (reason)
             {
-                case JoinFailReason.TransportStartFailed: return "Network unavailable";
-                case JoinFailReason.TimedOut:             return "Connection timed out";
-                case JoinFailReason.ConnectionLost:       return "Could not reach the host";
-                case JoinFailReason.Rejected:             return "Connection rejected";
-                case JoinFailReason.HostClosed:           return "Host closed the connection";
-                case JoinFailReason.Unknown:              return "Join failed";
-                case JoinFailReason.RoomNotFound:         return "Room not found";
-                case JoinFailReason.RoomFull:             return "Room is full";
-                case JoinFailReason.ServerFull:           return "Server is full";
-                case JoinFailReason.LateJoinDisabled:     return "Join is no longer allowed";
-                case JoinFailReason.RoomClosing:          return "Room is closing";
-                default:                                  return "Join failed";
+            case JoinFailReason.TransportStartFailed:           return "Network unavailable";
+            case JoinFailReason.TimedOut:                       return "Connection timed out";
+            case JoinFailReason.ConnectionLost:                 return "Could not reach the host";
+            case JoinFailReason.Rejected:                       return "Connection rejected";
+            case JoinFailReason.HostClosed:                     return "Host closed the connection";
+            case JoinFailReason.Unknown:                        return "Join failed";
+            case JoinFailReason.RoomNotFound:                   return "Room not found";
+            case JoinFailReason.RoomFull:                       return "Room is full";
+            case JoinFailReason.ServerFull:                     return "Server is full";
+            case JoinFailReason.LateJoinDisabled:               return "Join is no longer allowed";
+            case JoinFailReason.RoomClosing:                    return "Room is closing";
+            case JoinFailReason.IdentityInvalid:                return "Identity could not be verified";
+            case JoinFailReason.IdentityExpired:                return "Login session expired";
+            case JoinFailReason.IdentitySessionMismatch:        return "Login does not match this match";
+            case JoinFailReason.IdentityRejected:               return "Login rejected";
+            case JoinFailReason.IdentityRequired:               return "Login required";
+            case JoinFailReason.IdentityValidationFailed:       return "Login verification failed";
+            default:                                            return "Join failed";
             }
         }
     }

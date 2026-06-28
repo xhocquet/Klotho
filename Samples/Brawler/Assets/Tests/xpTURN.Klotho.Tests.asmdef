@@ -11,6 +11,8 @@
         "xpTURN.Klotho.Runtime",
         "xpTURN.Klotho.Runtime.Unity",
         "xpTURN.Klotho.Gameplay",
+        "xpTURN.Klotho.Identity.P2pRef",
+        "xpTURN.Klotho.Identity.SdRef",
         "Brawler.ECS",
         "Brawler.DataAssets",
         "Brawler.Manager"

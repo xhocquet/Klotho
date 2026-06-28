@@ -61,6 +61,31 @@ namespace xpTURN.Klotho.Core
             return this;
         }
 
+        // ── Lobby identity — the guest carries a lobby-issued ticket in the join handshake.
+        // Validation is host/server-side; this builder only attaches the provider that supplies the ticket.
+        public KlothoFlowSetupBuilder WithLobbyIdentity(IPlayerIdentityProvider provider)
+        {
+            _s.IdentityProvider = provider ?? throw new ArgumentNullException(nameof(provider));
+            return this;
+        }
+
+        // ── No-lobby claimed display name — an unverified nickname for the local player.
+        // Independent of WithLobbyIdentity; ignored by the authority when a validated ticket is present.
+        public KlothoFlowSetupBuilder WithDisplayName(string displayName)
+        {
+            _s.ClaimedDisplayName = displayName;
+            return this;
+        }
+
+        // ── Authority-side ticket validator (P2P host). Validates incoming guest tickets and the host's
+        // own ticket. Optional; unset = no validation (behaviour unchanged). The SD dedicated server
+        // injects its validator via the server config / RoomManager instead, not this builder.
+        public KlothoFlowSetupBuilder WithIdentityValidator(IPlayerIdentityValidator validator)
+        {
+            _s.IdentityValidator = validator ?? throw new ArgumentNullException(nameof(validator));
+            return this;
+        }
+
         // ── Spectator no-transport overload support ──
         public KlothoFlowSetupBuilder WithSpectator(Func<INetworkTransport> transportFactory)
         {
@@ -89,9 +114,21 @@ namespace xpTURN.Klotho.Core
                     "WithReconnect requires WithHandshake (AppVersion + DeviceIdProvider) — reconnect credentials are minted by a prior normal join, which needs handshake identity.");
 
             // Spectator drives via SpectatorTransportFactory; replay-from-file needs neither — both exempt.
-            if (_s.Transport == null && _s.DeviceIdProvider == null && _s.SpectatorTransportFactory == null)
+            // WithLobbyIdentity (a ticket-only guest) also signals a guest connect path,
+            // so a guest configured with just a ticket provider is not falsely flagged.
+            if (_s.Transport == null && _s.DeviceIdProvider == null && _s.SpectatorTransportFactory == null && _s.IdentityProvider == null)
             {
                 const string msg = "Flow setup has no Transport (host/replay), no handshake identity (guest/reconnect), and no SpectatorTransportFactory — it can drive no connect entry point (replay-from-file is still possible).";
+                if (strict) throw new FlowSetupValidationException(msg);
+                _s.Logger?.KWarning($"[KlothoFlowSetupBuilder] {msg}");
+            }
+
+            // Advisory: a validator is host/server-side. Without a host-capable entry point
+            // (Transport, used by StartHostAndListen) it is never consulted. The SD dedicated server
+            // injects its validator outside this builder, so this only flags a misconfigured P2P setup.
+            if (_s.IdentityValidator != null && _s.Transport == null)
+            {
+                const string msg = "WithIdentityValidator is set but there is no Transport (host entry point) — the validator will never be consulted on this setup.";
                 if (strict) throw new FlowSetupValidationException(msg);
                 _s.Logger?.KWarning($"[KlothoFlowSetupBuilder] {msg}");
             }

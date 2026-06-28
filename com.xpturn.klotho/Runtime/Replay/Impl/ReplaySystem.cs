@@ -7,7 +7,6 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
-using K4os.Compression.LZ4;
 using xpTURN.Klotho.Core;
 
 namespace xpTURN.Klotho.Replay
@@ -183,11 +182,10 @@ namespace xpTURN.Klotho.Replay
                     Directory.CreateDirectory(directory);
                 }
 
-                byte[] raw = _currentReplayData.Serialize();
-                byte[] data = LZ4Pickler.Pickle(raw);
+                byte[] data = _currentReplayData.Serialize();
                 File.WriteAllBytes(filePath, data);
 
-                _logger?.KInformation($"[ReplaySystem] Replay saved: {filePath} (raw: {raw.Length}, compressed: {data.Length} bytes)");
+                _logger?.KInformation($"[ReplaySystem] Replay saved: {filePath} ({data.Length} bytes)");
 
                 if (dumpJson)
                 {
@@ -396,12 +394,10 @@ namespace xpTURN.Klotho.Replay
             ReplayData replayData;
             try
             {
-                // Format detection: RPLY magic = uncompressed, otherwise LZ4Pickler
-                byte[] raw;
-                if (fileData.Length >= 4 && BinaryPrimitives.ReadUInt32LittleEndian(fileData) == RPLY_MAGIC)
-                    raw = fileData;
-                else
-                    raw = LZ4Pickler.Unpickle(fileData);
+                // Replay files are uncompressed and self-framed by the RPLY magic header.
+                if (fileData.Length < 4 || BinaryPrimitives.ReadUInt32LittleEndian(fileData) != RPLY_MAGIC)
+                    throw new ReplayLoadException($"Replay file has no RPLY header (unrecognized or legacy compressed format): {filePath}");
+                byte[] raw = fileData;
 
                 replayData = new ReplayData(_commandFactory);
                 replayData.Deserialize(raw);

@@ -13,7 +13,8 @@ namespace xpTURN.Klotho.Network
     public class PlayerInfo : IPlayerInfo
     {
         public int PlayerId { get; set; }
-        public string PlayerName { get; set; }
+        public string DisplayName { get; set; } = "";
+        public string Account { get; set; } = "";
         public bool IsReady { get; set; }
         public int Ping { get; set; }
         public PlayerConnectionState ConnectionState { get; set; }
@@ -92,6 +93,11 @@ namespace xpTURN.Klotho.Network
         public int Attempt;
         public bool Completed;
         public bool IsLateJoin;
+        // SD identity validation: set while a pending async validation is in flight (sync done, slot not
+        // yet reserved, Completed still false). The handshake-timeout sweep and SyncReply handler skip an
+        // AwaitingValidation state, while CountPendingHandshakes still counts it toward capacity. P2P
+        // leaves it false (validation there is synchronous, so it never parks).
+        public bool AwaitingValidation;
 
         public void GetBestSample(out int rtt, out long offset)
         {
@@ -142,7 +148,19 @@ namespace xpTURN.Klotho.Network
         private IReconnectCredentialsStore _reconnectCredentialsStore;
         private string _appVersion;
         private IDeviceIdProvider _deviceIdProvider;
+        // Authority-side ticket validator (P2P host). null = no validation (behaviour unchanged).
+        // P2P validation is offline and synchronous — the returned handle must be immediately complete;
+        // the P2P host keeps no pending-validation queue or drain.
+        private IPlayerIdentityValidator _identityValidator;
+        // The host's own lobby ticket, self-validated when the host adds itself in CreateRoom. Empty when no lobby.
+        private string _localIdentityTicket = string.Empty;
         private readonly Dictionary<int, string> _peerDeviceIds = new Dictionary<int, string>();
+        // Per-peer claimed display name captured at PlayerJoinMessage receipt and read later by
+        // CompletePeerSync. Same lifecycle as _peerDeviceIds (removed on disconnect).
+        private readonly Dictionary<int, string> _peerClaimedDisplayNames = new Dictionary<int, string>();
+        // Per-peer lobby ticket captured at PlayerJoinMessage receipt and read later by the validation
+        // hook. Same lifecycle as _peerClaimedDisplayNames (removed on disconnect).
+        private readonly Dictionary<int, string> _peerTickets = new Dictionary<int, string>();
 
         // Pending extra-delay seed buffered between InitializeFromConnection and SubscribeEngine.
         // Guest path: _engine is wired only at SubscribeEngine, so the seed value forwarded by
@@ -154,8 +172,10 @@ namespace xpTURN.Klotho.Network
         // Cached list (GC avoidance)
         private readonly List<(int tick, int playerId)> _hashKeysToRemoveCache = new List<(int tick, int playerId)>();
 
-        // Cached scratch for preserving PlayerName across the GameStart roster rebuild — one-shot per match, reused.
+        // Cached scratch for preserving DisplayName across the GameStart roster rebuild — one-shot per match, reused.
         private readonly List<string> _gameStartNameCache = new List<string>();
+        // Parallel cache preserving Account across the GameStart roster rebuild.
+        private readonly List<string> _gameStartAccountCache = new List<string>();
 
         // Cached message objects (GC avoidance)
         private readonly CommandMessage _commandMessageCache = new CommandMessage();
@@ -340,6 +360,100 @@ namespace xpTURN.Klotho.Network
         private string GetDeviceId() => _deviceIdProvider?.GetDeviceId() ?? string.Empty;
 
         /// <summary>
+        /// Inject the authority-side ticket validator (P2P host). null = no validation (behaviour unchanged).
+        /// </summary>
+        public void SetIdentityValidator(IPlayerIdentityValidator validator)
+        {
+            _identityValidator = validator;
+        }
+
+        /// <summary>
+        /// The host's own lobby ticket, validated when the host adds itself to the roster. Empty when no lobby.
+        /// </summary>
+        public void SetLocalIdentityTicket(string ticket)
+        {
+            _localIdentityTicket = ticket ?? string.Empty;
+        }
+
+        // Validates the host's own ticket as it adds itself to the roster. Synchronous (P2P is offline).
+        // The host is NEVER rejected: on reject, a contract-violating pending handle, or an empty result,
+        // keep the "Host" fallback and log. Validated values overlay the defaults.
+        private void ResolveHostSelfIdentity(ref string displayName, ref string account)
+        {
+            var request = new IdentityValidationRequest(_localIdentityTicket, string.Empty, _sessionMagic,
+                LocalPlayerId, GetDeviceId(), isLateJoin: false, isHostSelf: true, roomId: -1);
+            using (var handle = _identityValidator.BeginValidate(request))
+            {
+                if (!handle.IsComplete)
+                {
+                    _logger?.KWarning($"[KlothoNetworkService] Host self-validation returned a pending handle (must be synchronous) — keeping \"Host\" fallback");
+                    return;
+                }
+                var outcome = handle.Outcome;
+                if (!outcome.Accepted)
+                {
+                    // The host cannot be kicked from its own session — log and keep the fallback.
+                    _logger?.KWarning($"[KlothoNetworkService] Host self-validation rejected (code={outcome.RejectWireCode}) — keeping \"Host\" fallback");
+                    return;
+                }
+                if (!string.IsNullOrEmpty(outcome.DisplayName)) displayName = outcome.DisplayName;
+                account = outcome.Account ?? string.Empty;
+            }
+        }
+
+        // Runs the validation hook for an incoming P2P guest. P2P is offline and synchronous, so there is
+        // no pending queue or drain. Returns true to proceed (validatorRan + resolved validated identity
+        // out-params); false if the peer was rejected (disconnect sent, sync state removed) and the caller
+        // must return.
+        private bool TryValidateIdentityP2P(int peerId, bool isLateJoin, out bool validatorRan, out string account, out string displayName)
+        {
+            validatorRan = false;
+            account = string.Empty;
+            displayName = string.Empty;
+            if (_identityValidator == null)
+                return true; // no validator: skip validation and proceed with the fallback identity
+
+            validatorRan = true;
+            string ticket = _peerTickets.TryGetValue(peerId, out var t) ? t : string.Empty;
+            string claimed = _peerClaimedDisplayNames.TryGetValue(peerId, out var c) ? c : string.Empty;
+            string deviceId = _peerDeviceIds.TryGetValue(peerId, out var d) ? d : string.Empty;
+            var request = new IdentityValidationRequest(ticket, claimed, _sessionMagic, peerId, deviceId, isLateJoin, isHostSelf: false, roomId: -1);
+            using (var handle = _identityValidator.BeginValidate(request))
+            {
+                if (!handle.IsComplete)
+                {
+                    // P2P validators must complete synchronously (offline). A pending handle is misuse;
+                    // the P2P host has no drain to wait on, so reject and log.
+                    _logger?.KError($"[KlothoNetworkService] P2P validator returned a pending handle (must be synchronous): peer={peerId}, rejecting");
+                    DisconnectWithReason(peerId, JoinFailReason.IdentityValidationFailed.ToWireCode());
+                    _peerSyncStates.Remove(peerId);
+                    return false;
+                }
+                var outcome = handle.Outcome;
+                if (!outcome.Accepted)
+                {
+                    DisconnectWithReason(peerId, outcome.RejectWireCode);
+                    _peerSyncStates.Remove(peerId);
+                    return false;
+                }
+                account = outcome.Account;
+                displayName = outcome.DisplayName;
+                return true;
+            }
+        }
+
+        // Resolves the display name by priority: validated value > claimed name (only when no validator
+        // ran) > fabricated default. The fabricated default needs the reserved playerId, so this runs
+        // after slot reservation.
+        private string ResolveJoinDisplayName(int peerId, int newPlayerId, bool validatorRan, string validatedDisplayName)
+        {
+            if (validatorRan)
+                return string.IsNullOrEmpty(validatedDisplayName) ? $"Player{newPlayerId}" : validatedDisplayName; // claimed name ignored once verified
+            var claimed = _peerClaimedDisplayNames.TryGetValue(peerId, out var c) ? c : string.Empty;
+            return !string.IsNullOrEmpty(claimed) ? claimed : $"Player{newPlayerId}";
+        }
+
+        /// <summary>
         /// Persist cold-start Reconnect credentials at Phase = Playing entry.
         /// No-op for host (host is not a cold-start target) or when no store is injected.
         /// </summary>
@@ -386,9 +500,9 @@ namespace xpTURN.Klotho.Network
             // Build the lobby roster from the SyncComplete snapshot forwarded via ConnectionResult on a
             // normal join. Without this the joining guest's player list stays empty until GameStartMessage.
             // LateJoin and Reconnect carry their roster separately, so this is guarded on the normal join.
-            if (result.Kind == JoinKind.Normal && result.PlayerIds != null && result.PlayerIds.Count > 0)
+            if (result.Kind == JoinKind.Normal && result.Roster != null && result.Roster.Count > 0)
             {
-                RebuildPlayerList(result.PlayerIds.Count, result.PlayerIds, result.PlayerConnectionStates, result.ReadyStates);
+                RebuildPlayerList(result.Roster, useReady: true, useNames: true);
             }
 
             Phase = SessionPhase.Synchronized;
@@ -445,11 +559,18 @@ namespace xpTURN.Klotho.Network
 
             InitDisconnectedPlayerPool(maxPlayers);
 
-            // Add the host as a player
+            // Add the host as a player. With a lobby validator, the host self-validates its own ticket
+            // and overlays the authoritative DisplayName/Account; otherwise it keeps "Host". This is
+            // synchronous (P2P is offline) — no pending-validation drain is running yet at this point.
+            string hostDisplayName = "Host";
+            string hostAccount = string.Empty;
+            if (_identityValidator != null)
+                ResolveHostSelfIdentity(ref hostDisplayName, ref hostAccount);
             var hostPlayer = new PlayerInfo
             {
                 PlayerId = LocalPlayerId,
-                PlayerName = "Host",
+                DisplayName = hostDisplayName,
+                Account = hostAccount,
                 IsReady = false
             };
             int prevCount = _players.Count;
@@ -489,6 +610,9 @@ namespace xpTURN.Klotho.Network
             RaiseAllPlayersReadyIfChanged(prevReady);
             _spectators.Clear();
             _peerToPlayer.Clear();
+            _peerDeviceIds.Clear();
+            _peerClaimedDisplayNames.Clear();
+            _peerTickets.Clear();
             _peerSyncStates.Clear();
             _syncHashes.Clear();
             _sessionMagic = 0;
@@ -517,8 +641,10 @@ namespace xpTURN.Klotho.Network
             };
             BroadcastMessagePooled(msg, DeliveryMethod.Reliable);
 
-            if (IsHost)
-                HandlePlayerReadyMessage(msg);
+            // Apply locally for the local player too — our own broadcast is not echoed back to us
+            // (the host relays a player's ready to other peers only). The relay/start-game logic
+            // inside is gated by IsHost + fromPeerId, so this is safe for a guest as well.
+            HandlePlayerReadyMessage(msg);
         }
 
         private void SendSimulationConfig(int peerId)
@@ -880,11 +1006,24 @@ namespace xpTURN.Klotho.Network
         {
             if (_pendingPeers.Contains(peerId))
             {
+                // Pre-auth memory-amplification guard: reject an oversized first message before
+                // Deserialize allocates per-field strings or the Ticket is retained pre-validation.
+                if (length > PlayerJoinMessage.MaxPreAuthMessageBytes)
+                {
+                    _logger?.KWarning($"[KlothoNetworkService][HandleDataReceived] Oversized pre-auth message from peer {peerId}: {length}B > {PlayerJoinMessage.MaxPreAuthMessageBytes}B");
+                    _pendingPeers.Remove(peerId);
+                    DisconnectWithReason(peerId, JoinFailReason.IdentityInvalid.ToWireCode());
+                    return;
+                }
                 var firstMsg = _messageSerializer.Deserialize(data, length);
                 _pendingPeers.Remove(peerId);
                 if (firstMsg is PlayerJoinMessage playerJoin)
                 {
                     _peerDeviceIds[peerId] = playerJoin.DeviceId ?? string.Empty;
+                    // Capture now: the deserialized message is a reused singleton (the next message
+                    // overwrites it), and CompletePeerSync (which reads this) runs later.
+                    _peerClaimedDisplayNames[peerId] = RosterEntry.ClampClaimedName(playerJoin.ClaimedDisplayName);
+                    _peerTickets[peerId] = playerJoin.Ticket ?? string.Empty; // captured now; read by the validation hook later
                     // Dispatch on _gameStarted (not Phase == Playing).
                     //   Countdown peers go to LateJoin too — a standard handshake completing
                     //   after StartGame would land in a wire/PlayerId mismatch (no GameStartMessage
@@ -899,7 +1038,7 @@ namespace xpTURN.Klotho.Network
                         if (EffectivePlayerCount >= MaxPlayerCapacity)
                         {
                             _logger?.KWarning($"[KlothoNetworkService][HandleDataReceived] Room full, peer {peerId} rejected: gameStarted={_gameStarted}, players={_players.Count}, assigned={_assignedPlayerIdCount}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                            DisconnectWithReason(peerId, 2); // RoomFull
+                            DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                             return;
                         }
                         StartHandshake(peerId);
@@ -1192,25 +1331,31 @@ namespace xpTURN.Klotho.Network
                 cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
             }
 
-            // Update the player list, preserving each existing PlayerName by PlayerId across the
+            // Update the player list, preserving each existing DisplayName by PlayerId across the
             // Clear+rebuild. FindPlayerById reads the pre-clear list, so the names are captured before
             // Clear; otherwise the host's own names would be wiped to null at GameStart.
             int prevCount = _players.Count;
             bool prevReady = AllPlayersReady;
             for (int i = 0; i < msg.PlayerIds.Count; i++)
-                _gameStartNameCache.Add(FindPlayerById(msg.PlayerIds[i])?.PlayerName);
+            {
+                var existing = FindPlayerById(msg.PlayerIds[i]);
+                _gameStartNameCache.Add(existing?.DisplayName);
+                _gameStartAccountCache.Add(existing?.Account);  // preserve Account too
+            }
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
                 var player = new PlayerInfo
                 {
                     PlayerId = msg.PlayerIds[i],
-                    PlayerName = _gameStartNameCache[i],
+                    DisplayName = _gameStartNameCache[i] ?? string.Empty,
+                    Account = _gameStartAccountCache[i] ?? string.Empty,
                     IsReady = true
                 };
                 _players.Add(player);
             }
             _gameStartNameCache.Clear();
+            _gameStartAccountCache.Clear();
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
 
@@ -1232,6 +1377,8 @@ namespace xpTURN.Klotho.Network
                 RaiseAllPlayersReadyIfChanged(prevReady);
             }
 
+            // BroadcastMessagePooled → _transport.Broadcast reaches all connected peers, including
+            // spectators (so their ready display stays consistent — SpectatorService handles PlayerReadyMessage).
             if (IsHost && fromPeerId != -1)
                 BroadcastMessagePooled(msg, DeliveryMethod.Reliable);
 
@@ -1257,10 +1404,12 @@ namespace xpTURN.Klotho.Network
                 return;
             }
 
+            // Use the authority-propagated identity instead of locally fabricating a name.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                PlayerName = $"Player{msg.PlayerId}",
+                DisplayName = msg.DisplayName ?? string.Empty,
+                Account = msg.Account ?? string.Empty,
                 IsReady = msg.IsReady,
                 ConnectionState = (PlayerConnectionState)msg.ConnectionState,
             };
@@ -1419,7 +1568,7 @@ namespace xpTURN.Klotho.Network
                 if (newPlayerId < 0)
                 {
                     _logger?.KError($"[KlothoNetworkService] FindSmallestUnusedPlayerId returned -1: peer={peerId}, players={_players.Count}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                    DisconnectWithReason(peerId, 2); // RoomFull
+                    DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                     _peerSyncStates.Remove(peerId);
                     return false;
                 }
@@ -1429,7 +1578,7 @@ namespace xpTURN.Klotho.Network
                 if (Math.Max(_assignedPlayerIdCount, _nextPlayerId - 1) >= MaxPlayerCapacity)
                 {
                     _logger?.KError($"[KlothoNetworkService] Post-GameStart slot overflow: assigned={_assignedPlayerIdCount}, nextId={_nextPlayerId}, max={MaxPlayerCapacity}, peer={peerId}");
-                    DisconnectWithReason(peerId, 2); // RoomFull
+                    DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                     _peerSyncStates.Remove(peerId);
                     newPlayerId = -1;
                     return false;

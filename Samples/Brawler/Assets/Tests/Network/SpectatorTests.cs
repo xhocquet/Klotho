@@ -247,7 +247,8 @@ namespace xpTURN.Klotho.Network.Tests
         private class MockPlayerInfo : IPlayerInfo
         {
             public int PlayerId { get; set; }
-            public string PlayerName { get; set; } = "";
+            public string DisplayName { get; set; } = "";
+            public string Account { get; set; } = "";
             public bool IsReady { get; set; } = true;
             public int Ping { get; set; }
             public PlayerConnectionState ConnectionState { get; set; } = PlayerConnectionState.Connected;
@@ -424,8 +425,8 @@ namespace xpTURN.Klotho.Network.Tests
                 LastVerifiedTick = lastVerifiedTick,
                 CurrentTick = 0,
             };
-            msg.PlayerIds.Add(0);
-            msg.PlayerIds.Add(1);
+            msg.Roster.Add(new RosterEntry { PlayerId = 0 });
+            msg.Roster.Add(new RosterEntry { PlayerId = 1 });
             return msg;
         }
 

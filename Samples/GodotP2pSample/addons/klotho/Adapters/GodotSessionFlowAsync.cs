@@ -25,7 +25,9 @@ namespace xpTURN.Klotho.Godot
                 transport, host, port,
                 logger: flow.Logger,
                 deviceIdProvider: flow.DeviceIdProvider,
-                onStarted: onStarted);
+                onStarted: onStarted,
+                identityProvider: flow.IdentityProvider,
+                claimedDisplayName: flow.ClaimedDisplayName);
             return flow.CreateForConnection(result, roomId: -1, sessionConfigSeed);
         }
 
@@ -43,7 +45,9 @@ namespace xpTURN.Klotho.Godot
                 logger: flow.Logger,
                 deviceIdProvider: flow.DeviceIdProvider,
                 preJoinMessage: new RoomHandshakeMessage { RoomId = roomId },
-                onStarted: onStarted);
+                onStarted: onStarted,
+                identityProvider: flow.IdentityProvider,
+                claimedDisplayName: flow.ClaimedDisplayName);
             return flow.CreateForConnection(result, roomId, sessionConfigSeed);
         }
 

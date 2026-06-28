@@ -11,8 +11,8 @@ namespace xpTURN.Klotho.Core
     public class LateJoinPayload
     {
         /// <summary>
-        /// The original LateJoinAcceptMessage sent by the server — contains SessionConfig / PlayerIds /
-        /// PlayerConnectionStates / PlayerConfigData / PlayerConfigLengths in full.
+        /// The original LateJoinAcceptMessage sent by the server — contains SessionConfig / Roster /
+        /// PlayerConfigData / PlayerConfigLengths in full.
         /// The message reference is retained as-is to avoid copy cost (because
         /// MessageSerializer._messageCache reuses singletons by type, callers must ensure no message of
         /// the same type is received again before consumption is complete).

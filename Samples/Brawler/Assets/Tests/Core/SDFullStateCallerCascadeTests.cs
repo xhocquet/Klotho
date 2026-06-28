@@ -26,7 +26,7 @@ namespace xpTURN.Klotho.Core.Tests
     [TestFixture]
     public class SDFullStateCallerCascadeTests
     {
-        // ── EventDispatchSDClientTests:120-179 패턴 사본 ────────────────
+        // ── Copy of the EventDispatchSDClientTests:120-179 pattern ────────────────
 
         private sealed class MockSDNetworkService : IServerDrivenNetworkService
         {

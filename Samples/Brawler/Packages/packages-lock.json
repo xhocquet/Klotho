@@ -272,6 +272,20 @@
         "com.unity.nuget.newtonsoft-json": "3.2.2"
       }
     },
+    "com.xpturn.klotho.identityp2pref": {
+      "version": "file:../../../Samples/IdentityP2pRef",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
+    },
+    "com.xpturn.klotho.identitysdref": {
+      "version": "file:../../../Samples/IdentitySdRef",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {
+        "com.xpturn.klotho.identityp2pref": "0.1.0"
+      }
+    },
     "com.xpturn.polyfill": {
       "version": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",
       "depth": 0,

@@ -4,6 +4,7 @@
 // the join goes through GodotSessionFlowAsync; views are pooled. The dedicated server is owned under
 // Server/ — run it first (dotnet run --project Samples/GodotSdSample/Server -- 7777), then run two clients.
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using global::Godot;
 using xpTURN.Klotho.Core;
@@ -12,6 +13,7 @@ using xpTURN.Klotho.Godot;
 using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Logging;
 using xpTURN.Klotho.Network;
+using xpTURN.Klotho.Samples.Identity.Sd;
 
 namespace xpTURN.Samples.SdSample
 {
@@ -38,6 +40,18 @@ namespace xpTURN.Samples.SdSample
 		private ISessionConfig    _sesCfg;
 		private Task<KlothoSession> _joinTask;
 		private bool _joining;
+#if KLOTHO_DEV_LOBBY
+		// Dev lobby identity (SD): fetch a signed ticket from DevLobbyServer, then connect (issue-then-connect).
+		private const string LobbyHost = "127.0.0.1";
+		private const int    LobbyPort = 9999;
+		private SdLobbyIssueProvider _identityProvider;
+		private string _devAccount;
+		private string _devMatchId = SdDevIdentity.DevMatchId; // CLI: match=<id> → distinct rooms (multi-room demo)
+		private LiteNetLibLobbyIssueClient _issueClient;
+		private CancellationTokenSource _issueCts;
+		private Task<IssueResult> _issueTask;
+		private bool _issuing;
+#endif
 
 		// Headless self-test hook (CLI: -- join). false=interactive (menu-driven).
 		private bool _autoJoin;
@@ -62,15 +76,18 @@ namespace xpTURN.Samples.SdSample
 			_hud  = GetNode<GodotSdHud>("UILayer/Hud");
 			_viewCallbacks = new GodotSdViewCallbacks(_hud);
 
-			_flow = new KlothoSessionFlow(
-				new KlothoFlowSetupBuilder((s, ss) =>
+			var fsb = new KlothoFlowSetupBuilder((s, ss) =>
 						new SessionCallbacks(new SdSimulationCallbacks(_input), _viewCallbacks))
 					.WithLogger(_logger)
 					.WithTransport(_transport)
 					.WithAssetRegistry(_registry)
-					.WithGodotDefaults()
-					.Build()
-			);
+					.WithGodotDefaults();
+#if KLOTHO_DEV_LOBBY
+			_devAccount = "dev-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+			_identityProvider = new SdLobbyIssueProvider();
+			fsb = fsb.WithLobbyIdentity(_identityProvider);
+#endif
+			_flow = new KlothoSessionFlow(fsb.Build());
 
 			var playerScene = GD.Load<PackedScene>("res://player.tscn");
 			_factory = new SdEntityViewFactory(playerScene);
@@ -95,6 +112,12 @@ namespace xpTURN.Samples.SdSample
 
 			foreach (var a in OS.GetCmdlineUserArgs())
 			{
+#if KLOTHO_DEV_LOBBY
+				if (a.StartsWith("match=", StringComparison.Ordinal)) _devMatchId = a.Substring("match=".Length);
+#endif
+			}
+			foreach (var a in OS.GetCmdlineUserArgs())
+			{
 				if (a == "join") { _autoJoin = true; OnJoin(); }
 			}
 		}
@@ -104,8 +127,20 @@ namespace xpTURN.Samples.SdSample
 		private void OnJoin()
 		{
 			if (_session != null || _joining) return;
+#if KLOTHO_DEV_LOBBY
+			// Fetch the ticket first; the join starts once it resolves (in _Process, keeping
+			// JoinServerDrivenAsync on the main thread).
+			if (_issuing) return;
+			_issuing = true;
+			_issueClient = new LiteNetLibLobbyIssueClient(_logger, LobbyHost, LobbyPort);
+			_issueCts = new CancellationTokenSource(5000);
+			// Menu field wins; else the CLI match=<id> / default. Distinct match ids land in distinct rooms.
+			string matchId = string.IsNullOrWhiteSpace(_menu.MatchId) ? _devMatchId : _menu.MatchId.Trim();
+			_issueTask = _issueClient.IssueAsync(_devAccount, _devAccount, matchId, _issueCts.Token);
+#else
 			_joining = true;
 			_joinTask = _flow.JoinServerDrivenAsync(_transport, _menu.Host, _menu.Port, RoomId, _sesCfg);
+#endif
 		}
 
 		private void OnReady()
@@ -141,6 +176,38 @@ namespace xpTURN.Samples.SdSample
 		public override void _Process(double delta)
 		{
 			if (_transport == null) return; // _Ready failed to initialize.
+
+#if KLOTHO_DEV_LOBBY
+			// Resolve the lobby Issue task on the main thread, then start the join.
+			if (_issuing && _issueTask != null)
+			{
+				if (_issueTask.IsFaulted || _issueTask.IsCanceled)
+				{
+					_logger.KError($"[Sd] lobby ticket fetch failed — is DevLobbyServer running?");
+					CleanupIssue();
+					if (_autoJoin && DisplayServer.GetName() == "headless") GetTree().Quit(1);
+				}
+				else if (_issueTask.IsCompleted)
+				{
+					var issue = _issueTask.Result;
+					if (issue.Full)
+					{
+						// Transient: all rooms occupied. Interactive → user may retry; headless → exit code 2.
+						_logger.KWarning($"[Sd] lobby FULL (all rooms occupied) — retry later.");
+						CleanupIssue();
+						if (_autoJoin && DisplayServer.GetName() == "headless") GetTree().Quit(2);
+					}
+					else
+					{
+						// Connect to the lobby-assigned dedi endpoint + roomId (not hardcoded).
+						_identityProvider?.SetTicket(issue.Ticket);
+						CleanupIssue();
+						_joining = true;
+						_joinTask = _flow.JoinServerDrivenAsync(_transport, issue.Host, issue.Port, issue.RoomId, _sesCfg);
+					}
+				}
+			}
+#endif
 
 			if (_joining && _joinTask != null)
 			{
@@ -185,6 +252,16 @@ namespace xpTURN.Samples.SdSample
 				if (DisplayServer.GetName() == "headless") GetTree().Quit(n >= 1 ? 0 : 1);
 			}
 		}
+
+#if KLOTHO_DEV_LOBBY
+		private void CleanupIssue()
+		{
+			_issuing = false;
+			_issueTask = null;
+			_issueClient?.Dispose(); _issueClient = null;
+			_issueCts?.Dispose(); _issueCts = null;
+		}
+#endif
 
 		private static IKLogger CreateLogger()
 			=> GodotKlothoLogger.CreateDefault(filePrefix: "Sd", categoryName: "Sd");
@@ -234,6 +311,10 @@ namespace xpTURN.Samples.SdSample
 			_viewCallbacks?.Cleanup();
 			_pool?.Dispose();
 			_input?.Dispose();
+#if KLOTHO_DEV_LOBBY
+			_issueClient?.Dispose();
+			_issueCts?.Dispose();
+#endif
 		}
 	}
 }

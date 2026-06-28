@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -34,6 +37,19 @@ namespace Brawler
         [SerializeField] TMP_Text _textEntities;
         [SerializeField] TMP_Text _textReady;
         [SerializeField] TMP_Text _textPhase;
+
+        [SerializeField] TMP_Text _textPlayer1;
+        [SerializeField] TMP_Text _textPlayer2;
+        [SerializeField] TMP_Text _textPlayer3;
+        [SerializeField] TMP_Text _textPlayer4;
+
+        // Roster display: the controller supplies the current player list each frame (or null when no
+        // session). Polled rather than pushed because per-player Ready toggles do not raise a dedicated
+        // observer callback. Per-slot text is cached so TMP only relayouts on an actual change.
+        public Func<IReadOnlyList<IPlayerInfo>> RosterProvider { get; set; }
+        
+        TMP_Text[] _playerSlots;
+        readonly string[] _prevPlayerText = new string[4];
 
         public ActionType CurrentAction { get; private set; }
         public string IpAddress { get { return _ipAddress.text; } set { _ipAddress.text = value; } }
@@ -80,8 +96,46 @@ namespace Brawler
             }
         }
 
+        void Awake()
+        {
+            _playerSlots = new[] { _textPlayer1, _textPlayer2, _textPlayer3, _textPlayer4 };
+        }
+
+        void RefreshRoster()
+        {
+            if (RosterProvider == null || _playerSlots == null)
+                return;
+
+            var roster = RosterProvider();
+            for (int i = 0; i < _playerSlots.Length; i++)
+            {
+                string text;
+                if (roster != null && i < roster.Count)
+                {
+                    var p = roster[i];
+                    string name = string.IsNullOrEmpty(p.DisplayName) ? $"Player{p.PlayerId}" : p.DisplayName;
+                    string ready = p.IsReady ? "R" : "N";
+                    string conn = p.ConnectionState == PlayerConnectionState.Connected ? "C" : "D";
+                    text = $"[{ready}][{conn}] {name}";
+                }
+                else
+                {
+                    text = string.Empty;
+                }
+
+                if (_prevPlayerText[i] != text)
+                {
+                    _prevPlayerText[i] = text;
+                    if (_playerSlots[i] != null)
+                        _playerSlots[i].SetText(text);
+                }
+            }
+        }
+
         void Update()
         {
+            RefreshRoster();
+
             if (_prevIsHost != IsHost)
             {
                 _prevIsHost = IsHost;

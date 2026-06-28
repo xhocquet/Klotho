@@ -8,7 +8,7 @@ namespace xpTURN.Samples.SdSample
 	public partial class GodotSdMenu : Control
 	{
 		private Button _joinButton, _readyButton, _stopButton;
-		private LineEdit _ipField, _portField;
+		private LineEdit _ipField, _portField, _matchField;
 
 		public event Action OnJoinClicked;
 		public event Action OnReadyClicked;
@@ -21,6 +21,7 @@ namespace xpTURN.Samples.SdSample
 			_stopButton  = GetNode<Button>("VBox/StopButton");
 			_ipField     = GetNode<LineEdit>("VBox/IpField");
 			_portField   = GetNode<LineEdit>("VBox/PortField");
+			_matchField  = GetNodeOrNull<LineEdit>("VBox/MatchField");
 
 			_joinButton.Pressed  += () => OnJoinClicked?.Invoke();
 			_readyButton.Pressed += () => OnReadyClicked?.Invoke();
@@ -29,6 +30,8 @@ namespace xpTURN.Samples.SdSample
 
 		public string Host => string.IsNullOrEmpty(_ipField?.Text) ? "127.0.0.1" : _ipField.Text;
 		public int Port => int.TryParse(_portField?.Text, out var p) ? p : 7777;
+		/// <summary>Match id typed by the user; empty when the field is blank (caller falls back to a default).</summary>
+		public string MatchId => _matchField?.Text ?? string.Empty;
 
 		public void SetInitialHost(string host, int port)
 		{

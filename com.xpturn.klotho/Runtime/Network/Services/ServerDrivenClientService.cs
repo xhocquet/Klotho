@@ -32,8 +32,10 @@ namespace xpTURN.Klotho.Network
 
         // Player management
         private readonly List<PlayerInfo> _players = new List<PlayerInfo>();
-        // Cached scratch for preserving PlayerName across the GameStart roster rebuild — one-shot per match, reused.
+        // Cached scratch for preserving DisplayName across the GameStart roster rebuild — one-shot per match, reused.
         private readonly List<string> _gameStartNameCache = new List<string>();
+        // Parallel cache preserving Account across the GameStart roster rebuild.
+        private readonly List<string> _gameStartAccountCache = new List<string>();
 
         // Session
         private long _sessionMagic;
@@ -227,23 +229,24 @@ namespace xpTURN.Klotho.Network
 
             // Build the lobby roster from the SyncComplete snapshot forwarded via ConnectionResult on a
             // normal join. This service has no shared RebuildPlayerList helper, so build it inline. IsReady
-            // comes from ReadyStates (default false in the lobby) rather than being hardcoded true as on the
-            // LateJoin path.
-            if (result.Kind == JoinKind.Normal && result.PlayerIds != null && result.PlayerIds.Count > 0)
+            // comes from each entry's ReadyState (default false in the lobby) rather than being hardcoded
+            // true as on the LateJoin path.
+            if (result.Kind == JoinKind.Normal && result.Roster != null && result.Roster.Count > 0)
             {
                 int prevCount = _players.Count;
                 bool prevReady = AllPlayersReady;
                 _players.Clear();
-                for (int i = 0; i < result.PlayerIds.Count; i++)
+                for (int i = 0; i < result.Roster.Count; i++)
                 {
+                    var e = result.Roster[i];
+                    // Use the authority-propagated identity instead of locally fabricating a name.
                     _players.Add(new PlayerInfo
                     {
-                        PlayerId = result.PlayerIds[i],
-                        PlayerName = $"Player{result.PlayerIds[i]}",
-                        ConnectionState = (i < result.PlayerConnectionStates.Count)
-                            ? (PlayerConnectionState)result.PlayerConnectionStates[i]
-                            : PlayerConnectionState.Connected,
-                        IsReady = result.ReadyStates != null && i < result.ReadyStates.Count && result.ReadyStates[i] != 0,
+                        PlayerId = e.PlayerId,
+                        DisplayName = e.DisplayName.ToString(),
+                        Account = e.Account.ToString(),
+                        ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                        IsReady = e.ReadyState != 0,
                     });
                 }
                 RaisePlayerCountIfChanged(prevCount);
@@ -334,7 +337,7 @@ namespace xpTURN.Klotho.Network
         public void SeedLateJoinPlayers(LateJoinPayload payload)
         {
             var msg = payload.AcceptMessage;
-            SeedPlayersFromCatchupPayload(msg.Magic, msg.RandomSeed, msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            SeedPlayersFromCatchupPayload(msg.Magic, msg.RandomSeed, msg.Roster);
         }
 
         /// <summary>
@@ -347,22 +350,30 @@ namespace xpTURN.Klotho.Network
             var msg = payload.AcceptMessage;
             // SD has no Magic field on ReconnectAcceptMessage — _sessionMagic is already set by InitializeFromConnection
             // from creds. Pass current _sessionMagic to keep helper signature symmetric.
-            SeedPlayersFromCatchupPayload(_sessionMagic, msg.RandomSeed, msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            SeedPlayersFromCatchupPayload(_sessionMagic, msg.RandomSeed, msg.Roster);
         }
 
-        private void SeedPlayersFromCatchupPayload(long sessionMagic, int randomSeed, int playerCount, List<int> playerIds, List<byte> playerConnectionStates)
+        // roster carries authoritative identity + ConnectionState. IsReady stays hardcoded true on this
+        // LateJoin / cold-start Reconnect path (entry.ReadyState is meaningful only on the normal-join
+        // path; this preserves the prior behavior).
+        private void SeedPlayersFromCatchupPayload(long sessionMagic, int randomSeed, List<RosterEntry> roster)
         {
             _sessionMagic = sessionMagic;
             _randomSeed = randomSeed;
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Clear();
-            for (int i = 0; i < playerCount && i < playerIds.Count; i++)
+            for (int i = 0; i < roster.Count; i++)
             {
-                var p = new PlayerInfo { PlayerId = playerIds[i], IsReady = true };
-                if (playerConnectionStates != null && i < playerConnectionStates.Count)
-                    p.ConnectionState = (PlayerConnectionState)playerConnectionStates[i];
-                _players.Add(p);
+                var e = roster[i];
+                _players.Add(new PlayerInfo
+                {
+                    PlayerId = e.PlayerId,
+                    IsReady = true,
+                    ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                    DisplayName = e.DisplayName.ToString(),
+                    Account = e.Account.ToString(),
+                });
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -426,6 +437,10 @@ namespace xpTURN.Klotho.Network
             msg.PlayerId = _localPlayerId;
             msg.IsReady = ready;
             SendToServer(msg, DeliveryMethod.Reliable);
+            
+            // Apply locally too — the server relays a ready change to other clients only (it excludes
+            // the sender), so the local player's own Ready would otherwise never reflect.
+            HandlePlayerReadyMessage(msg);
         }
 
         public void SendCommand(ICommand command)
@@ -661,6 +676,10 @@ namespace xpTURN.Klotho.Network
                     HandlePlayerLeaveNotification(peerId, leaveNotification);
                     break;
 
+                case PlayerStateNotificationMessage stateNotification:
+                    HandlePlayerStateNotification(peerId, stateNotification);
+                    break;
+
                 case FullStateResponseMessage fullStateMsg:
                     HandleFullStateResponse(fullStateMsg);
                     break;
@@ -783,23 +802,29 @@ namespace xpTURN.Klotho.Network
                 cfg.ClientShutdownGraceMs = msg.ClientShutdownGraceMs;
             }
 
-            // Preserve each existing PlayerName by PlayerId across the Clear+rebuild, capturing names
+            // Preserve each existing DisplayName by PlayerId across the Clear+rebuild, capturing names
             // before Clear. Without this the locally derived "Player{id}" names are wiped to null at GameStart.
             int prevPlayerCount0 = _players.Count;
             bool prevAllReady0 = AllPlayersReady;
             for (int i = 0; i < msg.PlayerIds.Count; i++)
-                _gameStartNameCache.Add(FindPlayerById(msg.PlayerIds[i])?.PlayerName);
+            {
+                var existing = FindPlayerById(msg.PlayerIds[i]);
+                _gameStartNameCache.Add(existing?.DisplayName);
+                _gameStartAccountCache.Add(existing?.Account);  // preserve Account too
+            }
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
             {
                 _players.Add(new PlayerInfo
                 {
                     PlayerId = msg.PlayerIds[i],
-                    PlayerName = _gameStartNameCache[i],
+                    DisplayName = _gameStartNameCache[i] ?? string.Empty,
+                    Account = _gameStartAccountCache[i] ?? string.Empty,
                     IsReady = true
                 });
             }
             _gameStartNameCache.Clear();
+            _gameStartAccountCache.Clear();
             RaisePlayerCountIfChanged(prevPlayerCount0);
             RaiseAllPlayersReadyIfChanged(prevAllReady0);
 
@@ -865,16 +890,19 @@ namespace xpTURN.Klotho.Network
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Clear();
-            for (int i = 0; i < msg.PlayerCount && i < msg.PlayerIds.Count; i++)
+            for (int i = 0; i < msg.Roster.Count; i++)
             {
-                var player = new PlayerInfo
+                var e = msg.Roster[i];
+                // Authoritative identity from the accept roster. IsReady hardcoded true on this LateJoin
+                // path (entry.ReadyState meaningful only on normal join).
+                _players.Add(new PlayerInfo
                 {
-                    PlayerId = msg.PlayerIds[i],
-                    IsReady = true
-                };
-                if (i < msg.PlayerConnectionStates.Count)
-                    player.ConnectionState = (PlayerConnectionState)msg.PlayerConnectionStates[i];
-                _players.Add(player);
+                    PlayerId = e.PlayerId,
+                    IsReady = true,
+                    ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                    DisplayName = e.DisplayName.ToString(),
+                    Account = e.Account.ToString(),
+                });
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -910,13 +938,12 @@ namespace xpTURN.Klotho.Network
                 }
             }
 
-            // PlayerName mirrors the SD host's CompleteLateJoinSync construction ($"Player{id}") so
-            // the same PlayerId reads identically across peers. Ping is unmeasurable on clients and
-            // stays at default 0.
+            // Use the authority-propagated identity instead of locally fabricating a name.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                PlayerName = $"Player{msg.PlayerId}",
+                DisplayName = msg.DisplayName ?? string.Empty,
+                Account = msg.Account ?? string.Empty,
                 IsReady = true,
                 ConnectionState = PlayerConnectionState.Connected,
             };
@@ -951,10 +978,12 @@ namespace xpTURN.Klotho.Network
                 }
             }
 
+            // Use the authority-propagated identity instead of locally fabricating a name.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                PlayerName = $"Player{msg.PlayerId}",
+                DisplayName = msg.DisplayName ?? string.Empty,
+                Account = msg.Account ?? string.Empty,
                 IsReady = msg.IsReady,
                 ConnectionState = (PlayerConnectionState)msg.ConnectionState,
             };
@@ -989,6 +1018,50 @@ namespace xpTURN.Klotho.Network
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
             _logger?.KInformation($"[SDClientService][HandlePlayerLeaveNotification] Lobby player removed: playerId={msg.PlayerId}");
+        }
+
+        // Receiver for the server's PlayerStateNotificationMessage — live connection-state of remote players
+        // (disconnect / reconnect / leave). Display-only: SD is server-authoritative (verified state drives
+        // the engine), so this updates the _players surface for UI without touching the engine. Only the
+        // server (peerId 0) is a valid source; an unknown PlayerId is a no-op.
+        private void HandlePlayerStateNotification(int peerId, PlayerStateNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SDClientService][HandlePlayerStateNotification] Ignored from non-server peerId={peerId}");
+                return;
+            }
+
+            var player = FindPlayerById(msg.PlayerId);
+            switch ((PlayerStateChange)msg.State)
+            {
+                case PlayerStateChange.Disconnected:
+                    if (player != null)
+                    {
+                        player.ConnectionState = PlayerConnectionState.Disconnected;
+                        OnPlayerDisconnected?.Invoke(player);
+                    }
+                    break;
+
+                case PlayerStateChange.Reconnected:
+                    if (player != null)
+                    {
+                        player.ConnectionState = PlayerConnectionState.Connected;
+                        OnPlayerReconnected?.Invoke(player);
+                    }
+                    break;
+
+                case PlayerStateChange.Left:
+                    if (player != null)
+                    {
+                        int prevPlayerCount = _players.Count;
+                        _players.Remove(player);
+                        OnPlayerLeft?.Invoke(player);
+                        RaisePlayerCountIfChanged(prevPlayerCount);
+                    }
+                    break;
+            }
+            _logger?.KInformation($"[SDClientService][HandlePlayerStateNotification] playerId={msg.PlayerId}, state={(PlayerStateChange)msg.State}");
         }
 
         private void HandleFullStateResponse(FullStateResponseMessage msg)
@@ -1083,12 +1156,18 @@ namespace xpTURN.Klotho.Network
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Clear();
-            for (int i = 0; i < msg.PlayerCount && i < msg.PlayerIds.Count; i++)
+            for (int i = 0; i < msg.Roster.Count; i++)
             {
-                var player = new PlayerInfo { PlayerId = msg.PlayerIds[i] };
-                if (i < msg.PlayerConnectionStates.Count)
-                    player.ConnectionState = (PlayerConnectionState)msg.PlayerConnectionStates[i];
-                _players.Add(player);
+                var e = msg.Roster[i];
+                // Authoritative identity from the reconnect roster. IsReady stays default false
+                // (entry.ReadyState meaningful only on normal join).
+                _players.Add(new PlayerInfo
+                {
+                    PlayerId = e.PlayerId,
+                    ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                    DisplayName = e.DisplayName.ToString(),
+                    Account = e.Account.ToString(),
+                });
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -1279,8 +1358,8 @@ namespace xpTURN.Klotho.Network
         private struct UnackedInput
         {
             public int Tick;
-            public byte[] CommandData;   // StreamPool 대여 버퍼 (버킷 크기, Length != 유효길이)
-            public int Length;           // 유효 데이터 길이
+            public byte[] CommandData;   // StreamPool-rented buffer (bucket size, Length != valid length)
+            public int Length;           // valid data length
         }
 
         // ── Suppress unused event warnings ─────────────────────────

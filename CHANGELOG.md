@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.5.0] - 2026-06-28
+
+### Verified player identity from the lobby
+
+- **Players can now bring a verified identity into a match.** When a lobby issues a login ticket, the engine carries it through the join handshake and asks the game to verify it — an online check on dedicated servers, or an offline signature check in peer-to-peer — then shares the confirmed account and display name with everyone in the room. This is optional: with no lobby configured, sessions behave exactly as before.
+- **A join with a bad login is turned away cleanly.** An expired, invalid, already-used, or banned login is rejected with a specific reason and without taking up a player slot, so the game can ask the user to sign in again instead of silently retrying.
+- **Reconnecting players keep their identity.** A returning player's account and name are restored from the session rather than re-checked, because a one-time login ticket cannot be presented twice.
+- **For LAN or lobby-less play, a client may suggest its own display name.** This unverified nickname is used only when no verifier is configured; whenever a lobby verifier is present it is ignored, so it cannot be used to impersonate someone.
+
+### Consistent names and live presence
+
+- **Every player now sees the same display name for each participant.** The host (peer-to-peer) or server (dedicated) is the single source of names and shares them through the room roster, so a player is no longer shown a different — or blank — name depending on who is looking.
+- **Spectators and clients now see connection changes as they happen** — a player dropping, disconnecting, or reconnecting is reflected live rather than only at the next full sync.
+- **A player's own ready state now updates immediately** on their own screen instead of waiting for a round-trip.
+
+### Dedicated-server slot hygiene
+
+- **A peer that connects but never joins no longer holds a slot forever.** On a dedicated server a peer could finish the transport connection (and, in a multi-room server, be routed to a room) yet never send its first message — to join, reconnect, or spectate — and the server would keep its slot reserved indefinitely, slowly starving the room of capacity. Such a peer is now disconnected after a short grace period (10s) if it stays silent, freeing the slot; a peer that joins, reconnects, or spectates within that window is unaffected.
+
+### Serialization
+
+- **`FixedString32`/`FixedString64` are now serialized directly.** These fixed-size text fields can be used in game-defined messages and configs without writing serialization code by hand.
+- **`List<T>` and `T[]` of `[KlothoSerializableStruct]` elements are now serialized directly.** Lists and arrays of serializable structs are handled automatically wherever they appear, with no hand-written serialization code.
+
+### Breaking changes
+
+- **The player name field was renamed and an account field was added.** `IPlayerInfo.PlayerName` is now `IPlayerInfo.DisplayName`, and a new `IPlayerInfo.Account` (a stable login id, empty when no lobby is used) was added. Game code that read `PlayerName` must switch to `DisplayName`.
+- **The join and roster network format changed, so clients and servers must run the same version.** How the player roster travels over the wire was unified into one compact per-player record; there is no compatibility with older builds on the wire.
+- **A dedicated-server identity validator now receives the routed room.** `IdentityValidationRequest` gained a `RoomId` field and a matching constructor argument, so a server-driven validator can bind a ticket to the specific room the player was routed to (the lobby rejects a player who routes to a room their ticket is not bound to). Game code that *implements* a validator only reads the new field — no change required; only code that *constructs* `IdentityValidationRequest` (typically a custom validator's own unit tests) must pass the new argument.
+
+### Dependencies — bundled `Unsafe.dll` and LZ4 removed
+
+- **The package no longer ships `System.Runtime.CompilerServices.Unsafe.dll`** — Unity projects that also obtain this assembly from elsewhere (notably the Unity AI Assistant package, or Burst in IL2CPP player builds) could hit a compile error (`CS0103: 'Unsafe' does not exist…`) or an IL2CPP link failure caused by two copies of the same assembly identity. The handful of low-level helpers the core actually used (`SizeOf`/`As`/`AsRef`) are now implemented inside the package, so the conflicting bundled assembly is gone and the clash can no longer occur. No public API or runtime/determinism behavior change for consumers.
+- **Replays are now written uncompressed** — the bundled LZ4 compressor (`K4os.Compression.LZ4`) was removed together with its transitive `Unsafe` dependency. New replay files are somewhat larger but pull in no third-party dependency. **Replay files saved by earlier versions (LZ4-compressed) can no longer be loaded**.
+
 ## [0.3.5] - 2026-06-23
 
 ### Pre-game lobby consistency

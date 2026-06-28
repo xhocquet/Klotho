@@ -7,6 +7,11 @@
     <RootNamespace>xpTURN.Samples.SdSample.Server</RootNamespace>
     <Nullable>disable</Nullable>
     <ServerGarbageCollection>true</ServerGarbageCollection>
+    <!-- Dev lobby identity validator (KLOTHO_DEV_LOBBY): OFF by default. When undefined the server runs
+         with no identity validator (clients join with no ticket). To exercise the dev lobby flow, prepend
+         "KLOTHO_DEV_LOBBY;" to DefineConstants below AND on the client (SdSample Player Settings) so both
+         agree; run DevLobbyServer first. Revert when done. -->
+    <DefineConstants>$(DefineConstants);</DefineConstants>
   </PropertyGroup>
 
   <!-- Tier 1+2+3: server framework assemblies (mirrors the client asmdef structure).
@@ -23,6 +28,16 @@
   <!-- Source generator for the Tier 4 game-specific types compiled into this exe. -->
   <ItemGroup>
     <Analyzer Include="..\..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <!-- SD identity validator + lobby redeem client (server side), only exercised under KLOTHO_DEV_LOBBY.
+       Reuses p2pref's codec / Ed25519 backend + sdref's validator / DevLobbyCore / redeem client.
+       BouncyCastle via NuGet (Server~ does not reference it → no conflict). The glob pulls all of
+       sdref/p2pref (incl. client-only + P2P sources) — unused on the server, harmless. -->
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+    <Compile Include="..\..\IdentityP2pRef\Runtime\*.cs" Link="IdentityP2pRef\%(Filename)%(Extension)" />
+    <Compile Include="..\..\IdentitySdRef\Runtime\*.cs" Link="IdentitySdRef\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <PropertyGroup>

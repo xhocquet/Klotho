@@ -127,7 +127,7 @@ public partial struct AgentComponent : IComponent
 - The struct gets generated `Serialize` / `Deserialize` / `GetSerializedSize` / `GetHash` using the **same field codec as a component** (incl. `fixed` buffers), but **no `TYPE_ID`, factory, or `[ModuleInitializer]`**.
 - The host's generated codec delegates: `this.State.Serialize(ref writer)`, folds `this.State.GetHash(hash)`, and its `GetSerializedSize()` becomes a runtime expression (`<const> + this.State.GetSerializedSize()`).
 - **Must be `unmanaged` and `[StructLayout(Sequential, Pack = 4)]`** — when embedded in a component it becomes part of that component's `MemoryMarshal.Cast` layout, so it follows the same cross-runtime rules as a component ([§7](#7-component-layout--determinism-rules)).
-- **Direct fields only.** A `[KlothoSerializableStruct]` is supported as a plain field, **not** as a collection element (`List<T>` / `T[]` of the struct raises **KLSG005**) and not as a `struct`-typed property.
+- **Field or `List`/array element.** A `[KlothoSerializableStruct]` is supported as a plain field (any host category, incl. components) and — in the reference categories that support collections ([§6](#6-supported-field-types)) — as a **`List<T>` / `T[]` element**, each element serialized inline via the struct's codec. It is **not** supported as a `Dictionary` key/value, nor as a `struct`-typed property.
 
 ---
 
@@ -169,13 +169,14 @@ The generator maps these directly (fixed size in bytes shown where applicable):
 - **Fixed-point** — `FP64`(8) `FPVector2`(16) `FPVector3`(24) `FPVector4`(32) `FPQuaternion`(32)
 - **ECS handles** — `EntityRef`(8) `DataAssetRef`(4)
 - **Composite physics** — `FPRigidBody`(146) `FPCollider`(81)
+- **Fixed-width strings** — `FixedString32`(32) `FixedString64`(64) — UTF-8 in a fixed buffer (`Bytes` + `int16` length, always the full constant size). Unlike variable-length `string` they are `unmanaged`, so they are valid **inside components** and as **collection / dictionary** elements.
 - **Variable-length** — `string` (UTF-8, length-prefixed), `byte[]`
 
 **Reference categories only** (`[KlothoSerializable]` Entity/Command/Message/Event, *not* components) additionally support **collections** of supported element types: `T[]`, `List<T>`, and `Dictionary<TKey,TValue>`.
 
-> **Components are different.** A `[KlothoComponent]` struct must be **`unmanaged`** — value types only, no `string`/array/`List`/`Dictionary`/managed references. For text in a component use `FixedString32`/`FixedString64`; for inline arrays use a fixed-size value struct. This is why the component and `[KlothoSerializable]` planes have different type rules.
+> **Components are different.** A `[KlothoComponent]` struct must be **`unmanaged`** — value types only, no `string`/array/`List`/`Dictionary`/managed references. For text in a component use `FixedString32`/`FixedString64` (the fixed-width string entry above — first-class mapped types that serialize as a constant 32/64 bytes); for inline arrays use a fixed-size value struct. This is why the component and `[KlothoSerializable]` planes have different type rules.
 
-Additionally, a **`[KlothoSerializableStruct]` value struct** ([§3.1](#31-klothoserializablestruct--reusable-inline-field-bundles)) is supported as a **direct field** in all three host categories — it serializes inline via its own generated codec. Because it must itself be `unmanaged`, it is also valid inside a `[KlothoComponent]`. It is **not** supported as a collection element (`List<T>`/`T[]` of the struct → **KLSG005**) or as a `struct`-typed property.
+Additionally, a **`[KlothoSerializableStruct]` value struct** ([§3.1](#31-klothoserializablestruct--reusable-inline-field-bundles)) is supported as a **direct field** in all three host categories — it serializes inline via its own generated codec. Because it must itself be `unmanaged`, it is also valid inside a `[KlothoComponent]`. In the reference categories it is **also** supported as a **`List<T>` / `T[]` element** (each element serialized inline via the struct's codec; serialized size is `count * <const>`). It is **not** supported as a `Dictionary` key/value, nor as a `struct`-typed property.
 
 `float`/`double` are **deliberately unsupported** — they break cross-platform determinism, so there is no `WriteFloat`/`WriteDouble` and no field mapping for them. An unmapped field type raises **KLSG003** at compile time, and using a `float`/`double` (or a float-backed Unity type) inside deterministic simulation code is additionally flagged by the determinism analyzer (**KLOTHO_DET002/003**, see [§8](#8-diagnostics-reference)). Store fixed-point state (`FP64` and friends) instead; for non-deterministic view/debug payloads, serialize outside the simulation codec.
 

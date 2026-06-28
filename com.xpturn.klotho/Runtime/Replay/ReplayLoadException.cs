@@ -5,7 +5,7 @@ namespace xpTURN.Klotho.Replay
 {
     /// <summary>
     /// Thrown by <see cref="ReplaySystem.LoadFromFile"/> and <see cref="KlothoSessionFlow.StartReplayFromFile"/>
-    /// for any replay-load failure: file-not-found, file-read I/O, LZ4 unpickle failure,
+    /// for any replay-load failure: file-not-found, file-read I/O, missing/invalid RPLY header,
     /// malformed payload, or metadata-derived <see cref="ISimulationConfig"/> validation failure.
     /// The inner exception (when present) carries the underlying cause.
     /// </summary>

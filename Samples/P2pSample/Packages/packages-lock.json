@@ -8,8 +8,8 @@
       "hash": "e5acc106ee196bc5a32fb14cdf2987b0f96d11e0"
     },
     "com.unity.ai.navigation": {
-      "version": "2.0.12",
-      "depth": 1,
+      "version": "2.0.10",
+      "depth": 0,
       "source": "registry",
       "dependencies": {
         "com.unity.modules.ai": "1.0.0"
@@ -213,9 +213,15 @@
       "source": "local",
       "dependencies": {
         "com.unity.inputsystem": "1.18.0",
-        "com.unity.ai.navigation": "2.0.12",
+        "com.unity.ai.navigation": "1.1.7",
         "com.unity.nuget.newtonsoft-json": "3.2.2"
       }
+    },
+    "com.xpturn.klotho.identityp2pref": {
+      "version": "file:../../../Samples/IdentityP2pRef",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
     },
     "com.xpturn.polyfill": {
       "version": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",

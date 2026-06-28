@@ -61,12 +61,11 @@ namespace xpTURN.Klotho.Core
 
         /// <summary>
         /// Pre-game roster snapshot forwarded from SyncCompleteMessage on a normal join. The joining
-        /// guest builds its full player list from these so the lobby roster is consistent immediately;
-        /// InitializeFromConnection rebuilds from them. These are null/empty for LateJoin and Reconnect,
-        /// which carry the roster in their own AcceptMessage payloads instead.
+        /// guest builds its full player list from this so the lobby roster is consistent immediately;
+        /// InitializeFromConnection rebuilds from it. Null/empty for LateJoin and Reconnect, which carry
+        /// the roster in their own AcceptMessage payloads instead. ReadyState is carried per-entry
+        /// (in-memory only; this type is not serialized).
         /// </summary>
-        public System.Collections.Generic.List<int> PlayerIds { get; set; }
-        public System.Collections.Generic.List<byte> PlayerConnectionStates { get; set; }
-        public System.Collections.Generic.List<byte> ReadyStates { get; set; }
+        public System.Collections.Generic.List<Network.RosterEntry> Roster { get; set; }
     }
 }

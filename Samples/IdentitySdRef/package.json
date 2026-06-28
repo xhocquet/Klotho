@@ -1,0 +1,10 @@
+{
+  "name": "com.xpturn.klotho.identitysdref",
+  "version": "0.1.0",
+  "displayName": "Klotho SD Identity Reference",
+  "description": "SD (dedicated-server) online lobby-redeem identity validator (game layer, outside the Klotho core). Server verifies a lobby-issued ticket via an online redeem round-trip (signature 1st + redeem authority, idempotent nonce, serverId match binding). Transport = the engine's vendored LiteNetLib (no new dependency). Reuses com.xpturn.klotho.identityp2pref for the ticket codec / Ed25519 backend / issuer. Consumed by GodotSdSampleServer, DevLobbyServer, SdSample/GodotSdSample clients, and the Brawler test suite.",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.xpturn.klotho.identityp2pref": "0.1.0"
+  }
+}

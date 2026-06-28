@@ -12,7 +12,7 @@ namespace xpTURN.Klotho.Core
     {
         /// <summary>
         /// The original ReconnectAcceptMessage sent by the host — contains SessionConfig block / RandomSeed /
-        /// PlayerIds / PlayerConnectionStates / SharedClock data.
+        /// Roster / SharedClock data.
         /// </summary>
         public ReconnectAcceptMessage AcceptMessage { get; set; }
 

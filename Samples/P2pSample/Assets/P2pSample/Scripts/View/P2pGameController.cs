@@ -63,7 +63,7 @@ namespace xpTURN.Samples.P2pSample
             _input = new P2pInputCapture();
             _input.Enable();
 
-            var setup = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
+            var flowBuilder = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
                 {
                     var simCallbacks = new P2pSimulationCallbacks(_input);
                     _viewCallbacks = new P2pViewCallbacks(_hud);
@@ -73,8 +73,16 @@ namespace xpTURN.Samples.P2pSample
                 .WithTransport(_transport)
                 .WithAssetRegistry(_assetRegistry)
                 .WithLifecycleObserver(this)
-                .WithUnityDefaults()
-                .Build();
+                .WithUnityDefaults();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // Dev lobby identity (signed Ed25519 ticket). Editor/dev only (P2pDevIdentity is build-gated).
+            // The builder is built once for both host and guest; the validator is simply not consulted on
+            // a guest (host-only verification), so both are set unconditionally.
+            flowBuilder = flowBuilder
+                .WithLobbyIdentity(P2pDevIdentity.CreateProvider())
+                .WithIdentityValidator(P2pDevIdentity.CreateValidator());
+#endif
+            var setup = flowBuilder.Build();
 
             _flow = new KlothoSessionFlow(setup);
             // Driver owns the main transport (idle pumping + idle-disconnect routing); bind before any

@@ -111,7 +111,7 @@ namespace xpTURN.Klotho.ECS
 
             _typeToId[typeof(T)] = typeId;
             _idToType[typeId] = typeof(T);
-            _componentSizes[typeof(T)] = Unsafe.SizeOf<T>();
+            _componentSizes[typeof(T)] = KUnsafe.SizeOf<T>();
             _isSingleton[typeId] = isSingleton;
             if (typeId > MaxTypeId) MaxTypeId = typeId;
 

@@ -1,7 +1,7 @@
 {
   "dependencies": {
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
-    "com.unity.ai.navigation": "2.0.10",
+    "com.unity.ai.navigation": "2.0.13",
     "com.unity.collab-proxy": "2.11.4",
     "com.unity.ide.rider": "3.0.40",
     "com.unity.ide.visualstudio": "2.0.27",
@@ -13,6 +13,8 @@
     "com.unity.ugui": "2.0.0",
     "com.unity.visualscripting": "1.9.11",
     "com.xpturn.klotho": "file:../../../com.xpturn.klotho",
+    "com.xpturn.klotho.identityp2pref": "file:../../../Samples/IdentityP2pRef",
+    "com.xpturn.klotho.identitysdref": "file:../../../Samples/IdentitySdRef",
     "com.xpturn.polyfill": "https://github.com/xpTURN/Polyfill.git?path=src/Polyfill/Assets/Polyfill",
     "com.unity.modules.accessibility": "1.0.0",
     "com.unity.modules.adaptiveperformance": "1.0.0",

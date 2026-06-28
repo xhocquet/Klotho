@@ -7,15 +7,23 @@ using xpTURN.Klotho.Logging;
 using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Network;
 using xpTURN.Samples.SdSample.Server;
+#if KLOTHO_DEV_LOBBY
+using xpTURN.Klotho.Samples.Identity;     // BcEd25519Backend
+using xpTURN.Klotho.Samples.Identity.Sd;  // SdDevIdentity, LiteNetLibLobbyRedeemClient
+#endif
 
 // Force-load the split Klotho/game assemblies and run JIT warmups before any factory
 // is constructed (see KlothoServerBootstrap for why this is required).
 KlothoServerBootstrap.Initialize("SdSample", "xpTURN.Samples");
 
-// CLI: dotnet run -- [port] [logLevel]     (default 7777 / Information)
+// CLI: dotnet run -- [port] [logLevel] [lobbyHost] [lobbyPort]   (default 7777 / Information / localhost / 9999)
 int port = args.Length > 0 ? int.Parse(args[0]) : 7777;
 var logLevel = args.Length > 1 ? Enum.Parse<KLogLevel>(args[1]) : KLogLevel.Information;
-const int maxRooms = 1;   // single concurrent match — standard routing path, multi-room disabled
+#if KLOTHO_DEV_LOBBY
+string lobbyHost = args.Length > 2 ? args[2] : "localhost";
+int lobbyPort = args.Length > 3 ? int.Parse(args[3]) : 9999;
+#endif
+const int maxRooms = 2;   // multi-room; MUST match the lobby's SdDevIdentity.MaxRooms
 
 using var loggerFactory = KLoggerFactory.Create(builder =>
 {
@@ -25,6 +33,7 @@ using var loggerFactory = KLoggerFactory.Create(builder =>
     {
         options.FilePrefix = "SdServer";
         options.RollingSizeKB = 1024 * 1024;
+        options.FlushMode = KFlushMode.AsyncEvent;
     });
 });
 var logger = loggerFactory.CreateLogger("SdServer");
@@ -58,11 +67,38 @@ var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new SdServe
     .WithSessionConfig(sessionConfig)
     .WithDerivedSimulation(sharedRegistry)
     .Build();
+
+// Identity validator — set on the config after Build() (the IdentityValidator property is the supported
+// hook, so the core stays untouched). Gated on KLOTHO_DEV_LOBBY (must match the client): only the dev
+// lobby endpoint and keys are dev-only; a production server wires its validator unconditionally. The
+// redeem client owns a LiteNetLib connection to
+// the external dev lobby (run DevLobbyServer first); production swaps in a real ILobbyRedeemClient.
+#if KLOTHO_DEV_LOBBY
+LiteNetLibLobbyRedeemClient redeemClient = new LiteNetLibLobbyRedeemClient(logger, lobbyHost, lobbyPort);
+roomManagerConfig.IdentityValidator = SdDevIdentity.CreateValidator(
+    new BcEd25519Backend(), SdDevIdentity.PublicKey, redeemClient,
+    () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+logger.KInformation($"[SdServer] identity validator active — dev lobby {lobbyHost}:{lobbyPort}, serverId={SdDevIdentity.DevServerId}");
+#endif
+
 var roomManager = new RoomManager(transport, router, loggerFactory, roomManagerConfig);
 
 logger.KInformation($"[SdServer] listening on port {port}, maxPlayers={maxPlayers}, tickInterval={tickIntervalMs}ms");
 
+// Dedi → lobby room reporting — mirrors the identical bootstrap in SdSample/Server/Program.cs.
+#if KLOTHO_DEV_LOBBY
+var roomReporter = new SdRoomReporter(roomManager, logger, lobbyHost, lobbyPort,
+    SdDevIdentity.DevServerId, SdDevIdentity.DedicatedServerHost, port,
+    maxRooms, maxPlayers, SdDevIdentity.RoomReportIntervalMs);
+roomReporter.Start();
+logger.KInformation($"[SdServer] room reporter active — advertising {maxRooms}x{maxPlayers} to lobby {lobbyHost}:{lobbyPort}");
+#endif
+
 var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
 loop.Run();
 
+#if KLOTHO_DEV_LOBBY
+roomReporter.Dispose();
+redeemClient.Dispose();
+#endif
 logger.KInformation($"[SdServer] Server stopped.");

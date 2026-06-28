@@ -10,8 +10,6 @@
     "allowUnsafeCode": true,
     "overrideReferences": true,
     "precompiledReferences": [
-        "xpTURN.Klotho.Unsafe.dll",
-        "K4os.Compression.LZ4.dll",
         "Newtonsoft.Json.dll"
     ],
     "autoReferenced": true,

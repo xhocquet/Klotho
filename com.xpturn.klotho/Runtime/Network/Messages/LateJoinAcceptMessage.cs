@@ -17,8 +17,7 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public long SharedEpoch;
         [KlothoOrder] public long ClockOffset;
         [KlothoOrder] public int PlayerCount;
-        [KlothoOrder] public List<int> PlayerIds = new List<int>();
-        [KlothoOrder] public List<byte> PlayerConnectionStates = new List<byte>();
+        [KlothoOrder] public List<RosterEntry> Roster = new List<RosterEntry>();
 
         // --- SessionConfig fields (canonical order matches ISessionConfig / GameStartMessage) ---
 

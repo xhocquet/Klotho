@@ -137,7 +137,8 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 }
 
                 // KLSG005: Unsupported collection element type (Array or List)
-                if (field.ElementTypeName != null && field.KeyTypeName == null)
+                // Nested [KlothoSerializableStruct] elements delegate to their own codec — not in TypeMappings.
+                if (field.ElementTypeName != null && field.KeyTypeName == null && !field.ElementIsNestedSerializable)
                 {
                     if (!TypeMappings.TryGetMapping(field.ElementTypeName, out _))
                     {
@@ -246,6 +247,9 @@ namespace xpTURN.Klotho.Generator.Analyzers
 
         private const string KlothoSerializableStructAttributeName = "xpTURN.Klotho.Serialization.KlothoSerializableStructAttribute";
 
+        private static bool IsNestedSerializableType(ITypeSymbol typeSymbol)
+            => typeSymbol.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == KlothoSerializableStructAttributeName);
+
         private static void ClassifyFieldType(SerializableFieldInfo field, ITypeSymbol typeSymbol)
         {
             var fullName = typeSymbol.ToDisplayString();
@@ -276,6 +280,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                     return;
                 }
                 field.ElementTypeName = arrayType.ElementType.ToDisplayString();
+                field.ElementIsNestedSerializable = IsNestedSerializableType(arrayType.ElementType);
                 field.SizeKind = FieldSizeKind.Variable;
                 return;
             }
@@ -289,6 +294,7 @@ namespace xpTURN.Klotho.Generator.Analyzers
                 if (originalDef == "System.Collections.Generic.List<T>")
                 {
                     field.ElementTypeName = namedType.TypeArguments[0].ToDisplayString();
+                    field.ElementIsNestedSerializable = IsNestedSerializableType(namedType.TypeArguments[0]);
                     field.SizeKind = FieldSizeKind.Variable;
                     return;
                 }

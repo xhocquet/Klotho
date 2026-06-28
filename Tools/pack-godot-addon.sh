@@ -61,7 +61,6 @@ cat > "$OUT/Klotho.props" <<'PROPS'
     <Analyzer Include="$(MSBuildThisFileDirectory)Analyzers/KlothoGenerator.dll" />
     <!-- a DLL <Reference> carries no transitive NuGet deps -> declare the core's runtime deps -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="LiteNetLib" Version="2.1.4" />
   </ItemGroup>
 </Project>
@@ -93,7 +92,6 @@ cat > "$OUT/Klotho.Server.props" <<'PROPS'
     <Analyzer Include="$(MSBuildThisFileDirectory)Analyzers/KlothoGenerator.dll" />
     <!-- a DLL <Reference> carries no transitive NuGet deps -> declare the core's runtime deps -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="LiteNetLib" Version="2.1.4" />
   </ItemGroup>
 </Project>

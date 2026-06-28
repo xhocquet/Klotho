@@ -20,7 +20,9 @@ namespace xpTURN.Klotho.Godot
             IKLogger logger = null,
             NetworkMessageBase preJoinMessage = null,
             IDeviceIdProvider deviceIdProvider = null,
-            Action<KlothoConnection> onStarted = null)
+            Action<KlothoConnection> onStarted = null,
+            IPlayerIdentityProvider identityProvider = null,
+            string claimedDisplayName = null)
         {
             var tcs = new TaskCompletionSource<ConnectionResult>();
             var connection = KlothoConnection.Connect(
@@ -29,7 +31,9 @@ namespace xpTURN.Klotho.Godot
                 onFailed: ex => tcs.TrySetException(ex),
                 logger: logger,
                 preJoinMessage: preJoinMessage,
-                deviceIdProvider: deviceIdProvider);
+                deviceIdProvider: deviceIdProvider,
+                identityProvider: identityProvider,
+                claimedDisplayName: claimedDisplayName);
             onStarted?.Invoke(connection);
             return tcs.Task;
         }

@@ -779,8 +779,11 @@ namespace xpTURN.Klotho.Network.Tests
                 SharedEpoch = 1700000000000L,
                 ClockOffset = -50,
                 PlayerCount = 2,
-                PlayerIds = new List<int> { 0, 1 },
-                PlayerConnectionStates = new List<byte> { 0, 0 }
+                Roster = new List<RosterEntry>
+                {
+                    new RosterEntry { PlayerId = 0, ConnectionState = 0 },
+                    new RosterEntry { PlayerId = 1, ConnectionState = 0 }
+                }
             };
 
             var buf = new byte[original.GetSerializedSize()];
@@ -795,9 +798,9 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.AreEqual(original.SharedEpoch, deserialized.SharedEpoch);
             Assert.AreEqual(original.ClockOffset, deserialized.ClockOffset);
             Assert.AreEqual(original.PlayerCount, deserialized.PlayerCount);
-            Assert.AreEqual(2, deserialized.PlayerIds.Count);
-            Assert.AreEqual(0, deserialized.PlayerIds[0]);
-            Assert.AreEqual(1, deserialized.PlayerIds[1]);
+            Assert.AreEqual(2, deserialized.Roster.Count);
+            Assert.AreEqual(0, deserialized.Roster[0].PlayerId);
+            Assert.AreEqual(1, deserialized.Roster[1].PlayerId);
         }
 
         [Test]

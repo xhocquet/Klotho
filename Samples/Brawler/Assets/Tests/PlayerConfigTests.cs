@@ -197,8 +197,11 @@ namespace xpTURN.Klotho.Tests
                 SharedEpoch = 1000000L,
                 ClockOffset = -500L,
                 PlayerCount = 2,
-                PlayerIds = new List<int> { 0, 1 },
-                PlayerConnectionStates = new List<byte> { 0, 0 },
+                Roster = new List<RosterEntry>
+                {
+                    new RosterEntry { PlayerId = 0, ConnectionState = 0 },
+                    new RosterEntry { PlayerId = 1, ConnectionState = 0 },
+                },
                 RandomSeed = 77,
                 MaxPlayers = 4,
                 MinPlayers = 2,
@@ -235,6 +238,9 @@ namespace xpTURN.Klotho.Tests
             Assert.AreEqual(240, restored.RttSanityMaxMs, "RttSanityMaxMs roundtrip");
             Assert.AreEqual(600, restored.MinStallAbortTicks, "MinStallAbortTicks roundtrip");
             Assert.AreEqual(3000, restored.CountdownDurationMs, "CountdownDurationMs roundtrip");
+            Assert.AreEqual(2, restored.Roster.Count, "Roster count must be preserved");
+            Assert.AreEqual(0, restored.Roster[0].PlayerId, "Roster[0].PlayerId roundtrip");
+            Assert.AreEqual(1, restored.Roster[1].PlayerId, "Roster[1].PlayerId roundtrip");
             Assert.AreEqual(1, restored.PlayerConfigLengths.Count,
                 "PlayerConfigLengths count must be preserved");
             Assert.AreEqual(configLen, restored.PlayerConfigLengths[0],

@@ -41,7 +41,7 @@ namespace xpTURN.Klotho.ECS
             MemoryMarshal.Cast<byte, int>(_heap.AsSpan(_denseOffset, _slotCapacity * 4));
 
         public Span<T> ComponentsSpan =>
-            MemoryMarshal.Cast<byte, T>(_heap.AsSpan(_componentsOffset, _slotCapacity * Unsafe.SizeOf<T>()));
+            MemoryMarshal.Cast<byte, T>(_heap.AsSpan(_componentsOffset, _slotCapacity * KUnsafe.SizeOf<T>()));
 
         // For Filter iterators — a dense (entityIndex) view sliced to the active entity count.
         public ReadOnlySpan<int> DenseToSparse => DenseSpan.Slice(0, Count);

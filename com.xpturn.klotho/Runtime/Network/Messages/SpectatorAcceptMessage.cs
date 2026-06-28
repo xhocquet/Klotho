@@ -30,7 +30,14 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int RandomSeed;
         [KlothoOrder] public int CurrentTick;
         [KlothoOrder] public int LastVerifiedTick;
-        [KlothoOrder] public List<int> PlayerIds = new List<int>();
+
+        /// <summary>
+        /// Per-player roster at spectate time (PlayerId + ConnectionState + ReadyState + Account + DisplayName).
+        /// Replaces the former <c>List&lt;int&gt; PlayerIds</c>; <see cref="RosterEntry.PlayerId"/> carries the id so a
+        /// separate list would be pure duplication. Wire-format change is intentional and not backward compatible —
+        /// server and client builds must be rolled out together (single package).
+        /// </summary>
+        [KlothoOrder] public List<RosterEntry> Roster = new List<RosterEntry>();
 
         // --- SimulationConfig (canonical order matches ISimulationConfig) ---
 

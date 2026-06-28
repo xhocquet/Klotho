@@ -56,6 +56,15 @@ namespace xpTURN.Klotho.Core
         int ReconnectTimeoutMs { get; }
 
         /// <summary>
+        /// SD identity-validation timeout (milliseconds). A pending async ticket validation (lobby
+        /// redeem) is rejected if it does not complete within this window. Server-internal only — NOT
+        /// wire-propagated (clients never read it). MUST be shorter than the client connect timeout
+        /// (15s) so the server rejects with a reason before the client times out generically. SD-only;
+        /// P2P validation is synchronous, so it never parks and this bound does not apply there.
+        /// </summary>
+        int ValidationTimeoutMs { get; }
+
+        /// <summary>
         /// Maximum reconnect retry count. When a guest sends a ReconnectRequest/FullState request to the host
         /// and receives no response, it retries. Exceeding this count is treated as reconnect failure.
         /// Range: 0 or greater. 0 means a single attempt with no retries.

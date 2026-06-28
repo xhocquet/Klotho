@@ -42,6 +42,14 @@ namespace xpTURN.Klotho.Network
         /// Factory that creates the ISimulationCallbacks for each room.
         /// </summary>
         public Func<IKLogger, ISimulationCallbacks> CallbacksFactory { get; set; }
+
+        /// <summary>
+        /// Authority-side ticket validator, shared across all rooms (server-global; lobby redeem is a
+        /// server-wide concern). null = no validation (behaviour unchanged). Each BeginValidate call
+        /// is independent (carries its own SessionMagic/peer context). Injected into every room's
+        /// ServerNetworkService at creation.
+        /// </summary>
+        public IPlayerIdentityValidator IdentityValidator { get; set; }
     }
 
     /// <summary>
@@ -169,6 +177,7 @@ namespace xpTURN.Klotho.Network
             networkService.CreateRoom($"room-{roomId}", _config.MaxPlayersPerRoom);
             networkService.SetRoomId(roomId);
             networkService.MaxSpectatorsPerRoom = _config.MaxSpectatorsPerRoom;
+            networkService.SetIdentityValidator(_config.IdentityValidator); // server-global, injected before the room goes Active
 
             var room = new Room(
                 roomId, simConfig, sessionConfig, sim, commandFactory,

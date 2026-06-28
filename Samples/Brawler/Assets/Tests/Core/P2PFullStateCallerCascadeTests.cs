@@ -162,7 +162,7 @@ namespace xpTURN.Klotho.Core.Tests
         [Test]
         public void HandleFullStateReceived_ResyncMatched_ClearsBuffersAndAdvancesVerified()
         {
-            var guest = _harness.Guests[0]; // FullState 수신 측 (non-host) — corrective reset cascade 회피
+            var guest = _harness.Guests[0]; // FullState receiver (non-host) — avoids the corrective reset cascade
 
             PopulatePendingCommands(guest.Engine, count: 5);
             int inputBufferBefore = ReadInputBufferCount(guest.Engine);
@@ -205,7 +205,7 @@ namespace xpTURN.Klotho.Core.Tests
         [Test]
         public void HandleFullStateReceived_ResyncMismatched_BelowThreshold_AccumulatesDesyncCount()
         {
-            var guest = _harness.Guests[0]; // FullState 수신 측 (non-host) — corrective reset cascade 회피
+            var guest = _harness.Guests[0]; // FullState receiver (non-host) — avoids the corrective reset cascade
 
             PopulatePendingCommands(guest.Engine, count: 5);
             SetResyncState(guest.Engine, value: 1); // Requested
@@ -279,7 +279,7 @@ namespace xpTURN.Klotho.Core.Tests
         [Test]
         public void HandleFullStateReceived_UnexpectedDrop_DoesNotExecuteCascade()
         {
-            var guest = _harness.Guests[0]; // FullState 수신 측 (non-host) — corrective reset cascade 회피
+            var guest = _harness.Guests[0]; // FullState receiver (non-host) — avoids the corrective reset cascade
 
             PopulatePendingCommands(guest.Engine, count: 5);
             SetResyncState(guest.Engine, value: 0); // ResyncState.None
@@ -320,7 +320,7 @@ namespace xpTURN.Klotho.Core.Tests
         [Test]
         public void ApplyP2PLateJoinFullState_ClearsBuffersAndStartsCatchup()
         {
-            var guest = _harness.Guests[0]; // FullState 수신 측 (non-host) — corrective reset cascade 회피
+            var guest = _harness.Guests[0]; // FullState receiver (non-host) — avoids the corrective reset cascade
 
             PopulatePendingCommands(guest.Engine, count: 5);
             SetExpectingFullState(guest.Engine, true);

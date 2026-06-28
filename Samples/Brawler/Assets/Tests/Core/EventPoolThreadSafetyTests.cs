@@ -12,7 +12,7 @@ using xpTURN.Klotho.Logging;
 namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
-    /// EventPool 스레드 안전성 + ownership 진단.
+    /// EventPool thread-safety + ownership diagnostics.
     ///
     /// Pins:
     ///   (1) shared lock-guarded pool — concurrent Get/Return from many threads (the SD dedicated

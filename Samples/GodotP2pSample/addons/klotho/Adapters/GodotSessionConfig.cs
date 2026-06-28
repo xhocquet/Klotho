@@ -22,6 +22,7 @@ namespace xpTURN.Klotho.Godot
         [Export] public bool AllowLateJoin { get; set; } = true;
         [Export] public int LateJoinDelayTicks { get; set; } = 10;
         [Export] public int ReconnectTimeoutMs { get; set; } = 60000;
+        [Export] public int ValidationTimeoutMs { get; set; } = 5000;
         [Export] public int ReconnectMaxRetries { get; set; } = 3;
 
         // LateJoin / Reconnect Tuning

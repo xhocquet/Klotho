@@ -43,6 +43,8 @@ namespace xpTURN.Klotho.Core
                 ViewCallbacks = callbacks.View,
                 SimulationConfig = simulationConfig,
                 SessionConfig = sessionConfig,
+                IdentityValidator = _setup.IdentityValidator, // P2P host: validate guest tickets + its own
+                LocalIdentityTicket = _setup.IdentityProvider?.GetTicket(), // host's own ticket for self-validation
             });
             FireOnSessionCreated(session, SessionEntryKind.Host);
             return session;
@@ -220,6 +222,9 @@ namespace xpTURN.Klotho.Core
         // to pass them explicitly.
         public IKLogger Logger => _setup.Logger;
         public IDeviceIdProvider DeviceIdProvider => _setup.DeviceIdProvider;
+        // Exposed so the async wrapper can forward these to KlothoConnection.Connect on guest join.
+        public IPlayerIdentityProvider IdentityProvider => _setup.IdentityProvider;
+        public string ClaimedDisplayName => _setup.ClaimedDisplayName;
         internal Func<INetworkTransport> SpectatorTransportFactory => _setup.SpectatorTransportFactory;
 
         // True while a main-transport connect handshake (Join / Reconnect) is in flight. The driver

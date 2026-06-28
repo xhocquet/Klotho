@@ -11,10 +11,10 @@ namespace xpTURN.Klotho.Core.Tests
 {
     /// <summary>
     /// KlothoEngine.CleanupOldData transient cap unit tests.
-    ///   F-2: Initial state (`_lastVerifiedTick = -1`) — `cleanupTick > 0` 가드로 skip,
-    ///        InputBuffer / EventBuffer / `_localHashes` 변동 0
+    ///   F-2: Initial state (`_lastVerifiedTick = -1`) — skipped by the `cleanupTick > 0` guard,
+    ///        with zero change to InputBuffer / EventBuffer / `_localHashes`.
     ///   F-3: Boundary (`cleanupTick == _lastVerifiedTick`) — `ClearBefore(< cleanupTick)`
-    ///        시맨틱으로 tick `_lastVerifiedTick` 자체는 보존 (1 tick 보수적)
+    ///        semantics preserve tick `_lastVerifiedTick` itself (conservative by 1 tick).
     /// Companion to InputBufferTests `ClearBefore_NonPositiveOrFirstTick_PreservesAllEntries`
     /// — that test locks in InputBuffer's own boundary semantics, this fixture verifies the
     /// KlothoEngine integration (cap + guard + downstream cascade).

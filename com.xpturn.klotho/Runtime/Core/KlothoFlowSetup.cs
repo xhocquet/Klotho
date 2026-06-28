@@ -25,6 +25,12 @@ namespace xpTURN.Klotho.Core
         public IReconnectCredentialsStore CredentialsStore { get; set; }
         public string AppVersion { get; set; }
         public IDeviceIdProvider DeviceIdProvider { get; set; }
+        // Lobby identity for the guest connect path. Both are optional and independent.
+        public IPlayerIdentityProvider IdentityProvider { get; set; }
+        public string ClaimedDisplayName { get; set; }
+        // Authority-side ticket validator (P2P host). Optional; null = no validation (behaviour unchanged).
+        // The SD dedicated server injects its validator via the server config / RoomManager instead.
+        public IPlayerIdentityValidator IdentityValidator { get; set; }
         public IKlothoSessionObserver LifecycleObserver { get; set; }
 
         /// <summary>

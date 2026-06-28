@@ -90,6 +90,21 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public Network.IDeviceIdProvider DeviceIdProvider { get; set; } = null;
 
+        // ── Identity validation (P2P host) ──
+
+        /// <summary>
+        /// Authority-side ticket validator (P2P host). Optional; null = no validation (behaviour unchanged).
+        /// Wired onto the host KlothoNetworkService in Create. The SD dedicated server is configured
+        /// via RoomManager instead, not this setup.
+        /// </summary>
+        public Network.IPlayerIdentityValidator IdentityValidator { get; set; } = null;
+
+        /// <summary>
+        /// The P2P host's own lobby ticket, self-validated when the host adds itself to the roster.
+        /// Resolved by the flow from IdentityProvider.GetTicket(). Empty/null when no lobby. Ignored without IdentityValidator.
+        /// </summary>
+        public string LocalIdentityTicket { get; set; } = null;
+
         // ── Lifecycle Observer ──
 
         /// <summary>

@@ -694,7 +694,8 @@ namespace xpTURN.Klotho.Network
 
             LocalPlayerId = msg.PlayerId;
             _sharedClock = new SharedTimeClock(msg.SharedEpoch, msg.ClockOffset);
-            RebuildPlayerList(msg.PlayerCount, msg.PlayerIds, msg.PlayerConnectionStates);
+            // Preserve identity across the reconnect roster rebuild (IsReady stays false).
+            RebuildPlayerList(msg.Roster, useReady: false, useNames: true);
 
             _reconnectState = ReconnectState.WaitingForFullState;
             _fullStateRequestTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -705,25 +706,26 @@ namespace xpTURN.Klotho.Network
             _engine.ApplyExtraDelay(msg.RecommendedExtraDelay, ExtraDelaySource.Reconnect);
         }
 
-        private void RebuildPlayerList(int playerCount, List<int> playerIds, List<byte> connectionStates)
-            => RebuildPlayerList(playerCount, playerIds, connectionStates, null);
-
-        // readyStates lets a normal (lobby) join carry per-player IsReady so a newly joining guest sees
-        // the existing Ready flags. When null (the LateJoin and Reconnect callers) IsReady stays false.
-        private void RebuildPlayerList(int playerCount, List<int> playerIds, List<byte> connectionStates, List<byte> readyStates)
+        // useReady lets a normal (lobby) join carry per-player IsReady so a newly joining guest sees the
+        // existing Ready flags; LateJoin/Reconnect leave IsReady false (entry.ReadyState meaningful only
+        // on normal join). useNames reads the roster's authoritative identity; the LateJoin handler omits
+        // it (P2P carries identity via a separate Notification).
+        private void RebuildPlayerList(List<RosterEntry> roster, bool useReady = false, bool useNames = false)
         {
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Clear();
-            for (int i = 0; i < playerCount; i++)
+            for (int i = 0; i < roster.Count; i++)
             {
-                var player = new PlayerInfo
+                var e = roster[i];
+                _players.Add(new PlayerInfo
                 {
-                    PlayerId = playerIds[i],
-                    ConnectionState = (PlayerConnectionState)connectionStates[i],
-                    IsReady = readyStates != null && i < readyStates.Count && readyStates[i] != 0,
-                };
-                _players.Add(player);
+                    PlayerId = e.PlayerId,
+                    ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                    IsReady = useReady && e.ReadyState != 0,
+                    DisplayName = useNames ? e.DisplayName.ToString() : string.Empty,
+                    Account = useNames ? e.Account.ToString() : string.Empty,
+                });
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -824,15 +826,13 @@ namespace xpTURN.Klotho.Network
             _reconnectAcceptCache.SharedEpoch = _sharedClock.SharedEpoch;
             _reconnectAcceptCache.ClockOffset = 0;
             _reconnectAcceptCache.PlayerCount = _players.Count;
-            _reconnectAcceptCache.PlayerIds.Clear();
-            _reconnectAcceptCache.PlayerConnectionStates.Clear();
+            _reconnectAcceptCache.Roster.Clear();            // reused cache — clear the roster
             for (int i = 0; i < _players.Count; i++)
             {
-                _reconnectAcceptCache.PlayerIds.Add(_players[i].PlayerId);
                 bool isDisconnected = IsPlayerDisconnected(_players[i].PlayerId);
-                _reconnectAcceptCache.PlayerConnectionStates.Add(
-                    isDisconnected ? (byte)PlayerConnectionState.Disconnected
-                                   : (byte)PlayerConnectionState.Connected);
+                _reconnectAcceptCache.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger,
+                    isDisconnected ? (byte)PlayerConnectionState.Disconnected : (byte)PlayerConnectionState.Connected));
             }
 
             // SessionConfig block — used by the cold-start guest to rebuild SessionConfig.

@@ -38,6 +38,10 @@ namespace xpTURN.Klotho.Network
     {
         private const int NUM_SYNC_PACKETS = 5;
         private const int SYNC_TIMEOUT_MS = 5000;
+        // Routed/connected-but-not-joined peer eviction: a peer that connected (and, in multi-room, was routed
+        // via RoomHandshake) but never sent its first app message (PlayerJoin/ReconnectRequest/SpectatorJoin)
+        // holds a transport slot indefinitely. Evict after this timeout (2x SYNC_TIMEOUT_MS).
+        private const int PENDING_PEER_TIMEOUT_MS = 10000;
         private const int PING_INTERVAL_MS = 1000;
         private const int BOOTSTRAP_TIMEOUT_MS = 1000;
         private const int REJECT_TOKENS_PER_SEC = 10;
@@ -57,6 +61,21 @@ namespace xpTURN.Klotho.Network
         private readonly List<PlayerInfo> _players = new List<PlayerInfo>();
         private readonly Dictionary<int, int> _peerToPlayer = new Dictionary<int, int>();
         private readonly Dictionary<int, string> _peerDeviceIds = new Dictionary<int, string>();
+        // Per-peer claimed display name captured at PlayerJoinMessage receipt and read later by
+        // CompletePeerSync. Same lifecycle as _peerDeviceIds (cleared on reset, removed on disconnect).
+        private readonly Dictionary<int, string> _peerClaimedDisplayNames = new Dictionary<int, string>();
+        // Per-peer lobby ticket captured at PlayerJoinMessage receipt and read later by the validation
+        // hook. Same lifecycle as _peerClaimedDisplayNames (cleared on reset, removed on disconnect).
+        private readonly Dictionary<int, string> _peerTickets = new Dictionary<int, string>();
+        // Authority-side ticket validator (SD server). null = no validation (behaviour unchanged). Injected
+        // by RoomManager from the server config. A pending (async) redeem parks in _pendingValidation until
+        // the poll-drain completes it. SD only — P2P validation is synchronous.
+        private IPlayerIdentityValidator _identityValidator;
+        // Peers whose async ticket validation is in flight (slot not yet reserved). Drained each tick in
+        // Update → DrainPendingValidations, and evicted on disconnect. _pendingValidationDrainKeys is a
+        // reused scratch buffer to iterate without mutating the dict.
+        private readonly Dictionary<int, PendingValidation> _pendingValidation = new Dictionary<int, PendingValidation>();
+        private readonly List<int> _pendingValidationDrainKeys = new List<int>();
         private int _nextPlayerId = 1; // No local player on server (playerId=0)
 
         // Raw bytes cache for forwarding existing player PlayerConfigs to late-join guests
@@ -67,7 +86,12 @@ namespace xpTURN.Klotho.Network
 
         // Handshake
         private readonly Dictionary<int, PeerSyncState> _peerSyncStates = new Dictionary<int, PeerSyncState>();
-        private readonly HashSet<int> _pendingPeers = new HashSet<int>();
+        // peerId → connectedAtMs (first-message timeout anchor; see PENDING_PEER_TIMEOUT_MS).
+        private readonly Dictionary<int, long> _pendingPeers = new Dictionary<int, long>();
+
+        // Injectable clock for the pending-peer sweep (deterministic unit tests). Defaults to wall clock;
+        // Initialize may override. Only the sweep path (Update's `now` + HandlePeerConnected anchor) uses it.
+        private Func<long> _nowProvider = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         // Spectators
         private readonly List<SpectatorInfo> _spectators = new List<SpectatorInfo>();
@@ -344,6 +368,23 @@ namespace xpTURN.Klotho.Network
             _transport.OnPeerDisconnected += HandlePeerDisconnected;
         }
 
+        /// <summary>Test seam: override the clock used by the pending-peer eviction sweep (Update's `now` and
+        /// the HandlePeerConnected anchor) so the timeout can be unit-tested deterministically. No-op for a
+        /// null argument; production never calls this (default = wall clock).</summary>
+        public void SetNowProviderForTest(Func<long> nowProvider)
+        {
+            if (nowProvider != null) _nowProvider = nowProvider;
+        }
+
+        /// <summary>
+        /// Inject the authority-side ticket validator (SD server, server-global). null = no validation
+        /// (behaviour unchanged). Called by RoomManager after Initialize, before the room goes Active.
+        /// </summary>
+        public void SetIdentityValidator(IPlayerIdentityValidator validator)
+        {
+            _identityValidator = validator;
+        }
+
         private void HandleInputCollectorRejected(int peerId, int tick, int cmdTypeId, RejectionReason reason)
         {
             TryUnicastReject(peerId, tick, cmdTypeId, reason);
@@ -449,6 +490,10 @@ namespace xpTURN.Klotho.Network
             RaiseAllPlayersReadyIfChanged(prevReady);
             _peerToPlayer.Clear();
             _peerDeviceIds.Clear();
+            _peerClaimedDisplayNames.Clear();
+            _peerTickets.Clear();
+            foreach (var pv in _pendingValidation.Values) pv.Handle.Dispose();
+            _pendingValidation.Clear();
             _peerStates.Clear();
             _peerSyncStates.Clear();
             _pendingPeers.Clear();
@@ -633,18 +678,47 @@ namespace xpTURN.Klotho.Network
 
         public void Update()
         {
-            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long now = _nowProvider();
 
-            // Handshake timeout check
+            // Handshake timeout check. Skip AwaitingValidation peers: sync is done, the
+            // peer is parked on async identity validation — re-sending SyncRequest would be spurious.
             foreach (var kvp in _peerSyncStates)
             {
                 var state = kvp.Value;
-                if (!state.Completed && now - state.LastSyncSentTime > SYNC_TIMEOUT_MS)
+                if (!state.Completed && !state.AwaitingValidation && now - state.LastSyncSentTime > SYNC_TIMEOUT_MS)
                 {
                     state.Attempt++;
                     SendSyncRequest(kvp.Key, state);
                 }
             }
+
+            // Pending-peer timeout: a peer that connected/routed but never sent its first app message
+            // (PlayerJoin / ReconnectRequest / SpectatorJoin) → evict so the held transport slot is freed.
+            // Runs in every phase (incl. Playing late-join attempts). Collect-then-remove to avoid mutating
+            // during iteration; the disconnect's OnPeerDisconnected does the rest of the cleanup.
+            if (_pendingPeers.Count > 0)
+            {
+                List<int> expiredPending = null;
+                foreach (var kvp in _pendingPeers)
+                {
+                    if (now - kvp.Value > PENDING_PEER_TIMEOUT_MS)
+                        (expiredPending ??= new List<int>()).Add(kvp.Key);
+                }
+                if (expiredPending != null)
+                {
+                    for (int i = 0; i < expiredPending.Count; i++)
+                    {
+                        int pendingPeerId = expiredPending[i];
+                        _logger?.KWarning($"[ServerNetworkService] Pending peer {pendingPeerId} timed out (no join), disconnecting");
+                        _pendingPeers.Remove(pendingPeerId);
+                        _transport.DisconnectPeer(pendingPeerId);
+                    }
+                }
+            }
+
+            // Drain pending async identity validations. After the sweep / before reconnect checks;
+            // runs every tick via Engine.Update → _networkService.Update.
+            DrainPendingValidations(now);
 
             // Reconnect timeout check
             CheckDisconnectedPlayerTimeout();
@@ -838,19 +912,31 @@ namespace xpTURN.Klotho.Network
 
         private void HandleDataReceived(int peerId, byte[] data, int length)
         {
-            if (_pendingPeers.Contains(peerId))
+            if (_pendingPeers.ContainsKey(peerId))
             {
+                // Pre-auth memory-amplification guard: reject an oversized first message before
+                // Deserialize allocates per-field strings or the Ticket is retained pre-validation.
+                if (length > PlayerJoinMessage.MaxPreAuthMessageBytes)
+                {
+                    _logger?.KWarning($"[ServerNetworkService][HandleDataReceived] Oversized pre-auth message from peer {peerId}: {length}B > {PlayerJoinMessage.MaxPreAuthMessageBytes}B");
+                    _pendingPeers.Remove(peerId);
+                    DisconnectWithReason(peerId, JoinFailReason.IdentityInvalid.ToWireCode());
+                    return;
+                }
                 var firstMsg = _messageSerializer.Deserialize(data, length);
                 _pendingPeers.Remove(peerId);
                 if (firstMsg is PlayerJoinMessage playerJoin)
                 {
                     _peerDeviceIds[peerId] = playerJoin.DeviceId ?? string.Empty;
+                    // Capture now (the message is a reused singleton; CompletePeerSync reads it later).
+                    _peerClaimedDisplayNames[peerId] = RosterEntry.ClampClaimedName(playerJoin.ClaimedDisplayName);
+                    _peerTickets[peerId] = playerJoin.Ticket ?? string.Empty; // captured now; read by the validation hook later
                     // Outer capacity gate covering both the Pre-GameStart Lobby race and Post-GameStart capacity.
                     // HandleLateJoin's own gate is the second-line defense for non-dispatch callers.
                     if (EffectivePlayerCount >= MaxPlayerCapacity)
                     {
                         _logger?.KWarning($"[ServerNetworkService][HandleDataReceived] Room full, peer {peerId} rejected: gameStarted={_gameStarted}, players={_players.Count}, assigned={_assignedPlayerIdCount}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                        DisconnectWithReason(peerId, 2); // RoomFull
+                        DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                         return;
                     }
 
@@ -1233,7 +1319,8 @@ namespace xpTURN.Klotho.Network
                 RaiseAllPlayersReadyIfChanged(prevReady);
             }
 
-            // Relay to other peers
+            // Relay to other peers (and spectators, tracked separately from _peerToPlayer) so spectator
+            // ready display stays consistent with players.
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
                 foreach (var kvp in _peerToPlayer)
@@ -1241,6 +1328,8 @@ namespace xpTURN.Klotho.Network
                     if (kvp.Key != fromPeerId)
                         _transport.Send(kvp.Key, serialized.Data, serialized.Length, DeliveryMethod.Reliable);
                 }
+                for (int i = 0; i < _spectators.Count; i++)
+                    _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.Reliable);
             }
 
             // Start game when all players are ready
@@ -1405,7 +1494,23 @@ namespace xpTURN.Klotho.Network
 
         private void HandlePeerConnected(int peerId)
         {
-            _pendingPeers.Add(peerId);
+            _pendingPeers[peerId] = _nowProvider();
+        }
+
+        // Broadcast a host-confirmed player connection-state transition (disconnect / reconnect / leave)
+        // to clients and spectators so their roster connection-state display stays consistent. State is
+        // network metadata (not simulation), so recipients apply it display-only. Mirrors the P2P
+        // BroadcastPlayerState path; the server has no Broadcast helper, so iterate both sets directly.
+        private void BroadcastPlayerState(int playerId, PlayerStateChange state)
+        {
+            var msg = new PlayerStateNotificationMessage { PlayerId = playerId, State = (byte)state };
+            using (var serialized = _messageSerializer.SerializePooled(msg))
+            {
+                foreach (var kvp in _peerToPlayer)
+                    _transport.Send(kvp.Key, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+                for (int i = 0; i < _spectators.Count; i++)
+                    _transport.Send(_spectators[i].PeerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
+            }
         }
 
         private void HandlePeerDisconnected(int peerId)
@@ -1440,6 +1545,7 @@ namespace xpTURN.Klotho.Network
                             _disconnectedPlayerCount++;
                             _engine?.NotifyPlayerDisconnected(playerId);
                             OnPlayerDisconnected?.Invoke(player);
+                            BroadcastPlayerState(playerId, PlayerStateChange.Disconnected);
                             if (_matchRttAcc.TryGetValue(playerId, out var rttAcc))
                             {
                                 EmitRttMatchAggregate(rttAcc);
@@ -1462,6 +1568,7 @@ namespace xpTURN.Klotho.Network
                         }
                         else
                         {
+                            // No reconnect slot available (pool exhausted) → treat as permanent leave.
                             int prevCount = _players.Count;
                             bool prevReady = AllPlayersReady;
                             _players.Remove(player);
@@ -1470,6 +1577,7 @@ namespace xpTURN.Klotho.Network
                             OnPlayerLeft?.Invoke(player);
                             RaisePlayerCountIfChanged(prevCount);
                             RaiseAllPlayersReadyIfChanged(prevReady);
+                            BroadcastPlayerState(playerId, PlayerStateChange.Left);
                         }
                     }
                     else
@@ -1507,9 +1615,20 @@ namespace xpTURN.Klotho.Network
                 _peerToPlayer.Remove(peerId);
             }
 
+            // Proactive evict of any in-flight identity validation. Runs unconditionally (pending peers
+            // are not in _peerToPlayer). Dispose signals the validator to cancel the in-flight redeem
+            // before it burns the lobby nonce.
+            if (_pendingValidation.TryGetValue(peerId, out var pendingV))
+            {
+                pendingV.Handle.Dispose();
+                _pendingValidation.Remove(peerId);
+            }
+
             _peerStates.Remove(peerId);
             _peerSyncStates.Remove(peerId);
             _peerDeviceIds.Remove(peerId);
+            _peerClaimedDisplayNames.Remove(peerId);
+            _peerTickets.Remove(peerId);
             _rejectTokens.Remove(peerId);
 
             for (int i = _spectators.Count - 1; i >= 0; i--)
@@ -1572,7 +1691,8 @@ namespace xpTURN.Klotho.Network
                 return;
             if (!_peerSyncStates.TryGetValue(peerId, out var state))
                 return;
-            if (state.Completed || msg.Sequence != state.SyncPacketsSent || msg.Attempt != state.Attempt)
+            // AwaitingValidation: sync phase is done, async validation pending — ignore stray replies.
+            if (state.Completed || state.AwaitingValidation || msg.Sequence != state.SyncPacketsSent || msg.Attempt != state.Attempt)
                 return;
 
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -1603,7 +1723,133 @@ namespace xpTURN.Klotho.Network
             if (_gameStarted && !state.IsLateJoin)
             {
                 _logger?.KWarning($"[ServerNetworkService] Standard handshake completed after GameStart (race): peer={peerId}, dropping for LateJoin retry");
-                DisconnectWithReason(peerId, /*RoomFull*/2);
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
+                _peerSyncStates.Remove(peerId);
+                return;
+            }
+
+            // Identity validation gate — before slot reservation so a reject consumes no slot.
+            // Handles all outcomes (no-validator fallback / sync accept / sync reject / async park);
+            // FinalizeNormalJoin runs the rest of the join (inline now, or from the poll-drain later).
+            RunJoinValidation(peerId, state, isLateJoin: false);
+        }
+
+        // ── Identity validation hook + pending machinery ─────────────────────────────────────────
+
+        // Shared validation entry for all SD join-completion sites. Caller returns immediately after.
+        //   validator == null → finalize with the fallback identity (unchanged behaviour).
+        //   sync-complete handle → accept (finalize) or reject (disconnect) inline.
+        //   incomplete handle    → park in _pendingValidation; the poll-drain completes it later (SD only).
+        private void RunJoinValidation(int peerId, PeerSyncState state, bool isLateJoin)
+        {
+            if (_identityValidator == null)
+            {
+                FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: false, account: null, displayName: null);
+                return;
+            }
+
+            // Re-entry guard: a duplicate sync completion must not start a second validation.
+            if (_pendingValidation.ContainsKey(peerId))
+                return;
+
+            var handle = _identityValidator.BeginValidate(BuildIdentityRequest(peerId, isLateJoin));
+            if (handle.IsComplete)
+            {
+                var outcome = handle.Outcome;
+                handle.Dispose();
+                ApplyValidationOutcome(peerId, state, isLateJoin, outcome);
+                return;
+            }
+
+            // Async redeem in flight → park. Slot not reserved; Completed stays false so the peer still
+            // counts toward capacity while parked.
+            state.AwaitingValidation = true;
+            _pendingValidation[peerId] = new PendingValidation(handle, state, isLateJoin,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
+        private IdentityValidationRequest BuildIdentityRequest(int peerId, bool isLateJoin)
+        {
+            string ticket = _peerTickets.TryGetValue(peerId, out var t) ? t : string.Empty;
+            string claimed = _peerClaimedDisplayNames.TryGetValue(peerId, out var c) ? c : string.Empty;
+            string deviceId = _peerDeviceIds.TryGetValue(peerId, out var d) ? d : string.Empty;
+            return new IdentityValidationRequest(ticket, claimed, _sessionMagic, peerId, deviceId,
+                isLateJoin, isHostSelf: false, roomId: _roomId);
+        }
+
+        private void ApplyValidationOutcome(int peerId, PeerSyncState state, bool isLateJoin, IdentityValidationOutcome outcome)
+        {
+            if (!outcome.Accepted)
+            {
+                state.AwaitingValidation = false;
+                DisconnectWithReason(peerId, outcome.RejectWireCode);
+                _peerSyncStates.Remove(peerId);
+                return;
+            }
+            FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: true, outcome.Account, outcome.DisplayName);
+        }
+
+        private void FinalizeJoinDispatch(int peerId, PeerSyncState state, bool isLateJoin, bool validatorRan, string account, string displayName)
+        {
+            if (isLateJoin) FinalizeLateJoin(peerId, state, validatorRan, account, displayName);
+            else            FinalizeNormalJoin(peerId, state, validatorRan, account, displayName);
+        }
+
+        // Resolves the display name by priority: validated value > claimed name (only when no validator
+        // ran) > fabricated default. The fabricated default needs the reserved playerId, so it is resolved
+        // here (after slot reservation), not in the validator.
+        private string ResolveJoinDisplayName(int peerId, int newPlayerId, bool validatorRan, string validatedDisplayName)
+        {
+            if (validatorRan)
+                return string.IsNullOrEmpty(validatedDisplayName) ? $"Player{newPlayerId}" : validatedDisplayName; // claimed name ignored once verified
+            var claimed = _peerClaimedDisplayNames.TryGetValue(peerId, out var c) ? c : string.Empty;
+            return !string.IsNullOrEmpty(claimed) ? claimed : $"Player{newPlayerId}";
+        }
+
+        // Drains pending async validations once per tick (called from Update, after DrainInboundQueue so a
+        // same-tick disconnect has already evicted). Completed → accept/reject; timed out → reject.
+        private void DrainPendingValidations(long now)
+        {
+            if (_pendingValidation.Count == 0) return;
+            // Snapshot keys — completion mutates _players/_peerToPlayer and the dict.
+            _pendingValidationDrainKeys.Clear();
+            foreach (var kvp in _pendingValidation)
+                _pendingValidationDrainKeys.Add(kvp.Key);
+
+            for (int i = 0; i < _pendingValidationDrainKeys.Count; i++)
+            {
+                int peerId = _pendingValidationDrainKeys[i];
+                if (!_pendingValidation.TryGetValue(peerId, out var pending))
+                    continue; // already finalized/evicted earlier this drain
+
+                if (pending.Handle.IsComplete)
+                {
+                    var outcome = pending.Handle.Outcome;
+                    pending.Handle.Dispose();
+                    _pendingValidation.Remove(peerId);
+                    pending.State.AwaitingValidation = false;
+                    ApplyValidationOutcome(peerId, pending.State, pending.IsLateJoin, outcome);
+                }
+                else if (now - pending.BeginMs > _sessionConfig.ValidationTimeoutMs)
+                {
+                    pending.Handle.Dispose();
+                    _pendingValidation.Remove(peerId);
+                    pending.State.AwaitingValidation = false;
+                    DisconnectWithReason(peerId, JoinFailReason.IdentityValidationFailed.ToWireCode());
+                    _peerSyncStates.Remove(peerId);
+                }
+            }
+        }
+
+        private void FinalizeNormalJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName)
+        {
+            // A pending validation may complete after StartGame() flipped _gameStarted. Re-evaluate the
+            // race guard at finalize time (the inline caller already passed it, so this is a no-op there).
+            if (_gameStarted)
+            {
+                _logger?.KWarning($"[ServerNetworkService] Validation completed after GameStart (race): peer={peerId}, dropping for LateJoin retry");
+                state.AwaitingValidation = false;
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                 _peerSyncStates.Remove(peerId);
                 return;
             }
@@ -1612,15 +1858,19 @@ namespace xpTURN.Klotho.Network
                 return;
 
             state.Completed = true;
+            state.AwaitingValidation = false;
 
             state.GetBestSample(out int avgRtt, out long avgOffset);
 
             _peerToPlayer[peerId] = newPlayerId;
 
+            // Identity: validated value when a validator ran (claimed name ignored), else
+            // the claimed name, else a fabricated fallback. Account stays empty unless validated.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = newPlayerId,
-                PlayerName = $"Player{newPlayerId}",
+                DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, displayName),
+                Account = validatorRan ? (account ?? string.Empty) : string.Empty,
                 IsReady = false,
                 Ping = avgRtt
             };
@@ -1652,9 +1902,9 @@ namespace xpTURN.Klotho.Network
             // ConnectionResult, then ServerDrivenClientService.InitializeFromConnection rebuilds the list.
             for (int i = 0; i < _players.Count; i++)
             {
-                syncComplete.PlayerIds.Add(_players[i].PlayerId);
-                syncComplete.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
-                syncComplete.ReadyStates.Add(_players[i].IsReady ? (byte)1 : (byte)0);
+                syncComplete.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState,
+                    _players[i].IsReady ? (byte)1 : (byte)0));
             }
             // Seed push baseline with the handshake-time value sent in SyncCompleteMessage so the
             // first MaybePushExtraDelayUpdate compares against the value the client already applied.
@@ -1676,6 +1926,8 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 ConnectionState = (byte)newPlayer.ConnectionState,
                 IsReady = newPlayer.IsReady,
+                Account = newPlayer.Account ?? string.Empty,
+                DisplayName = newPlayer.DisplayName ?? string.Empty,
             };
             using (var serialized = _messageSerializer.SerializePooled(joinNotification))
             {
@@ -1715,7 +1967,7 @@ namespace xpTURN.Klotho.Network
             if (_spectators.Count >= _maxSpectatorsPerRoom)
             {
                 _logger?.KWarning($"[ServerNetworkService] Spectator rejected: count={_spectators.Count}, max={_maxSpectatorsPerRoom}");
-                DisconnectWithReason(peerId, /*RoomFull*/2);
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                 return;
             }
 
@@ -1740,7 +1992,11 @@ namespace xpTURN.Klotho.Network
             if (_engine?.SessionConfig != null)
                 acceptMsg.CopySessionConfigFrom(_engine.SessionConfig);
             for (int i = 0; i < _players.Count; i++)
-                acceptMsg.PlayerIds.Add(_players[i].PlayerId);
+            {
+                acceptMsg.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState,
+                    _players[i].IsReady ? (byte)1 : (byte)0));
+            }
 
             using (var serialized = _messageSerializer.SerializePooled(acceptMsg))
             {
@@ -1801,6 +2057,7 @@ namespace xpTURN.Klotho.Network
                         OnPlayerLeft?.Invoke(player);
                         RaisePlayerCountIfChanged(prevCount);
                         RaiseAllPlayersReadyIfChanged(prevReady);
+                        BroadcastPlayerState(playerId, PlayerStateChange.Left);
                     }
                 }
             }
@@ -1891,7 +2148,7 @@ namespace xpTURN.Klotho.Network
                 if (newPlayerId < 0)
                 {
                     _logger?.KError($"[ServerNetworkService] FindSmallestUnusedPlayerId returned -1: peer={peerId}, players={_players.Count}, pending={CountPendingHandshakes()}, max={MaxPlayerCapacity}");
-                    DisconnectWithReason(peerId, /*RoomFull*/2);
+                    DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                     _peerSyncStates.Remove(peerId);
                     return false;
                 }
@@ -1901,7 +2158,7 @@ namespace xpTURN.Klotho.Network
                 if (Math.Max(_assignedPlayerIdCount, _nextPlayerId - 1) >= MaxPlayerCapacity)
                 {
                     _logger?.KError($"[ServerNetworkService] Post-GameStart slot overflow: assigned={_assignedPlayerIdCount}, nextId={_nextPlayerId}, max={MaxPlayerCapacity}, peer={peerId}");
-                    DisconnectWithReason(peerId, /*RoomFull*/2);
+                    DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode());
                     _peerSyncStates.Remove(peerId);
                     newPlayerId = -1;
                     return false;
@@ -1910,6 +2167,24 @@ namespace xpTURN.Klotho.Network
                 _assignedPlayerIdCount++;
             }
             return true;
+        }
+
+        // Parked async identity validation. BeginMs is settable so tests can backdate it to trigger the
+        // timeout deterministically without a real wait.
+        private sealed class PendingValidation
+        {
+            public readonly IIdentityValidation Handle;
+            public readonly PeerSyncState State;
+            public readonly bool IsLateJoin;
+            public long BeginMs;
+
+            public PendingValidation(IIdentityValidation handle, PeerSyncState state, bool isLateJoin, long beginMs)
+            {
+                Handle = handle;
+                State = state;
+                IsLateJoin = isLateJoin;
+                BeginMs = beginMs;
+            }
         }
 
         private class MatchRttAccumulator

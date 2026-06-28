@@ -28,6 +28,11 @@ namespace xpTURN.Klotho.Core
         public int PlayerCount =>
             NetworkService?.PlayerCount ?? _spectatorService?.PlayerCount ?? 0;
 
+        // Full roster — mode-agnostic (mirrors PlayerCount): player session reads NetworkService,
+        // spectator reads SpectatorService.Players (SpectatorPlayerInfo : IPlayerInfo).
+        public System.Collections.Generic.IReadOnlyList<Network.IPlayerInfo> Players =>
+            NetworkService?.Players ?? _spectatorService?.Players ?? System.Array.Empty<Network.IPlayerInfo>();
+
         // Network lifecycle reads — lifted onto the facade so callers depend on IKlothoSession,
         // not the low-level NetworkService surface. Null-safe across the create/teardown window.
         public SessionPhase Phase => NetworkService?.Phase ?? SessionPhase.None;
@@ -437,6 +442,16 @@ namespace xpTURN.Klotho.Core
                 {
                     setup.Logger?.KWarning($"[KlothoSession] MinPlayers clamped: {src.MinPlayers} -> {clampedMinPlayers} (range: 1..{src.MaxPlayers})");
                 }
+                // Server-internal (host-only, non-wire) async-validation window. Floor keeps it above the
+                // drain's strict '>' compare (0/negative would reject every pending validation next tick);
+                // ceiling keeps it below the client connect timeout so the server rejects with a reason first.
+                const int ValidationFloorMs = 1000;
+                int validationCeilMs = KlothoConnection.DEFAULT_CONNECT_TIMEOUT_MS - 1000;
+                int clampedValidationTimeout = System.Math.Clamp(src.ValidationTimeoutMs, ValidationFloorMs, validationCeilMs);
+                if (clampedValidationTimeout != src.ValidationTimeoutMs)
+                {
+                    setup.Logger?.KWarning($"[KlothoSession] ValidationTimeoutMs clamped: {src.ValidationTimeoutMs} -> {clampedValidationTimeout} (range: {ValidationFloorMs}..{validationCeilMs})");
+                }
                 sessionConfig = new SessionConfig
                 {
                     RandomSeed = isGuest
@@ -448,6 +463,7 @@ namespace xpTURN.Klotho.Core
                     AllowLateJoin = src.AllowLateJoin,
                     LateJoinDelayTicks = src.LateJoinDelayTicks,
                     ReconnectTimeoutMs = src.ReconnectTimeoutMs,
+                    ValidationTimeoutMs = clampedValidationTimeout,
                     ReconnectMaxRetries = src.ReconnectMaxRetries,
                     LateJoinDelaySafety = src.LateJoinDelaySafety,
                     RttSanityMaxMs = src.RttSanityMaxMs,
@@ -494,6 +510,15 @@ namespace xpTURN.Klotho.Core
                     p2pCreds.SetReconnectCredentialsStore(setup.CredentialsStore, setup.AppVersion, setup.DeviceIdProvider);
                 else if (networkService is ServerDrivenClientService sdCreds)
                     sdCreds.SetReconnectCredentialsStore(setup.CredentialsStore, setup.AppVersion, setup.DeviceIdProvider);
+            }
+
+            // 5.2 Authority-side identity validator wire — P2P host only. The SD dedicated server
+            //     (ServerNetworkService) is constructed in RoomManager, not here, and is injected there.
+            //     A P2P guest's service never reaches CompletePeerSync, so setting it is harmless.
+            if (setup.IdentityValidator != null && networkService is KlothoNetworkService p2pVal)
+            {
+                p2pVal.SetIdentityValidator(setup.IdentityValidator);
+                p2pVal.SetLocalIdentityTicket(setup.LocalIdentityTicket); // host validates its own ticket at self-add
             }
 
             // 5.5 Late Join / cold-start Reconnect seed — restore _players / _sessionMagic / _randomSeed.
@@ -582,7 +607,7 @@ namespace xpTURN.Klotho.Core
 
             var serializer = new MessageSerializer();
             int offset = 0;
-            int count = System.Math.Min(msg.PlayerConfigLengths.Count, msg.PlayerIds.Count);
+            int count = System.Math.Min(msg.PlayerConfigLengths.Count, msg.Roster.Count);
             for (int i = 0; i < count; i++)
             {
                 int len = msg.PlayerConfigLengths[i];
@@ -590,7 +615,7 @@ namespace xpTURN.Klotho.Core
 
                 var configMsg = serializer.Deserialize(msg.PlayerConfigData, len, offset) as PlayerConfigBase;
                 if (configMsg != null)
-                    engine.HandlePlayerConfigReceived(msg.PlayerIds[i], configMsg);
+                    engine.HandlePlayerConfigReceived(msg.Roster[i].PlayerId, configMsg);
                 offset += len;
             }
         }

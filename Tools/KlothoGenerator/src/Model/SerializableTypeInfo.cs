@@ -53,5 +53,10 @@ namespace xpTURN.Klotho.Generator.Model
         public string ElementTypeName { get; set; }
         public string KeyTypeName { get; set; }
         public string ValueTypeName { get; set; }
+
+        /// <summary>Collection element (List&lt;T&gt; / T[]) is a [KlothoSerializableStruct] —
+        /// serialize each element by delegating to its generated codec. Orthogonal to
+        /// <see cref="IsNestedSerializable"/> (which is for a direct nested struct field).</summary>
+        public bool ElementIsNestedSerializable { get; set; }
     }
 }

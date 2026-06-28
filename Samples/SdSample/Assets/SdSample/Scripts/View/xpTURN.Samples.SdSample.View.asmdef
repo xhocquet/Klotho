@@ -10,6 +10,7 @@
         "xpTURN.Klotho.Runtime.Unity",
         "xpTURN.Klotho.LiteNetLib",
         "xpTURN.Klotho.Gameplay",
+        "xpTURN.Klotho.Identity.SdRef",
         "LiteNetLib",
         "Unity.InputSystem",
         "UniTask"

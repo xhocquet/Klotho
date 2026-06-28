@@ -22,6 +22,6 @@ namespace xpTURN.Klotho.ECS
     public partial struct MatchEndStateComponent : IComponent
     {
         public bool Ended;
-        public int WinnerPlayerId;     // -1 = draw / no winner (IMatchEndEvent 와 동형)
+        public int WinnerPlayerId;     // -1 = draw / no winner (same shape as IMatchEndEvent)
     }
 }

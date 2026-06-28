@@ -248,7 +248,7 @@ namespace xpTURN.Klotho.Input.Tests
 
         #endregion
 
-        #region Seal guard — silent desync 마지막 차단막
+        #region Seal guard — last line of defense against silent desync
 
         [Test]
         public void SealEmpty_MarksTickPlayerPair_IsSealedReturnsTrueForExactMatchOnly()

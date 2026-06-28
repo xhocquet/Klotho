@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.CompilerServices;
 
 namespace xpTURN.Klotho.ECS.FSM
 {
@@ -14,7 +13,7 @@ namespace xpTURN.Klotho.ECS.FSM
         /// <summary>Reinterpret a host component's first field as its HFSMState (mutable).</summary>
         private static unsafe ref HFSMState StateOf<TComp>(ref Frame frame, EntityRef entity)
             where TComp : unmanaged, IComponent, IHFSMHost
-            => ref Unsafe.As<TComp, HFSMState>(ref frame.Get<TComp>(entity));
+            => ref KUnsafe.As<TComp, HFSMState>(ref frame.Get<TComp>(entity));
 
         public static unsafe void Init<TComp>(ref Frame frame, EntityRef entity, int rootId)
             where TComp : unmanaged, IComponent, IHFSMHost
@@ -98,7 +97,7 @@ namespace xpTURN.Klotho.ECS.FSM
             where TComp : unmanaged, IComponent, IHFSMHost
         {
             if (!frame.Has<TComp>(entity)) return -1;
-            ref readonly HFSMState fsm = ref Unsafe.As<TComp, HFSMState>(ref Unsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
+            ref readonly HFSMState fsm = ref KUnsafe.As<TComp, HFSMState>(ref KUnsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
             if (fsm.ActiveDepth <= 0) return -1;
             fixed (int* ids = fsm.ActiveStateIds)
                 return ids[fsm.ActiveDepth - 1];
@@ -133,7 +132,7 @@ namespace xpTURN.Klotho.ECS.FSM
             where TComp : unmanaged, IComponent, IHFSMHost
         {
             if (!frame.Has<TComp>(entity)) return 0;
-            ref readonly HFSMState fsm = ref Unsafe.As<TComp, HFSMState>(ref Unsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
+            ref readonly HFSMState fsm = ref KUnsafe.As<TComp, HFSMState>(ref KUnsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
             int depth = fsm.ActiveDepth;
             fixed (int* ids = fsm.ActiveStateIds)
                 for (int i = 0; i < depth; i++) output[i] = ids[i];
@@ -144,7 +143,7 @@ namespace xpTURN.Klotho.ECS.FSM
             where TComp : unmanaged, IComponent, IHFSMHost
         {
             if (!frame.Has<TComp>(entity)) return 0;
-            ref readonly HFSMState fsm = ref Unsafe.As<TComp, HFSMState>(ref Unsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
+            ref readonly HFSMState fsm = ref KUnsafe.As<TComp, HFSMState>(ref KUnsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
             int count = fsm.PendingEventCount;
             fixed (int* evs = fsm.PendingEventIds)
                 for (int i = 0; i < count; i++) output[i] = evs[i];
@@ -160,7 +159,7 @@ namespace xpTURN.Klotho.ECS.FSM
                 rootId = -1; activeDepth = 0; stateElapsedTicks = 0; pendingEventCount = 0;
                 return;
             }
-            ref readonly HFSMState fsm = ref Unsafe.As<TComp, HFSMState>(ref Unsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
+            ref readonly HFSMState fsm = ref KUnsafe.As<TComp, HFSMState>(ref KUnsafe.AsRef(in frame.GetReadOnly<TComp>(entity)));
             rootId = fsm.RootId;
             activeDepth = fsm.ActiveDepth;
             stateElapsedTicks = fsm.StateElapsedTicks;

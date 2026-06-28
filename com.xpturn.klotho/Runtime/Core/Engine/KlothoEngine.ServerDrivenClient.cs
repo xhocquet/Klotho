@@ -248,8 +248,8 @@ namespace xpTURN.Klotho.Core
 #endif
 
                 // Pause-grace auto-stop — emit StopCommand instead of game OnPollInput.
-                // gate식을 P2P 와 통일 (latch START + state RELEASE, KlothoEngine.cs 참조).
-                // SD 의 Removed 는 inert 이나 게이트 의미를 일치시킨다.
+                // Unify the gate expression with P2P (latch START + state RELEASE, see KlothoEngine.cs).
+                // SD's Removed is inert, but keep the gate semantics consistent.
                 if (_matchEndedDispatched
                     && _simulation.IsMatchEndedState
                     && _sessionConfig.EndGracePolicy == EndGracePolicy.Pause)

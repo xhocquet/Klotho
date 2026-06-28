@@ -182,8 +182,12 @@ namespace xpTURN.Klotho.Network.Tests
                 SharedEpoch = 1_000_000L,
                 ClockOffset = -250L,
                 PlayerCount = 3,
-                PlayerIds = new System.Collections.Generic.List<int> { 1, 2, 3 },
-                PlayerConnectionStates = new System.Collections.Generic.List<byte> { 0, 0, 0 },
+                Roster = new System.Collections.Generic.List<RosterEntry>
+                {
+                    new RosterEntry { PlayerId = 1, ConnectionState = 0 },
+                    new RosterEntry { PlayerId = 2, ConnectionState = 0 },
+                    new RosterEntry { PlayerId = 3, ConnectionState = 0 },
+                },
                 RandomSeed = 77,
                 MaxPlayers = 4,
                 AllowLateJoin = true,

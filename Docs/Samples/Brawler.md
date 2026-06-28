@@ -51,7 +51,7 @@ See [Brawler.I.HowToRun.md](Brawler.I.HowToRun.md) for step-by-step instructions
 | **EntityViewFactory + EntityViewUpdater + EntityView** | Automatic entity ↔ Unity GameObject mapping |
 | **EntityViewComponent** | Animator/VFX submodules (prefab children) |
 | **BindBehaviour / ViewFlags** | Local (Predicted) vs. remote (Verified + SnapshotInterp) render branching |
-| **IReplaySystem** | Match record/playback with LZ4 compression |
+| **IReplaySystem** | Match record/playback |
 | **SyncTestRunner** | Determinism regression testing |
 | **IKlothoNetworkService / ServerDrivenClientService** | Both P2P and Server-Driven modes |
 
@@ -655,7 +655,7 @@ runner.Run(totalTicks: 600);   // ~30 seconds
 ```csharp
 session.Engine.StartRecording();
 // ... gameplay ...
-session.Engine.SaveReplayToFile("match_20260424.replay");  // LZ4 compression auto-applied
+session.Engine.SaveReplayToFile("match_20260424.replay");
 
 // Playback
 session.Engine.StartReplayFromFile("match_20260424.replay");

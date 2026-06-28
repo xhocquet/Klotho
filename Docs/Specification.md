@@ -80,6 +80,7 @@ Direct dependencies on any engine API (`MonoBehaviour` / `UnityEngine.*`, `Node`
 
 Simulation transport (UDP) and game services (RPC) are separated so each layer uses the optimal protocol and delivery method.
 The Klotho engine layer is pure C#, so the same binary can be shared by client and server.
+The lobby→session credential handoff that crosses this boundary (ticket carriage, validation hooks, identity propagation) is specified in Player Identity Handoff (§9.6).
 
 ---
 
@@ -146,7 +147,6 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │   ├── State/          IStateSnapshot, IStateSnapshotManager, RingSnapshotManager
 │   │   ├── Serialization/  SpanWriter, SpanReader, SerializationBuffer, ISpanSerializable
 │   │   ├── Replay/         IReplaySystem, ReplayRecorder, ReplayPlayer, ReplayData
-│   │   │                   (LZ4 compression — K4os.Compression.LZ4, vendored)
 │   │   ├── ECS/            Frame, EntityManager, ComponentStorage, ComponentStorageRegistry,
 │   │   │                   EntityPrototypeRegistry, IEntityPrototype, SystemRunner,
 │   │   │                   FrameRingBuffer, EcsSimulation, FixedString32/64,
@@ -160,9 +160,7 @@ The Klotho engine layer is pure C#, so the same binary can be shared by client a
 │   │   │                   DeterministicRandom, FPAnimationCurve, etc.
 │   │   ├── LiteNetLib/     LiteNetLibTransport — INetworkTransport implementation
 │   │   │                   (xpTURN.Klotho.LiteNetLib, noEngineReferences)
-│   │   └── ThirdParty/     vendored: LiteNetLib.v2.1.4 (UDP networking),
-│   │                       K4os.Compression.LZ4.v1.3.8 (replay compression),
-│   │                       System.Runtime.CompilerServices.Unsafe.v6.1.2 (Span primitives)
+│   │   └── ThirdParty/     vendored: LiteNetLib.v2.1.4 (UDP networking)
 │   ├── Unity/              Unity adapter — USimulationConfig, USessionConfig, EcsDebugBridge,
 │   │                       View/ (EntityView, EntityViewComponent, EntityViewFactory,
 │   │                              EntityViewUpdater, IEntityViewPool, DefaultEntityViewPool,
@@ -992,8 +990,8 @@ INetworkTransport:
 | LeaveRoom | 11 | Leave a room |
 | PlayerReady | 12 | Player ready state |
 | GameStart | 13 | Game start + config delivery |
-| PlayerJoin | 14 | Player-join notification |
-| JoinReject | 15 | Room-join rejection |
+| PlayerJoin | 14 | Player-join notification. Carries the optional lobby `Ticket` (opaque base64url credential) and an unverified `ClaimedDisplayName` (no-lobby nickname) — see Player Identity Handoff (§9.6) |
+| JoinReject | 15 | Room-join rejection. `Reason` is a wire byte: room codes 1~5, identity codes 6~11 — distinct from the client-local `JoinFailReason` enum (mapped by `FromJoinReject`); see §9.6 |
 | **Command** | | |
 | Command | 20 | Player input command |
 | CommandAck | 21 | Command receipt ack |
@@ -1168,6 +1166,8 @@ Both host and guest peers run the watchdog locally — either can self-abort whe
 | OnPlayerCountChanged | `Action<int>` | Active player count changed (joins, leaves, late-joins). Surfaced to the game as `IKlothoSessionObserver.OnPlayerCountChanged`. `ISpectatorService.OnPlayerCountChanged` is the parallel surface for spectator sessions; the session forwards either source to the same observer callback |
 | OnAllPlayersReadyChanged | `Action<bool>` | All-players-ready gate flipped (true when every active player has ready-signaled; false on subsequent join). Surfaced to the game as `IKlothoSessionObserver.OnAllPlayersReadyChanged` |
 
+`IPlayerInfo` (the argument to the player events above) exposes `PlayerId`, `DisplayName`, `Account`, `IsReady`, `Ping`, `ConnectionState`. `DisplayName` / `Account` are the authoritative identity — see Player Identity Handoff (§9.6).
+
 ### 9.6 Extended Network Subsystems
 
 #### Spectator System
@@ -1224,6 +1224,58 @@ Server ──► InputAck(82) + VerifiedState(81) [confirmed state/hash included
 - `ServerDrivenClientService` — client side: input transmission, server-state receipt
 - `Room / RoomManager / RoomRouter` — multi-room: a single server managing multiple independent game sessions
 
+#### Player Identity Handoff
+
+Carries a lobby-issued credential into the session, validates it at the trust boundary, and propagates the authoritative identity to every peer. Fully **opt-in**: with no provider/validator configured the path is inert and behavior is unchanged (no-lobby / LAN / prototype). The core only **carries, hooks, and propagates** — ticket signing, lobby redeem, and crypto live in the Game Service Layer (reference implementations under `Samples/IdentityP2pRef` / `Samples/IdentitySdRef`), per the layer separation (§Network Layer Separation).
+
+Identity surface on `IPlayerInfo`: `Account` (stable id, invariant across sessions) and `DisplayName` (authoritative display name) — both default to `""` when no lobby is present, and are distinct from `DeviceId` (reconnect fingerprint; never interchanged).
+
+**Carriage** — `PlayerJoinMessage` (14):
+- `Ticket` — opaque base64url credential (the core never parses it), presented to the host (P2P) / server (SD).
+- `ClaimedDisplayName` — unverified client-claimed nickname; adopted **only when no validator is present** (LAN/dev). A validator always ignores it (spoof-proof); `Account` is never claimable.
+
+**Validation hook** — `IPlayerIdentityValidator.BeginValidate(in IdentityValidationRequest)` is invoked at `CompletePeerSync`, **before** slot reservation (a reject consumes no slot). It returns an `IIdentityValidation` handle the core polls per tick (`IsComplete` → `Outcome`), so an online redeem runs off the network loop without blocking it.
+
+- **SD (online)** — local first-pass (signature + expiry) rejects obvious forgeries, then a lobby `redeem` round-trip is the authority (nonce consume, real-time ban, match binding).
+- **P2P (offline)** — the host verifies the lobby signature + expiry + `sessionId` + a session-scoped nonce; guests trust the host's verdict (**semi-trust**: the host is the single verifier and the original ticket is not propagated).
+- **Host self** — the host validates its own ticket; a host-self reject downgrades to the `"Host"` fallback (the host cannot kick itself).
+
+`IdentityValidationOutcome.Accept(account, displayName)` overlays the authoritative identity; `Reject(wireCode)` sends `JoinReject` then disconnects.
+
+**Reject reason codes** — the disconnect-payload **wire byte** and the client-local `JoinFailReason` enum are **distinct numbering schemes**, mapped by `JoinFailReason.FromJoinReject`:
+
+| Meaning | Wire byte | `JoinFailReason` enum |
+| ---- | ---- | ---- |
+| (room reasons) | 1~5 | 7~11 |
+| IdentityInvalid (bad signature / format / empty-or-oversize account) | 6 | 12 |
+| IdentityExpired | 7 | 13 |
+| IdentitySessionMismatch (cross-match / wrong room) | 8 | 14 |
+| IdentityRejected (redeem deny / ban / consumed nonce) | 9 | 15 |
+| IdentityRequired (validator present, no ticket) | 10 | 16 |
+| IdentityValidationFailed (transport fault / redeem timeout) | 11 | 17 |
+| unmapped | 0 / other | Unknown |
+
+A redeem-returned code outside 6~11 is clamped to 9 (`IdentityRejected`) — a trust boundary so a buggy lobby cannot make the client misread the disconnect as a retryable room reason.
+
+**Propagation** — the authoritative `Account` / `DisplayName` ride the existing roster path as a unified `RosterEntry` (`PlayerId / ConnectionState / ReadyState / Account / DisplayName`), which **replaces** the former index-parallel lists on `SyncComplete` (52), `LateJoinAccept` (73), `ReconnectAccept` (71), `SpectatorAccept` (61) and the in-memory `ConnectionResult`. Per-join notifications `PlayerJoinNotification` / `LateJoinNotification` (75) carry scalar `Account` / `DisplayName`. The name fields are encoded as `FixedString64` (62 UTF-8 bytes); a longer value is truncated at a char boundary by `RosterEntry.ToFixedName` with a build warning + dev assert (not expected — the validators reject an empty or >62-byte account at the source).
+
+**Reconnect** — identity is **not** re-validated on reconnect (the nonce is one-time and the ticket may have expired). The authority caches `{account, displayName}` keyed by session slot at first validation and restores it after the reconnect auth gate (`SessionMagic`) passes; the cache is evicted at session end.
+
+**Lobby protocol (Game Service Layer, recommended)** — the core does not implement this; the reference validators follow it:
+
+```
+issueTicket  (lobby → client, on login / match):  req {authToken, matchId} → res {ticket, endpoint, roomId, mode}
+redeemTicket (SD server → lobby):                 req {ticket, sessionId, serverId, roomId}
+                                                  → res {ok, account, displayName} | {ok:false, reason}
+```
+
+- Ticket = signed payload `{account, displayName, sessionId, issuedAt, expiresAt, nonce}` + signature (Ed25519; the lobby public key is distributed to clients/servers). `issuedAt` is carried but not checked — the operative time bound is `expiresAt > now`.
+- SD redeem is authoritative: the nonce is consumed with an **idempotency window** (a repeat within the window returns the cached result, so a player who passed validation but dropped before slot reservation recovers on rejoin; beyond the window it is a replay reject). Match binding uses the ticket's own `sessionId` as authority (the `sessionId` arg is a cross-check hint); the lobby rejects a match not assigned to the redeeming `serverId`.
+- **roomId trust (SD multi-room)** — on a server hosting several rooms, `roomId` is a **client-asserted routing hint** (carried in `RoomHandshakeMessage`, sent pre-join with no access control — a client can route to any in-range room, and an unknown one is lazily created), **not** an authority. Trust comes from the signed `sessionId` being bound to a `(serverId, roomId)` in the lobby's assignment ledger: the validator carries the *routed* room (`IdentityValidationRequest.RoomId`) into the redeem, and the lobby cross-checks it against the bound room — a mismatch is `IdentitySessionMismatch` (wire 8), with **no slot consumed** (the hook runs before slot reservation). The binding is **per match** (`sessionId` = matchId; all players of a match share one room). Single-room SD binds to room `0`; P2P is not multi-room and passes a `-1` sentinel the validator ignores (the `roomId` field is append-only opt-in — a validator that does not read it is unaffected).
+- P2P uses signature verification only (offline, no network) — no real-time ban, so a short `expiresAt` is recommended.
+
+**Builder** — guest `WithLobbyIdentity(IPlayerIdentityProvider)` supplies the ticket via `GetTicket()`; host/server `WithIdentityValidator(IPlayerIdentityValidator)`. These are independent opt-in features (no hard inter-dependency); `Build()` emits an advisory when a validator has no host/server entry point or a provider has no guest entry point.
+
 ---
 
 ## 10. Replay System
@@ -1246,10 +1298,9 @@ Idle → Playing → Paused → Playing
 
 ### 10.2 ReplayData File Format
 
-A file may be stored in either of two formats. The loader (`ReplaySystem`) distinguishes uncompressed/compressed by the leading 4 bytes `RPLY` magic.
+The file is stored uncompressed, self-framed by the leading 4 bytes `RPLY` magic; the loader (`ReplaySystem`) requires it.
 
-- **Uncompressed**: leading 4 bytes `RPLY` (0x52504C59) followed by the payload below
-- **LZ4-compressed**: the same payload wrapped by `K4os.Compression.LZ4.LZ4Pickler` (no RPLY magic — Pickler header instead)
+- **Format**: leading 4 bytes `RPLY` (0x52504C59) followed by the payload below
 
 Payload:
 

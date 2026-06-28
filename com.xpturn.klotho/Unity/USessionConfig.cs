@@ -23,6 +23,7 @@ namespace xpTURN.Klotho
         [field: SerializeField] public bool AllowLateJoin { get; set; } = true;
         [field: SerializeField] public int LateJoinDelayTicks { get; set; } = 10;
         [field: SerializeField] public int ReconnectTimeoutMs { get; set; } = 60000;
+        [field: SerializeField] public int ValidationTimeoutMs { get; set; } = 5000;
         [field: SerializeField] public int ReconnectMaxRetries { get; set; } = 3;
 
         [field: Header("LateJoin / Reconnect Tuning")]

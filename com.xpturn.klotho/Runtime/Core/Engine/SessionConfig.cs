@@ -35,6 +35,9 @@ namespace xpTURN.Klotho.Core
         public int ReconnectTimeoutMs { get; set; } = 60000;
 
         /// <inheritdoc />
+        public int ValidationTimeoutMs { get; set; } = 5000;
+
+        /// <inheritdoc />
         public int ReconnectMaxRetries { get; set; } = 3;
 
         // --- LateJoin / Reconnect Tuning ---

@@ -21,7 +21,8 @@ namespace xpTURN.Klotho.Network
     public interface IPlayerInfo
     {
         int PlayerId { get; }
-        string PlayerName { get; }
+        string DisplayName { get; }
+        string Account { get; }
         bool IsReady { get; }
         int Ping { get; }
         PlayerConnectionState ConnectionState { get; }

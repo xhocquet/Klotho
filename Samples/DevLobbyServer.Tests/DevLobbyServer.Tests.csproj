@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>xpTURN.Samples.DevLobby.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Core DLL (SpanWriter / LiteNetLib referenced by the linked IdentitySdRef sources). -->
+  <Import Project="../GodotSdSample/addons/klotho/Klotho.Server.props" />
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The lobby decision core under test, plus the shared identity sources and the lobby's
+         private-seed provisioning (SdDevLobby) — same compile set the DevLobbyServer process links. -->
+    <Compile Include="../IdentityP2pRef/Runtime/*.cs" Link="IdentityP2pRef/%(Filename)%(Extension)" />
+    <Compile Include="../IdentitySdRef/Runtime/*.cs" Link="IdentitySdRef/%(Filename)%(Extension)" />
+    <Compile Include="../DevLobbyServer/SdDevLobby.cs" Link="SdDevLobby.cs" />
+  </ItemGroup>
+</Project>

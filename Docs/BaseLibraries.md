@@ -114,32 +114,6 @@ Third-party libraries shipped as source under [`com.xpturn.klotho/Runtime/ThirdP
 
 ---
 
-### K4os.Compression.LZ4
-
-| Item | Contents |
-| ---- | ---- |
-| Purpose | High-speed LZ4 block / frame compression |
-| GitHub | <https://github.com/MiloszKrajewski/K4os.Compression.LZ4> |
-| Version | 1.3.8 (vendored as [`Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/`](../com.xpturn.klotho/Runtime/ThirdParty/K4os.Compression.LZ4.v1.3.8/)) |
-| License | MIT |
-| Assembly | `K4os.Compression.LZ4` |
-
-**Klotho usage**: Replay-file compression / decompression in `ReplaySystem`. Used on the compressed-stream path (distinguished from the uncompressed `RPLY` magic-number path).
-
----
-
-### System.Runtime.CompilerServices.Unsafe
-
-| Item | Contents |
-| ---- | ---- |
-| Purpose | Unsafe-cast primitives for high-performance interop |
-| Version | 6.1.2 (vendored as [`Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/`](../com.xpturn.klotho/Runtime/ThirdParty/System.Runtime.CompilerServices.Unsafe.v6.1.2/)) |
-| Assembly | `System.Runtime.CompilerServices.Unsafe` |
-
-**Klotho usage**: Backing for `SpanWriter/Reader` ref-struct primitives and zero-copy component-storage reinterpretation.
-
----
-
 ## D. Standard Unity Packages
 
 Unity packages declared in [`com.xpturn.klotho/package.json`](../com.xpturn.klotho/package.json) `dependencies` (auto-resolved from the Unity registry).
@@ -163,11 +137,10 @@ The Godot distribution wires its runtime dependencies as **NuGet `PackageReferen
 | Dependency | Version | Note |
 | ---- | ---- | ---- |
 | `Newtonsoft.Json` | 13.0.3 | DataAsset JSON (vs Unity's `com.unity.nuget.newtonsoft-json`) |
-| `K4os.Compression.LZ4` | 1.3.8 | Replay compression (vendored as source on Unity) |
 | `LiteNetLib` | 2.1.4 | UDP transport (vendored as source on Unity) |
 | `GodotSharp` | (project's) | Adapter compiles against the consumer's own GodotSharp (source-only) |
 
-> On Unity, `K4os.Compression.LZ4` / `LiteNetLib` ship as **vendored source** under `Runtime/ThirdParty/` (§C); on Godot the same three managed libraries arrive as NuGet packages. The Godot core DLL is built with the vendored LiteNetLib excluded so the NuGet `2.1.4` swaps in cleanly.
+> On Unity, `LiteNetLib` ships as **vendored source** under `Runtime/ThirdParty/` (§C); on Godot it arrives as a NuGet package. The Godot core DLL is built with the vendored LiteNetLib excluded so the NuGet `2.1.4` swaps in cleanly.
 
 ---
 
@@ -182,14 +155,11 @@ xpTURN.Klotho.Logging.Unity          ← + Klotho.Logging (UnityDebugSink — Un
 UniTask                              ← Unity-side only (Godot uses standard Task — no equivalent dependency)
 
 LiteNetLib (vendored)                ← standalone (pure C#)
-K4os.Compression.LZ4 (vendored)      ← standalone (pure C#)
-System.Runtime.CompilerServices.Unsafe (vendored)  ← standalone
 
-xpTURN.Klotho.Runtime                ← + Polyfill, Klotho.Logging (noEngineReferences)
+xpTURN.Klotho.Runtime                ← + Polyfill, Klotho.Logging (noEngineReferences; low-level Unsafe helpers are in-source via KUnsafe — no external dep)
 xpTURN.Klotho.Runtime.Unity          ← + Klotho.Runtime, Klotho.Logging.Unity, UniTask, InputSystem
 xpTURN.Klotho.Runtime.Godot          ← + Klotho.Runtime, GodotSharp (Godot~/Adapters/**, source-only, net8.0;
                                          folds its console sink GodotDebugSink/GodotLogSink — no separate Logging.Godot)
-xpTURN.Klotho.Runtime (Replay path)  ← + K4os.Compression.LZ4 (ReplaySystem)
 xpTURN.Klotho.LiteNetLib             ← + LiteNetLib, Klotho.Runtime, Klotho.Logging (noEngineReferences)
 xpTURN.Klotho.DataAsset.Json         ← + Newtonsoft.Json, Klotho.Runtime
 xpTURN.Klotho.Editor                 ← + Klotho.Runtime, Klotho.Runtime.Unity, Klotho.DataAsset.Json (Editor-only)
@@ -202,4 +172,4 @@ xpTURN.Klotho.Logging.Mel (opt-in)   ← + Klotho.Logging + Microsoft.Extensions
 
 ---
 
-*Last updated: 2026-06-07 (Unity/Godot dual-engine: per-engine sinks, Godot NuGet deps, Godot adapter layering)*
+*Last updated: 2026-06-26 (0.3.6: removed the bundled System.Runtime.CompilerServices.Unsafe — now in-source via `KUnsafe` — and K4os.Compression.LZ4, with replays written uncompressed)*

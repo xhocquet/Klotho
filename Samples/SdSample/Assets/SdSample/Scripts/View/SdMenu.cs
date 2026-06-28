@@ -11,12 +11,15 @@ namespace xpTURN.Samples.SdSample
         [SerializeField] private Button _stopButton;
         [SerializeField] private InputField _ipField;
         [SerializeField] private InputField _portField;
+        [SerializeField] private InputField _matchField; // optional — leave unassigned to fall back to a default match id
 
         public event Action OnJoinClicked;
         public event Action OnReadyClicked;
         public event Action OnStopClicked;
 
         public string Host => _ipField != null ? _ipField.text : "localhost";
+        /// <summary>Match id typed by the user; empty when no field is assigned or it is blank (caller falls back).</summary>
+        public string MatchId => _matchField != null ? _matchField.text : string.Empty;
         public int Port
         {
             get

@@ -34,18 +34,41 @@ namespace xpTURN.Klotho.Generator.Emitters
             // List<T>
             if (field.ElementTypeName != null && field.KeyTypeName == null && IsListType(field.TypeFullName))
             {
+                // Nested [KlothoSerializableStruct] element — value-independent constant size per element
+                // (unmanaged struct). Must return here: the Array branch below lacks an !IsListType guard.
+                if (field.ElementIsNestedSerializable)
+                    return (false, 4, $"this.{field.Name}.Count * default({field.ElementTypeName}).GetSerializedSize()");
+
                 if (TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping) && elemMapping.Size > 0)
                 {
                     return (false, 4, $"this.{field.Name}.Count * {elemMapping.Size}");
+                }
+                // Variable-size element (string): 4-byte count prefix + per-element (4-byte length prefix + UTF8 bytes).
+                // GetSerializedSize is a single expression and the runtime is zero-GC (no LINQ), so the per-element
+                // sum is computed by a hand-written runtime helper. The helper includes the count prefix, so the
+                // fixed portion here is 0.
+                if (IsString(field.ElementTypeName))
+                {
+                    return (false, 0, $"xpTURN.Klotho.Serialization.SerializationSize.StringList(this.{field.Name})");
                 }
             }
 
             // Array T[]
             if (field.ElementTypeName != null && field.KeyTypeName == null)
             {
+                // Nested [KlothoSerializableStruct] element — value-independent constant size per element.
+                if (field.ElementIsNestedSerializable)
+                    return (false, 4, $"this.{field.Name}.Length * default({field.ElementTypeName}).GetSerializedSize()");
+
                 if (TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping) && elemMapping.Size > 0)
                 {
                     return (false, 4, $"this.{field.Name}.Length * {elemMapping.Size}");
+                }
+                // Variable-size element (string): mirrors the List<string> branch above. The helper
+                // includes the 4-byte count prefix, so the fixed portion here is 0.
+                if (IsString(field.ElementTypeName))
+                {
+                    return (false, 0, $"xpTURN.Klotho.Serialization.SerializationSize.StringArray(this.{field.Name})");
                 }
             }
 
@@ -209,6 +232,13 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         private static void EmitSerializeArray(StringBuilder sb, SerializableFieldInfo field, string indent)
         {
+            if (field.ElementIsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}writer.WriteInt32(this.{field.Name}.Length);");
+                sb.AppendLine($"{indent}for (int __i = 0; __i < this.{field.Name}.Length; __i++)");
+                sb.AppendLine($"{indent}    this.{field.Name}[__i].Serialize(ref writer);");
+                return;
+            }
             if (!TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping)) return;
             sb.AppendLine($"{indent}writer.WriteInt32(this.{field.Name}.Length);");
             sb.AppendLine($"{indent}for (int __i = 0; __i < this.{field.Name}.Length; __i++)");
@@ -222,6 +252,14 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         private static void EmitDeserializeArray(StringBuilder sb, SerializableFieldInfo field, string indent, string instancePrefix)
         {
+            if (field.ElementIsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}int __count_{field.Name} = reader.ReadInt32();");
+                sb.AppendLine($"{indent}{instancePrefix}.{field.Name} = new {field.ElementTypeName}[__count_{field.Name}];");
+                sb.AppendLine($"{indent}for (int __i = 0; __i < __count_{field.Name}; __i++)");
+                sb.AppendLine($"{indent}    {instancePrefix}.{field.Name}[__i].Deserialize(ref reader);");   // array element is addressable
+                return;
+            }
             if (!TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping)) return;
             sb.AppendLine($"{indent}int __count_{field.Name} = reader.ReadInt32();");
             sb.AppendLine($"{indent}{instancePrefix}.{field.Name} = new {field.ElementTypeName}[__count_{field.Name}];");
@@ -233,6 +271,13 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         private static void EmitSerializeList(StringBuilder sb, SerializableFieldInfo field, string indent)
         {
+            if (field.ElementIsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}writer.WriteInt32(this.{field.Name}.Count);");
+                sb.AppendLine($"{indent}for (int __i = 0; __i < this.{field.Name}.Count; __i++)");
+                sb.AppendLine($"{indent}    this.{field.Name}[__i].Serialize(ref writer);");
+                return;
+            }
             if (!TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping)) return;
             sb.AppendLine($"{indent}writer.WriteInt32(this.{field.Name}.Count);");
             sb.AppendLine($"{indent}for (int __i = 0; __i < this.{field.Name}.Count; __i++)");
@@ -246,6 +291,20 @@ namespace xpTURN.Klotho.Generator.Emitters
 
         private static void EmitDeserializeList(StringBuilder sb, SerializableFieldInfo field, string indent, string instancePrefix)
         {
+            if (field.ElementIsNestedSerializable)
+            {
+                sb.AppendLine($"{indent}int __count_{field.Name} = reader.ReadInt32();");
+                sb.AppendLine($"{indent}{instancePrefix}.{field.Name}.Clear();");
+                sb.AppendLine($"{indent}if ({instancePrefix}.{field.Name}.Capacity < __count_{field.Name})");
+                sb.AppendLine($"{indent}    {instancePrefix}.{field.Name}.Capacity = __count_{field.Name};");
+                sb.AppendLine($"{indent}for (int __i = 0; __i < __count_{field.Name}; __i++)");
+                sb.AppendLine($"{indent}{{");
+                sb.AppendLine($"{indent}    var __e_{field.Name} = default({field.ElementTypeName});");   // List indexer returns a copy — deserialize into a local, then Add
+                sb.AppendLine($"{indent}    __e_{field.Name}.Deserialize(ref reader);");
+                sb.AppendLine($"{indent}    {instancePrefix}.{field.Name}.Add(__e_{field.Name});");
+                sb.AppendLine($"{indent}}}");
+                return;
+            }
             if (!TypeMappings.TryGetMapping(field.ElementTypeName, out var elemMapping)) return;
             sb.AppendLine($"{indent}int __count_{field.Name} = reader.ReadInt32();");
             sb.AppendLine($"{indent}{instancePrefix}.{field.Name}.Clear();");

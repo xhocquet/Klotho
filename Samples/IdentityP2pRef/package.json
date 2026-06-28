@@ -1,0 +1,7 @@
+{
+  "name": "com.xpturn.klotho.identityp2pref",
+  "version": "0.1.0",
+  "displayName": "Klotho P2P Identity Reference",
+  "description": "P2P offline Ed25519 lobby-ticket identity validator (game layer, outside the Klotho core). Shared source consumed by P2pSample, GodotP2pSample, and the Brawler test suite. BouncyCastle.Cryptography is bundled in Runtime/Plugins (Unity); Godot consumers add a NuGet PackageReference.",
+  "unity": "2022.3"
+}

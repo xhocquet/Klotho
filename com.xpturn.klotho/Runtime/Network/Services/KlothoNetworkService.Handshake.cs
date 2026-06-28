@@ -173,7 +173,7 @@ namespace xpTURN.Klotho.Network
             if (_gameStarted && !state.IsLateJoin)
             {
                 _logger?.KWarning($"[KlothoNetworkService][CompletePeerSync] Standard handshake completed after GameStart (race): peer={peerId}, dropping for LateJoin retry");
-                DisconnectWithReason(peerId, 2); // RoomFull — client retries via LateJoin
+                DisconnectWithReason(peerId, JoinFailReason.RoomFull.ToWireCode()); // client retries via LateJoin
                 _peerSyncStates.Remove(peerId);
                 return;
             }
@@ -186,6 +186,11 @@ namespace xpTURN.Klotho.Network
                 return;
             }
 
+            // Identity validation gate — before slot reservation so a reject consumes no slot.
+            // P2P validation is synchronous: on accept we proceed inline with the validated identity.
+            if (!TryValidateIdentityP2P(peerId, isLateJoin: false, out bool validatorRan, out string vAccount, out string vDisplayName))
+                return;
+
             if (!TryReservePlayerSlot(peerId, out int newPlayerId))
                 return;
 
@@ -194,10 +199,13 @@ namespace xpTURN.Klotho.Network
 
             _peerToPlayer[peerId] = newPlayerId;
 
+            // Identity: validated value (claimed name ignored) when a validator ran, else the claimed
+            // name, else a fabricated fallback. Account stays empty unless validated.
             var newPlayer = new PlayerInfo
             {
                 PlayerId = newPlayerId,
-                PlayerName = $"Player{newPlayerId}",
+                DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, vDisplayName),
+                Account = validatorRan ? (vAccount ?? string.Empty) : string.Empty,
                 IsReady = false,
                 Ping = avgRtt
             };
@@ -225,9 +233,9 @@ namespace xpTURN.Klotho.Network
             // ConnectionResult, then InitializeFromConnection rebuilds the player list from them.
             for (int i = 0; i < _players.Count; i++)
             {
-                msg.PlayerIds.Add(_players[i].PlayerId);
-                msg.PlayerConnectionStates.Add((byte)_players[i].ConnectionState);
-                msg.ReadyStates.Add(_players[i].IsReady ? (byte)1 : (byte)0);
+                msg.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState,
+                    _players[i].IsReady ? (byte)1 : (byte)0));
             }
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
@@ -245,6 +253,8 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 ConnectionState = (byte)newPlayer.ConnectionState,
                 IsReady = newPlayer.IsReady,
+                Account = newPlayer.Account ?? string.Empty,
+                DisplayName = newPlayer.DisplayName ?? string.Empty,
             };
             RelayMessage(joinNotification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
             // RelayMessage only reaches _peerToPlayer; spectators (_spectators, disjoint) need a separate send.
@@ -426,6 +436,8 @@ namespace xpTURN.Klotho.Network
             }
             _peerSyncStates.Remove(peerId);
             _peerDeviceIds.Remove(peerId);
+            _peerClaimedDisplayNames.Remove(peerId);
+            _peerTickets.Remove(peerId);
             // Drop the departed peer's dynamic-delay state (aggregate hygiene).
             _reportedEffective.Remove(peerId);
             _peerTargetBaseline.Remove(peerId);

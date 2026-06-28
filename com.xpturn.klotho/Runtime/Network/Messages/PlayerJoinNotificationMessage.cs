@@ -15,5 +15,8 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int PlayerId;
         [KlothoOrder] public byte ConnectionState;
         [KlothoOrder] public bool IsReady;
+        // Authoritative identity, declared after the prior fields so wire offsets stay stable. Unset = "".
+        [KlothoOrder] public string Account;
+        [KlothoOrder] public string DisplayName;
     }
 }

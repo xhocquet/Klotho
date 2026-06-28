@@ -79,7 +79,8 @@ namespace xpTURN.Klotho.Unity
             try
             {
                 var result = await KlothoConnectionAsync.ConnectAsync(
-                    transport, host, port, cts.Token, flow.Logger, preJoinMessage, flow.DeviceIdProvider, connectTimeoutMs);
+                    transport, host, port, cts.Token, flow.Logger, preJoinMessage, flow.DeviceIdProvider, connectTimeoutMs,
+                    identityProvider: flow.IdentityProvider, claimedDisplayName: flow.ClaimedDisplayName);
                 return flow.CreateForConnection(result, roomId, sessionConfigSeed);
             }
             finally { flow.EndConnectAttempt(cts); }

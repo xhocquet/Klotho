@@ -56,7 +56,8 @@ namespace xpTURN.Klotho.Core.Tests
         private class MockPlayerInfo : IPlayerInfo
         {
             public int PlayerId { get; set; }
-            public string PlayerName => "";
+            public string DisplayName => "";
+            public string Account => "";
             public bool IsReady => true;
             public int Ping => 0;
             public PlayerConnectionState ConnectionState => PlayerConnectionState.Connected;

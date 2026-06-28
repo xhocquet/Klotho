@@ -172,6 +172,17 @@ namespace Brawler
 
         private void Start()
         {
+            List<string> nicknames = new List<string>
+            {
+                "ShadowFrost", "NyxVortex", "PixelRogue", "CrimsonWraith", "VoidSpecter", "EchoBlade",
+                "LunarFang", "ZephyrCrash", "EmberQuill", "FrostByte", "StormGale", "AshenVeil",
+                "NeonDrift", "IronClad", "DuskHollow", "GildedHex", "CobaltSurge", "RavenPulse",
+                "MysticCoil", "BlazeWarden", "SilentDune", "ArcReactor", "GloomFang", "ViperStrike",
+                "OnyxBloom", "TitanRoar", "WispCharm", "RogueSpark", "ChaosKite", "VividScar",
+                "JadeRift", "HollowMoon", "QuartzEdge", "ThornLace", "PrismShade", "AzureFlux"
+            };
+            string displayName = nicknames[UnityEngine.Random.Range(0, nicknames.Count)];
+
             // Pre-load data
             _staticColliders = FPStaticColliderSerializer.Load(_staticCollidersAsset.bytes);
             _navMesh = FPNavMeshSerializer.Deserialize(_navMeshAsset.bytes);
@@ -209,6 +220,7 @@ namespace Brawler
                 .WithHandshake(Application.version, new FaultInjectionDeviceIdProvider())
 #endif
                 .WithReconnect(_credentialsStore)
+                .WithDisplayName(displayName)
                 .WithAutoPlayerConfig(() => new BrawlerPlayerConfig { SelectedCharacterClass = _brawlerSettings._characterClass })
                 .WithSpectator(() => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY))
                 .Build();
@@ -229,6 +241,11 @@ namespace Brawler
             ApplyFaultInjection();
 
             _gameMenu.IsHost = Role.IsLocalHost();
+
+            // Feed the lobby roster (DisplayName + Ready per player) to the menu; reads the current
+            // session each frame, so it is empty before connect and after stop.
+            _gameMenu.RosterProvider = () => _session?.Players;
+            
             // AutoReconnect eligibility — role-decided.
             // P2P host is excluded (host death ends the session); SD client / P2P guest are eligible.
             if (Role.IsReconnectEligible())

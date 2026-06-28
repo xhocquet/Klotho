@@ -38,17 +38,18 @@ namespace xpTURN.Klotho.Network
         private readonly Queue<(int tick, byte[] data, int dataLen)> _pendingVerifiedStates
             = new Queue<(int, byte[], int)>();
 
-        // Player count surface — seeded from SpectatorAcceptMessage.PlayerIds, then mutated by lobby
-        // PlayerJoinNotification / PlayerLeaveNotification (pre-game) and LateJoinNotification (mid-match)
-        // arrivals. UI/Session layer reads via PlayerCount / OnPlayerCountChanged; this is the live roster
-        // (not _pendingStartInfo, which is cleared after the first OnSpectatorStarted fire). The pending
-        // start roster is reconciled from this list just before delivery — see ReconcileStartInfoRoster.
-        private readonly List<int> _playerIds = new List<int>();
+        // Live player roster (identity included) — seeded from SpectatorAcceptMessage.Roster, then mutated by lobby
+        // PlayerJoinNotification / PlayerLeaveNotification / PlayerReadyMessage (pre-game) and LateJoinNotification
+        // (mid-match) arrivals. UI/Session layer reads via Players / PlayerCount / OnRosterChanged / OnPlayerCountChanged;
+        // this is the live roster (not _pendingStartInfo, which is cleared after the first OnSpectatorStarted fire).
+        // The pending start roster is reconciled from this list just before delivery — see ReconcileStartInfoRoster.
+        private readonly List<SpectatorPlayerInfo> _players = new List<SpectatorPlayerInfo>();
 
         public SpectatorState State => _state;
         public int LatestReceivedTick => _latestReceivedTick;
         public int DelayFrames => (_latestReceivedTick >= 0 && _engine != null) ? _latestReceivedTick - _engine.CurrentTick : 0;
-        public int PlayerCount => _playerIds.Count;
+        public int PlayerCount => _players.Count;
+        public IReadOnlyList<IPlayerInfo> Players => _players;
 
         public event Action<SpectatorStartInfo> OnSpectatorStarted;
         public event Action<int, ICommand> OnConfirmedInputReceived;
@@ -56,6 +57,7 @@ namespace xpTURN.Klotho.Network
         public event Action<string> OnSpectatorStopped;
         public event Action<int, byte[], long, FullStateKind> OnFullStateReceived;
         public event Action<int> OnPlayerCountChanged;
+        public event Action OnRosterChanged;
 
         /// <summary>
         /// Raised when SimulationConfig is received from SpectatorAcceptMessage.
@@ -149,30 +151,59 @@ namespace xpTURN.Klotho.Network
             {
                 case SpectatorAcceptMessage accept:
                     _spectatorId = accept.SpectatorId;
-                    // only store _pendingStartInfo, removed _state = Watching transition
+                    // only store _pendingStartInfo, removed _state = Watching transition.
+                    // Building the pending start roster here (before the config callbacks) is safe —
+                    // it is just stored and delivered later via OnSpectatorStarted.
+                    var startPlayers = new List<SpectatorPlayerInfo>(accept.Roster.Count);
+                    var startIds = new List<int>(accept.Roster.Count);
+                    for (int i = 0; i < accept.Roster.Count; i++)
+                    {
+                        var entry = accept.Roster[i];
+                        startPlayers.Add(new SpectatorPlayerInfo
+                        {
+                            PlayerId        = entry.PlayerId,
+                            DisplayName     = entry.DisplayName.ToString(),
+                            Account         = entry.Account.ToString(),
+                            IsReady         = entry.ReadyState != 0,
+                            ConnectionState = (PlayerConnectionState)entry.ConnectionState,
+                        });
+                        startIds.Add(entry.PlayerId);
+                    }
                     _pendingStartInfo = new SpectatorStartInfo
                     {
                         RandomSeed    = accept.RandomSeed,
                         TickInterval  = accept.TickIntervalMs,
-                        PlayerCount   = accept.PlayerIds.Count,
-                        PlayerIds     = new List<int>(accept.PlayerIds),
+                        PlayerCount   = startIds.Count,
+                        PlayerIds     = startIds,
+                        Players       = startPlayers,
                     };
                     _pendingSimulationConfig = accept.ToSimulationConfig();
                     OnSimulationConfigReceived?.Invoke(_pendingSimulationConfig);
                     _pendingSessionConfig = accept.ToSessionConfig();
                     // OnSessionConfigReceived drives KlothoSession.FinishSpectatorBootstrap →
-                    // SubscribeStateForwarders within this synchronous call. Seed _playerIds
+                    // SubscribeStateForwarders within this synchronous call. Seed _players
                     // AFTER the call returns so the forwarder is already wired by the time
-                    // OnPlayerCountChanged fires — otherwise the initial push is dropped and
-                    // UI shows 0 until the next change.
+                    // OnRosterChanged / OnPlayerCountChanged fire — otherwise the initial push is
+                    // dropped and UI shows an empty roster until the next change.
                     OnSessionConfigReceived?.Invoke(_pendingSessionConfig);
 
-                    int prevCount = _playerIds.Count;
-                    _playerIds.Clear();
-                    for (int i = 0; i < accept.PlayerIds.Count; i++)
-                        _playerIds.Add(accept.PlayerIds[i]);
-                    if (prevCount != _playerIds.Count)
-                        OnPlayerCountChanged?.Invoke(_playerIds.Count);
+                    int prevCount = _players.Count;
+                    _players.Clear();
+                    for (int i = 0; i < accept.Roster.Count; i++)
+                    {
+                        var entry = accept.Roster[i];
+                        _players.Add(new SpectatorPlayerInfo
+                        {
+                            PlayerId        = entry.PlayerId,
+                            DisplayName     = entry.DisplayName.ToString(),
+                            Account         = entry.Account.ToString(),
+                            IsReady         = entry.ReadyState != 0,
+                            ConnectionState = (PlayerConnectionState)entry.ConnectionState,
+                        });
+                    }
+                    OnRosterChanged?.Invoke();
+                    if (prevCount != _players.Count)
+                        OnPlayerCountChanged?.Invoke(_players.Count);
 
                     if (accept.LastVerifiedTick >= 0)
                     {
@@ -254,6 +285,14 @@ namespace xpTURN.Klotho.Network
                     HandlePlayerLeaveNotification(peerId, leaveNotification);
                     break;
 
+                case PlayerReadyMessage readyMessage:
+                    HandlePlayerReady(peerId, readyMessage);
+                    break;
+
+                case PlayerStateNotificationMessage stateNotification:
+                    HandlePlayerStateNotification(peerId, stateNotification);
+                    break;
+
                 // SD server sends VerifiedStateMessage each tick instead of SpectatorInputMessage
                 case VerifiedStateMessage verifiedMsg:
                     if (_state == SpectatorState.Synchronizing)
@@ -293,17 +332,33 @@ namespace xpTURN.Klotho.Network
             _latestReceivedTick = Math.Max(_latestReceivedTick, executionTick);
         }
 
-        // Sync the pending start roster from the live _playerIds just before it is delivered to the
-        // engine. _pendingStartInfo.PlayerIds was seeded from the SpectatorAccept snapshot, but lobby
-        // joins/leaves between accept and game start mutate _playerIds only, so without this the engine's
+        // Sync the pending start roster from the live _players just before it is delivered to the
+        // engine. _pendingStartInfo was seeded from the SpectatorAccept snapshot, but lobby
+        // joins/leaves between accept and game start mutate _players only, so without this the engine's
         // _activePlayerIds would be built from a stale roster while PlayerCount is already current.
         private void ReconcileStartInfoRoster()
         {
             if (_pendingStartInfo == null)
                 return;
             _pendingStartInfo.PlayerIds.Clear();
-            _pendingStartInfo.PlayerIds.AddRange(_playerIds);
-            _pendingStartInfo.PlayerCount = _playerIds.Count;
+            _pendingStartInfo.Players.Clear();
+            for (int i = 0; i < _players.Count; i++)
+            {
+                _pendingStartInfo.PlayerIds.Add(_players[i].PlayerId);
+                // Per-item copy: _players holds mutable instances updated in place by
+                // HandlePlayerReady / state notifications. Sharing the live reference would let
+                // those post-start mutations retroactively alter this start-time snapshot.
+                _pendingStartInfo.Players.Add(new SpectatorPlayerInfo
+                {
+                    PlayerId        = _players[i].PlayerId,
+                    DisplayName     = _players[i].DisplayName,
+                    Account         = _players[i].Account,
+                    IsReady         = _players[i].IsReady,
+                    Ping            = _players[i].Ping,
+                    ConnectionState = _players[i].ConnectionState,
+                });
+            }
+            _pendingStartInfo.PlayerCount = _players.Count;
         }
 
         private void HandleLateJoinNotification(int peerId, LateJoinNotificationMessage msg)
@@ -316,17 +371,25 @@ namespace xpTURN.Klotho.Network
                 return;
             }
 
-            for (int i = 0; i < _playerIds.Count; i++)
+            for (int i = 0; i < _players.Count; i++)
             {
-                if (_playerIds[i] == msg.PlayerId)
+                if (_players[i].PlayerId == msg.PlayerId)
                 {
                     _logger?.KDebug($"[SpectatorService][HandleLateJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
                     return;
                 }
             }
 
-            _playerIds.Add(msg.PlayerId);
-            OnPlayerCountChanged?.Invoke(_playerIds.Count);
+            // LateJoinNotification carries no ready state (game already running) → IsReady=false.
+            _players.Add(new SpectatorPlayerInfo
+            {
+                PlayerId    = msg.PlayerId,
+                DisplayName = msg.DisplayName ?? "",
+                Account     = msg.Account ?? "",
+                IsReady     = false,
+            });
+            OnRosterChanged?.Invoke();
+            OnPlayerCountChanged?.Invoke(_players.Count);
 
             _logger?.KInformation($"[SpectatorService][HandleLateJoinNotification] Late join player added: playerId={msg.PlayerId}, joinTick={msg.JoinTick}");
         }
@@ -342,17 +405,25 @@ namespace xpTURN.Klotho.Network
                 return;
             }
 
-            for (int i = 0; i < _playerIds.Count; i++)
+            for (int i = 0; i < _players.Count; i++)
             {
-                if (_playerIds[i] == msg.PlayerId)
+                if (_players[i].PlayerId == msg.PlayerId)
                 {
                     _logger?.KDebug($"[SpectatorService][HandlePlayerJoinNotification] Duplicate ignored: playerId={msg.PlayerId}");
                     return;
                 }
             }
 
-            _playerIds.Add(msg.PlayerId);
-            OnPlayerCountChanged?.Invoke(_playerIds.Count);
+            _players.Add(new SpectatorPlayerInfo
+            {
+                PlayerId        = msg.PlayerId,
+                DisplayName     = msg.DisplayName ?? "",
+                Account         = msg.Account ?? "",
+                IsReady         = msg.IsReady,
+                ConnectionState = (PlayerConnectionState)msg.ConnectionState,
+            });
+            OnRosterChanged?.Invoke();
+            OnPlayerCountChanged?.Invoke(_players.Count);
             _logger?.KInformation($"[SpectatorService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");
         }
 
@@ -366,15 +437,79 @@ namespace xpTURN.Klotho.Network
                 return;
             }
 
-            for (int i = 0; i < _playerIds.Count; i++)
+            for (int i = 0; i < _players.Count; i++)
             {
-                if (_playerIds[i] == msg.PlayerId)
+                if (_players[i].PlayerId == msg.PlayerId)
                 {
-                    _playerIds.RemoveAt(i);
-                    OnPlayerCountChanged?.Invoke(_playerIds.Count);
+                    _players.RemoveAt(i);
+                    OnRosterChanged?.Invoke();
+                    OnPlayerCountChanged?.Invoke(_players.Count);
                     _logger?.KInformation($"[SpectatorService][HandlePlayerLeaveNotification] Lobby player removed: playerId={msg.PlayerId}");
                     return;
                 }
+            }
+        }
+
+        // A player toggled ready during the lobby. Update the spectator's roster entry in place so the
+        // ready display stays consistent with players. Only the host/server (peerId 0) is a valid source,
+        // and an unknown PlayerId is a no-op.
+        private void HandlePlayerReady(int peerId, PlayerReadyMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SpectatorService][HandlePlayerReady] Ignored from non-host peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _players.Count; i++)
+            {
+                if (_players[i].PlayerId == msg.PlayerId)
+                {
+                    if (_players[i].IsReady != msg.IsReady)
+                    {
+                        _players[i].IsReady = msg.IsReady;
+                        OnRosterChanged?.Invoke();
+                    }
+                    return;
+                }
+            }
+        }
+
+        // A player's connection state changed mid-game (disconnect / reconnect / leave). Update the
+        // spectator roster so connection-state display stays live (P2P: host Broadcast reaches spectators;
+        // SD: host sends to _spectators). Only the host/server (peerId 0) is a valid source.
+        private void HandlePlayerStateNotification(int peerId, PlayerStateNotificationMessage msg)
+        {
+            if (peerId != 0)
+            {
+                _logger?.KWarning($"[SpectatorService][HandlePlayerStateNotification] Ignored from non-host peerId={peerId}");
+                return;
+            }
+
+            for (int i = 0; i < _players.Count; i++)
+            {
+                if (_players[i].PlayerId != msg.PlayerId)
+                    continue;
+
+                switch ((PlayerStateChange)msg.State)
+                {
+                    case PlayerStateChange.Disconnected:
+                        _players[i].ConnectionState = PlayerConnectionState.Disconnected;
+                        OnRosterChanged?.Invoke();
+                        break;
+
+                    case PlayerStateChange.Reconnected:
+                        _players[i].ConnectionState = PlayerConnectionState.Connected;
+                        OnRosterChanged?.Invoke();
+                        break;
+
+                    case PlayerStateChange.Left:
+                        _players.RemoveAt(i);
+                        OnRosterChanged?.Invoke();
+                        OnPlayerCountChanged?.Invoke(_players.Count);
+                        break;
+                }
+                return;
             }
         }
 

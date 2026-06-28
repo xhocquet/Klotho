@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -8,6 +9,7 @@ using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Logging;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.Unity;
+using xpTURN.Klotho.Samples.Identity.Sd;
 
 namespace xpTURN.Samples.SdSample
 {
@@ -22,6 +24,12 @@ namespace xpTURN.Samples.SdSample
         [field: Header("Network")]
         [SerializeField] private string _hostAddress = "localhost";
         [SerializeField] private int _port = 7777;
+
+        [field: Header("Dev Lobby (KLOTHO_DEV_LOBBY only)")]
+        [SerializeField] private string _lobbyAddress = "localhost";
+        [SerializeField] private int _lobbyPort = 9999;
+        [SerializeField] private string _devNickname = "Player";
+        [SerializeField] private string _devMatchId = SdDevIdentity.DevMatchId; // distinct per match → distinct rooms (multi-room demo)
 
         [field: Header("Configs")]
         [SerializeField] private USimulationConfig _simulationConfig;
@@ -42,6 +50,10 @@ namespace xpTURN.Samples.SdSample
         private KlothoSession _session;
         private SdViewCallbacks _viewCallbacks;
         private bool _joining;
+#if KLOTHO_DEV_LOBBY
+        private SdLobbyIssueProvider _identityProvider;
+        private string _devAccount;
+#endif
 
         private void Awake()
         {
@@ -54,16 +66,16 @@ namespace xpTURN.Samples.SdSample
         private void Start()
         {
             var assets = DataAssetReader.LoadMixedCollectionFromBytes(_dataAsset.bytes);
-            IDataAssetRegistryBuilder builder = new DataAssetRegistry();
-            builder.RegisterRange(assets);
-            _assetRegistry = builder.Build();
+            IDataAssetRegistryBuilder registryBuilder = new DataAssetRegistry();
+            registryBuilder.RegisterRange(assets);
+            _assetRegistry = registryBuilder.Build();
 
             _transport = new LiteNetLibTransport(_logger, levels: null, connectionKey: ConnectionKey);
 
             _input = new SdInputCapture();
             _input.Enable();
 
-            var setup = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
+            var builder = new KlothoFlowSetupBuilder((simCfg, sessCfg) =>
                 {
                     var simCallbacks = new SdSimulationCallbacks(_input);
                     _viewCallbacks = new SdViewCallbacks(_hud);
@@ -73,10 +85,19 @@ namespace xpTURN.Samples.SdSample
                 .WithTransport(_transport)
                 .WithAssetRegistry(_assetRegistry)
                 .WithLifecycleObserver(this)
-                .WithUnityDefaults()
-                .Build();
+                .WithUnityDefaults();
 
-            _flow = new KlothoSessionFlow(setup);
+#if KLOTHO_DEV_LOBBY
+            // Dev lobby identity (SD): the client fetches a signed ticket from DevLobbyServer on Join and
+            // carries it via this mutable provider. Opt-in via KLOTHO_DEV_LOBBY — when undefined the client
+            // joins with no lobby ticket (matching servers whose validator is likewise un-gated). The
+            // server validator must agree (define KLOTHO_DEV_LOBBY on both sides). The validator is server-side.
+            _devAccount = "dev-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            _identityProvider = new SdLobbyIssueProvider();
+            builder = builder.WithLobbyIdentity(_identityProvider);
+#endif
+
+            _flow = new KlothoSessionFlow(builder.Build());
             // Driver owns the main transport (idle pumping + idle-disconnect routing); bind before any
             // session so the driver subscribes ahead of NetworkService.
             _sessionDriver.BindTransport(_transport, this, _flow);
@@ -134,8 +155,18 @@ namespace xpTURN.Samples.SdSample
         {
             try
             {
+#if KLOTHO_DEV_LOBBY
+                // Fetch the signed ticket + room assignment from the dev lobby BEFORE connecting; connect to
+                // the lobby-assigned endpoint + roomId (not hardcoded). GetTicket() during the handshake
+                // returns the pre-fetched ticket.
+                var issue = await TryFetchLobbyAsync(destroyCancellationToken);
+                if (!issue.HasValue) return; // Full / timeout / decline — abort (see TryFetchLobbyAsync log)
+                var asn = issue.Value;
+                await _flow.JoinServerDrivenAsync(_transport, asn.Host, asn.Port, asn.RoomId, _sessionConfig, destroyCancellationToken);
+#else
                 // roomId 0 — single room. RoomManager rejects roomId < 0.
                 await _flow.JoinServerDrivenAsync(_transport, _hostAddress, _port, roomId: 0, _sessionConfig, destroyCancellationToken);
+#endif
             }
             catch (JoinFailedException jfe)
             {
@@ -150,6 +181,41 @@ namespace xpTURN.Samples.SdSample
                 _joining = false;
             }
         }
+
+#if KLOTHO_DEV_LOBBY
+        // Fetches a lobby ticket + room assignment over LiteNetLib and stores the ticket in the provider.
+        // Returns the assignment (Ok) or null (abort join) on Full / timeout / decline — start DevLobbyServer first.
+        private async UniTask<IssueResult?> TryFetchLobbyAsync(CancellationToken ct)
+        {
+            using var issueClient = new LiteNetLibLobbyIssueClient(_logger, _lobbyAddress, _lobbyPort);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(5000);
+            try
+            {
+                // Menu field wins; else the inspector default. Distinct match ids land in distinct rooms.
+                string matchId = (_menu != null && !string.IsNullOrWhiteSpace(_menu.MatchId)) ? _menu.MatchId.Trim() : _devMatchId;
+                IssueResult issue = await issueClient.IssueAsync(_devAccount, _devNickname, matchId, cts.Token);
+                if (issue.Full)
+                {
+                    _logger?.KWarning($"[SdSample] lobby FULL (all rooms occupied) — retry later.");
+                    return null;
+                }
+                if (!issue.Ok || string.IsNullOrEmpty(issue.Ticket))
+                {
+                    _logger?.KWarning($"[SdSample] lobby declined (empty ticket) — aborting join.");
+                    return null;
+                }
+                _identityProvider?.SetTicket(issue.Ticket);
+                _logger?.KInformation($"[SdSample] lobby assigned {issue.Host}:{issue.Port} room={issue.RoomId} ({_devAccount}).");
+                return issue;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger?.KWarning($"[SdSample] lobby fetch timed out — is DevLobbyServer running?");
+                return null;
+            }
+        }
+#endif
 
         private void OnBtnReady()
         {

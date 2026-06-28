@@ -44,7 +44,11 @@ namespace xpTURN.Klotho.Network
             if (_engine?.SessionConfig != null)
                 accept.CopySessionConfigFrom(_engine.SessionConfig);
             for (int i = 0; i < _players.Count; i++)
-                accept.PlayerIds.Add(_players[i].PlayerId);
+            {
+                accept.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger, (byte)_players[i].ConnectionState,
+                    _players[i].IsReady ? (byte)1 : (byte)0));
+            }
 
             using (var serialized = _messageSerializer.SerializePooled(accept))
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);

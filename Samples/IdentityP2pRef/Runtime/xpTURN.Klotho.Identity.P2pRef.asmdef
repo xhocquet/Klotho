@@ -1,0 +1,16 @@
+{
+    "name": "xpTURN.Klotho.Identity.P2pRef",
+    "rootNamespace": "xpTURN.Klotho.Samples.Identity",
+    "references": [
+        "xpTURN.Klotho.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

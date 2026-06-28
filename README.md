@@ -28,7 +28,7 @@ A deterministic-simulation framework supporting Client-Side Prediction (CSP), Ro
 | **AI / HFSM** | Deterministic hierarchical FSM · `HFSMBuilder` (fluent) · `HFSMRoot` / `HFSMManager` · `HFSMComponent` (per-entity) · `HFSMDecision` / `AIAction` · Unity state-tree visualizer |
 | **Serialization / Source Generator** | `SpanWriter/Reader` (ref struct, GC-free) · automatic code generation via `[KlothoComponent]` / `[KlothoSerializable]` / `[KlothoDataAsset]` / `[KlothoSerializableStruct]` · build-time `DeterminismAnalyzer` (flags float / non-deterministic APIs in simulation code) |
 | **Data Assets** | `IDataAsset` · `DataAssetRegistry` · `DataAssetRef` · JSON serialization (`xpTURN.Klotho.DataAsset.Json`) |
-| **Replay** | Record / playback / seek / variable speed · LZ4 compression (`K4os.Compression.LZ4`) |
+| **Replay** | Record / playback / seek / variable speed |
 | **Verification Tools** | `SyncTestRunner` (GGPO-style determinism verification) · `DeterminismVerificationRunner` · benchmark suite |
 | **Unity Integration** | `USimulationConfig` · `USessionConfig` · View layer (`EntityViewFactory` / `EntityViewUpdater` / `EntityView`, `BindBehaviour` / `ViewFlags`, `VerifiedFrameInterpolator`) · `KlothoSessionDriver` (MonoBehaviour) · `KlothoConnectionAsync` (UniTask) |
 | **Godot Integration** | `GodotSimulationConfig` · `GodotSessionConfig` (Resource) · View layer (`EntityViewFactory` / `EntityViewUpdaterNode` / `EntityViewNode`, `VerifiedFrameInterpolator`) · `GodotSessionDriver` (Node) · `GodotConnectionAsync` (`Task`) · `GodotDebugSink` / `GodotLogSink` |
@@ -101,7 +101,6 @@ Three-layer separation:
 - **xpTURN.Klotho.Logging (IKLogger)** — in-house structured logging (no external logging dependency). Optional MEL interop via the `Plugins~/Logging.Mel` sample adapter (`Microsoft.Extensions.Logging.Abstractions` DLL is consumer-provided).
 - **LiteNetLib** — default reference implementation for UDP transport (MIT, pure C#). On Unity it is **vendored as source** under `Runtime/ThirdParty/LiteNetLib.v2.1.4`; on Godot it arrives as the **NuGet package `LiteNetLib 2.1.4`**. The transport layer is abstracted via `INetworkTransport` and is replaceable.
 - **Newtonsoft.Json** — DataAsset JSON serialization (Unity: `com.unity.nuget.newtonsoft-json` · Godot: NuGet `Newtonsoft.Json 13.0.3`)
-- **K4os.Compression.LZ4** — replay compression (Unity: vendored under `Runtime/ThirdParty/` · Godot: NuGet `K4os.Compression.LZ4 1.3.8`)
 
 Details: [Docs/BaseLibraries.md](Docs/BaseLibraries.md)
 
@@ -136,7 +135,7 @@ Klotho lives at the repository top level under `com.xpturn.klotho/`. Unity consu
 │   │   ├── Network/               transport · server · spectator
 │   │   ├── State/                 snapshot manager
 │   │   ├── Serialization/         SpanWriter/Reader
-│   │   ├── Replay/                record / playback (LZ4)
+│   │   ├── Replay/                record / playback
 │   │   ├── ECS/                   Frame · components · systems
 │   │   ├── Deterministic/         FP64 · physics · navigation
 │   │   ├── LiteNetLib/            UDP transport
@@ -191,7 +190,7 @@ Detailed guides: [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md), [Docs/GameD
 - HFSM-based bot AI (`BotHFSMRoot` / `BotActions` / `BotDecisions`)
 - Camera integration with Unity Cinemachine
 - Supports both P2P and ServerDriven modes
-- LZ4-compressed replay record / playback
+- Replay record / playback
 
 Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 
@@ -205,6 +204,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/QuickStart.Unity.md](Docs/QuickStart.Unity.md) · [Docs/QuickStart.Godot.md](Docs/QuickStart.Godot.md) | Engine-specific 5-step quick starts (component → system → callbacks → session → view) |
 | [Docs/FEATURES.md](Docs/FEATURES.md) | Full feature list |
 | [Docs/Specification.md](Docs/Specification.md) | Engine specification (state machines · configuration · events · message protocol · formats) |
+| [Docs/LobbyIntegrationGuide.md](Docs/LobbyIntegrationGuide.md) | Lobby ↔ dedicated server ↔ client integration (mockup) — ticket carriage · validation hooks · identity propagation |
 | [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md) | Synchronization design direction (determinism · two-chain model · prediction/rollback · timing · authority models · recovery ladder) |
 | [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md) | Game-developer workflow (step-by-step) |
 | [Docs/GameDevAPI.md](Docs/GameDevAPI.md) | Game-developer API status |
@@ -213,7 +213,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/ECS.md](Docs/ECS.md) | ECS guide (entities · components · systems · filters · Frame snapshot/hash · rollback) |
 | [Docs/Serialization.md](Docs/Serialization.md) | Serialization & source generator (`SpanWriter/Reader` · `[KlothoComponent]`/`[KlothoSerializable]`/`[KlothoDataAsset]` codegen · supported types · diagnostics) |
 | [Docs/DeterministicMath.md](Docs/DeterministicMath.md) | Deterministic math (`FP64` 32.32 fixed-point · `FPVector*`/`FPQuaternion`/`FPMatrix` · trig · geometry · `DeterministicRandom`) |
-| [Docs/Replay.md](Docs/Replay.md) | Replay (record inputs · save/load LZ4 · play/pause/seek/speed · determinism guarantees) |
+| [Docs/Replay.md](Docs/Replay.md) | Replay (record inputs · save/load · play/pause/seek/speed · determinism guarantees) |
 | [Docs/Navigation.md](Docs/Navigation.md) | Deterministic navigation (FPNavMesh · A* · Funnel · ORCA) |
 | [Docs/NavMeshVisualizer.Godot.md](Docs/NavMeshVisualizer.Godot.md) | `Godot (.NET)` editor tool — visualize a serialized `FPNavMesh` (`.bytes`) and validate pathfinding / agent simulation in the 3D viewport |
 | [Docs/PhysicsWorld.md](Docs/PhysicsWorld.md) | Deterministic physics (rigid bodies · colliders · contacts · triggers · CCD) |
@@ -222,6 +222,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/HFSM.md](Docs/HFSM.md) | Hierarchical FSM for agent/bot AI (`HFSMBuilder` · `HFSMRoot` · `HFSMManager` · decisions/actions) |
 | [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md) · [Docs/Samples/P2pSample.md](Docs/Samples/P2pSample.md) · [Docs/Samples/SdSample.md](Docs/Samples/SdSample.md) | `Unity` sample walkthroughs — Brawler, P2pSample, SdSample |
 | [Docs/Samples/GodotSdSample.md](Docs/Samples/GodotSdSample.md) · [Docs/Samples/GodotP2pSample.md](Docs/Samples/GodotP2pSample.md) | `Godot (.NET)` sample walkthroughs (architecture + Godot-specific gotchas) |
+| [Docs/Samples/DevIdentityKeys.md](Docs/Samples/DevIdentityKeys.md) | Dev identity keys — generate & rotate the Ed25519 key pair used by the SD/P2P sample lobby identity |
 
 ---
 

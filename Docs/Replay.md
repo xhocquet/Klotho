@@ -30,7 +30,7 @@ com.xpturn.klotho/Runtime/Replay/
 ├── IReplaySystem.cs          # IReplayRecorder / IReplayPlayer / IReplaySystem + enums + IReplayMetadata / IReplayData
 ├── ReplayLoadException.cs    # thrown by LoadFromFile on any load failure
 └── Impl/
-    ├── ReplaySystem.cs       # unified recorder + player + file I/O (LZ4)
+    ├── ReplaySystem.cs       # unified recorder + player + file I/O
     ├── ReplayRecorder.cs     # StartRecording / RecordTick / StopRecording
     ├── ReplayPlayer.cs       # Play / Pause / Resume / Stop / Seek / Step
     └── ReplayData.cs         # metadata + per-tick command serialization
@@ -61,7 +61,7 @@ The engine owns a `ReplaySystem` instance, reachable as `KlothoEngine.ReplaySyst
 | `Double` | 2× | 200 |
 | `Quadruple` | 4× | 400 |
 
-**File format** — `SaveToFile` always LZ4-compresses the payload via `K4os.Compression.LZ4.LZ4Pickler`. `LoadFromFile` auto-detects: a leading `RPLY` magic (`0x52504C59`) means an uncompressed payload; anything else is treated as an LZ4Pickler stream. Pass `dumpJson: true` to also write a human-readable `.json` debug dump beside the file (reflection-based — debug only, never on a runtime path).
+**File format** — `SaveToFile` writes the payload uncompressed, self-framed by a leading `RPLY` magic (`0x52504C59`); `LoadFromFile` requires that magic and rejects anything else. Pass `dumpJson: true` to also write a human-readable `.json` debug dump beside the file (reflection-based — debug only, never on a runtime path).
 
 ---
 
@@ -85,7 +85,7 @@ engine.ReplaySystem.SetGameCustomData(myHeaderBytes);
 engine.SaveReplayToFile(path, dumpJson: false);   // delegates to ReplaySystem.SaveToFile
 ```
 
-`SaveReplayToFile` serializes `CurrentReplayData` (metadata + initial snapshot + command stream), LZ4-compresses, and writes it. `GetCurrentReplayData()` returns the in-memory `IReplayData` if you want to keep or upload it without a file.
+`SaveReplayToFile` serializes `CurrentReplayData` (metadata + initial snapshot + command stream) and writes it. `GetCurrentReplayData()` returns the in-memory `IReplayData` if you want to keep or upload it without a file.
 
 > Recording adds negligible overhead — it copies the command list that the engine already has each tick. The one cost is the initial full-state snapshot, taken once at tick 0.
 
@@ -163,7 +163,7 @@ catch (ReplayLoadException e)
 void OnMatchEnded(KlothoEngine engine, string replayPath)
 {
     engine.ReplaySystem.SetGameCustomData(BuildHeader());   // optional: map id, roster, etc.
-    engine.SaveReplayToFile(replayPath);         // LZ4-compressed inputs + initial snapshot
+    engine.SaveReplayToFile(replayPath);         // inputs + initial snapshot
 }
 
 // ── Later, play the replay back ──

@@ -236,7 +236,7 @@ Supports client-side prediction, rollback, and frame synchronization.
   - Playback speeds: 0.25x, 0.5x, 1x, 2x, 4x
 - **IReplaySystem** — recording + playback combined, file save / load
 - **IReplayData** — metadata + per-tick command-data serialization
-- **File format** — `RPLY` magic (uncompressed) / LZ4-compressed stream (K4os.Compression.LZ4)
+- **File format** — `RPLY` magic (uncompressed, self-framed)
 - **Implementations** — ReplayRecorder, ReplayPlayer, ReplaySystem, ReplayData
 
 ## Editor *(Unity-only)*

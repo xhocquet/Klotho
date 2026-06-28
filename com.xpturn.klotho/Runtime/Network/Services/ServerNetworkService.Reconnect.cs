@@ -85,15 +85,13 @@ namespace xpTURN.Klotho.Network
             _reconnectAcceptCache.SharedEpoch = _sharedClock.SharedEpoch;
             _reconnectAcceptCache.ClockOffset = 0;
             _reconnectAcceptCache.PlayerCount = _players.Count;
-            _reconnectAcceptCache.PlayerIds.Clear();
-            _reconnectAcceptCache.PlayerConnectionStates.Clear();
+            _reconnectAcceptCache.Roster.Clear();            // reused cache — clear the roster
             for (int i = 0; i < _players.Count; i++)
             {
-                _reconnectAcceptCache.PlayerIds.Add(_players[i].PlayerId);
                 bool isDisconnected = IsPlayerDisconnected(_players[i].PlayerId);
-                _reconnectAcceptCache.PlayerConnectionStates.Add(
-                    isDisconnected ? (byte)PlayerConnectionState.Disconnected
-                                   : (byte)PlayerConnectionState.Connected);
+                _reconnectAcceptCache.Roster.Add(RosterEntry.FromPlayer(
+                    _players[i], _logger,
+                    isDisconnected ? (byte)PlayerConnectionState.Disconnected : (byte)PlayerConnectionState.Connected));
             }
 
             // SessionConfig block — used by the cold-start guest to rebuild SessionConfig.
@@ -147,6 +145,7 @@ namespace xpTURN.Klotho.Network
             if (player != null)
                 player.ConnectionState = PlayerConnectionState.Connected;
             OnPlayerReconnected?.Invoke(player);
+            BroadcastPlayerState(msg.PlayerId, PlayerStateChange.Reconnected);
 
             _logger?.KInformation(
                 $"[ServerNetworkService] Reconnect accepted: peerId={peerId}, playerId={msg.PlayerId}");

@@ -29,7 +29,9 @@ namespace xpTURN.Klotho.Unity
             CancellationToken ct = default, IKLogger logger = null,
             NetworkMessageBase preJoinMessage = null,
             IDeviceIdProvider deviceIdProvider = null,
-            int connectTimeoutMs = KlothoConnection.DEFAULT_CONNECT_TIMEOUT_MS)
+            int connectTimeoutMs = KlothoConnection.DEFAULT_CONNECT_TIMEOUT_MS,
+            IPlayerIdentityProvider identityProvider = null,
+            string claimedDisplayName = null)
         {
             var tcs = new UniTaskCompletionSource<ConnectionResult>();
 
@@ -40,7 +42,9 @@ namespace xpTURN.Klotho.Unity
                 logger: logger,
                 preJoinMessage: preJoinMessage,
                 deviceIdProvider: deviceIdProvider,
-                connectTimeoutMs: connectTimeoutMs);
+                connectTimeoutMs: connectTimeoutMs,
+                identityProvider: identityProvider,
+                claimedDisplayName: claimedDisplayName);
 
             // On ct cancellation, clean up connection + cancel TCS
             var ctRegistration = ct.Register(() =>
