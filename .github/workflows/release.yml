@@ -58,11 +58,13 @@ jobs:
         run: |
           mkdir -p dist
 
-          # Include only the addons/ folder (exclude unnecessary files)
-          zip -r dist/klotho-godot-addons-${{ steps.meta.outputs.sha }}.zip \
-            dist/ \
+          # Zip from inside dist/ so the archive root is addons/ (not dist/addons/)
+          cd dist
+          zip -r klotho-godot-addons-${{ steps.meta.outputs.sha }}.zip \
+            addons/ \
             --exclude "*.import" \
-            --exclude "*/.DS_Store" \
+            --exclude "*.DS_Store" \
+            --exclude "__MACOSX*" \
             --exclude "*/Thumbs.db"
 
       - name: Upload to Release
