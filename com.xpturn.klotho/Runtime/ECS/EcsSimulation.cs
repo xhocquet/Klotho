@@ -272,6 +272,30 @@ namespace xpTURN.Klotho.ECS
             logger.Log(logLevel, $"[Physics][StaticGeometry] {label}: count={count} fp=0x{fp:X16}", null);
         }
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+        private readonly List<SystemRunner.SystemTiming> _systemTimingBuffer = new();
+
+        public void LogSystemTimings(IKLogger logger, string label, KLogLevel logLevel = KLogLevel.Information)
+        {
+            if (logger == null || !logger.IsEnabled(logLevel)) return;
+
+            _systemTimingBuffer.Clear();
+            _systemRunner.ConsumeUpdateTimings(_systemTimingBuffer);
+            if (_systemTimingBuffer.Count == 0) return;
+
+            _systemTimingBuffer.Sort((a, b) => string.Compare(a.SystemName, b.SystemName, StringComparison.Ordinal));
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"[SystemTiming][{label}] tick={_frame.Tick} entities={_frame.Entities.Count}");
+            for (int i = 0; i < _systemTimingBuffer.Count; i++)
+            {
+                var t = _systemTimingBuffer[i];
+                sb.Append($" {t.SystemName}={t.AvgMs:F3}ms");
+            }
+            logger.Log(logLevel, sb.ToString(), null);
+        }
+#endif
+
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
         public void SnapshotHashesToQueue() => _frame.SnapshotHashesToQueue();
         public void FlushHashHistory(IKLogger logger, int dumpTick) => _frame.FlushHashHistory(logger, dumpTick);

@@ -24,6 +24,11 @@ namespace xpTURN.Klotho.Network
     /// </summary>
     public class Room
     {
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+        private const int SYSTEM_TIMING_LOG_INTERVAL_TICKS = 100;
+        private int _lastSystemTimingLogTick;
+#endif
+
         public int RoomId { get; }
         public RoomState State { get; set; }
 
@@ -110,6 +115,15 @@ namespace xpTURN.Klotho.Network
             Engine.Update(elapsedSec);
 
             if (State != RoomState.Active) return;
+
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+            if (Simulation is xpTURN.Klotho.ECS.EcsSimulation ecsSimTiming
+                && Engine.CurrentTick - _lastSystemTimingLogTick >= SYSTEM_TIMING_LOG_INTERVAL_TICKS)
+            {
+                _lastSystemTimingLogTick = Engine.CurrentTick;
+                ecsSimTiming.LogSystemTimings(_logger, $"Room:{RoomId}");
+            }
+#endif
 
             // Match-end / abort grace expiry. Checked before ShouldDrain so the
             // explicit match-end / match-aborted reason wins when both fire in the same Update.

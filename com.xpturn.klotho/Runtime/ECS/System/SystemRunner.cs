@@ -19,6 +19,25 @@ namespace xpTURN.Klotho.ECS
         private bool _dirty = true;
         private int _nextOrder;
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+        private long[] _updateTimingTicks;
+        private int _timingSampleCount;
+
+        public readonly struct SystemTiming
+        {
+            public readonly string SystemName;
+            public readonly double TotalMs;
+            public readonly double AvgMs;
+
+            public SystemTiming(string systemName, double totalMs, double avgMs)
+            {
+                SystemName = systemName;
+                TotalMs = totalMs;
+                AvgMs = avgMs;
+            }
+        }
+#endif
+
         public void AddSystem(object system, SystemPhase phase)
         {
             if (system == null)
@@ -43,6 +62,10 @@ namespace xpTURN.Klotho.ECS
                 int cmp = ((int)a.Phase).CompareTo((int)b.Phase);
                 return cmp != 0 ? cmp : a.Order.CompareTo(b.Order);
             });
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+            _updateTimingTicks = new long[_sorted.Length];
+            _timingSampleCount = 0;
+#endif
             _dirty = false;
         }
 
@@ -111,9 +134,39 @@ namespace xpTURN.Klotho.ECS
             for (int i = 0; i < _sorted.Length; i++)
             {
                 if (_sorted[i].System is ISystem sys)
+                {
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+                    long start = Stopwatch.GetTimestamp();
                     sys.Update(ref frame);
+                    _updateTimingTicks[i] += Stopwatch.GetTimestamp() - start;
+#else
+                    sys.Update(ref frame);
+#endif
+                }
             }
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+            _timingSampleCount++;
+#endif
         }
+
+#if DEVELOPMENT_BUILD || UNITY_EDITOR || DEBUG
+        public void ConsumeUpdateTimings(List<SystemTiming> buffer)
+        {
+            EnsureSorted();
+            if (_timingSampleCount == 0) return;
+
+            double msPerTick = 1000.0 / Stopwatch.Frequency;
+            int sampleCount = _timingSampleCount;
+            for (int i = 0; i < _sorted.Length; i++)
+            {
+                if (_sorted[i].System is not ISystem) continue;
+                double totalMs = _updateTimingTicks[i] * msPerTick;
+                buffer.Add(new SystemTiming(_sorted[i].System.GetType().Name, totalMs, totalMs / sampleCount));
+                _updateTimingTicks[i] = 0;
+            }
+            _timingSampleCount = 0;
+        }
+#endif
 
         private static void SaveAllPreviousTransforms(ref Frame frame)
         {
