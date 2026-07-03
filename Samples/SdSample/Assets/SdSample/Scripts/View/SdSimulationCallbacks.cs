@@ -33,5 +33,7 @@ namespace xpTURN.Samples.SdSample
             cmd.V = _input.V;
             sender.Send(cmd);
         }
+
+        public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId) { } // no per-join world state to seed
     }
 }

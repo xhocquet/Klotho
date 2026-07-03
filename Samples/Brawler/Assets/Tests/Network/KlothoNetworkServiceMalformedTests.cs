@@ -7,6 +7,7 @@ using xpTURN.Klotho.Logging;
 using xpTURN.Klotho.Core;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.Helper.Tests;
+using Brawler; // BrawlerPlayerConfig — a registered PlayerConfigBase for the positive-control config
 
 namespace xpTURN.Klotho.Network.Tests
 {
@@ -136,7 +137,74 @@ namespace xpTURN.Klotho.Network.Tests
                 "client mode regular dispatch must not touch _pendingPeers");
         }
 
+        // ── L2h-5: null-config relay guard (CODE_REVIEW #5) ──────────────────
+
+        // A PlayerConfigMessage whose ConfigData does not deserialize (here: empty → Deserialize returns
+        // null via its length<1 guard, WITHOUT throwing) must be dropped before the host relay. Otherwise
+        // it skips the unmapped-peer / spoof-id drop and the entitlement guard (all inside the non-null
+        // path) yet is still forwarded to every peer carrying an attacker-chosen msg.PlayerId.
+        [Test]
+        public void Host_PlayerConfig_NullDeserialize_NotRelayed()
+        {
+            BecomeHost();
+            SetSinglePeer(peerId: 10, playerId: 1); // one relay target → a relay would Send exactly once
+
+            int before = _transport.SendCallCount;
+            InvokeHandlePlayerConfig(
+                new PlayerConfigMessage { PlayerId = 1, ConfigData = Array.Empty<byte>() },
+                peerId: 10);
+
+            Assert.AreEqual(before, _transport.SendCallCount,
+                "null-deserializing config must not be relayed (dropped before the host relay)");
+        }
+
+        // Positive control: a valid config (deserializes to a registered BrawlerPlayerConfig, sender bound
+        // and unspoofed) IS relayed — proves the null case's zero-relay is the guard firing, not a broken
+        // host setup that never relays.
+        [Test]
+        public void Host_PlayerConfig_ValidConfig_Relayed()
+        {
+            BecomeHost();
+            SetSinglePeer(peerId: 10, playerId: 1);
+
+            byte[] configData = _serializer.Serialize(new BrawlerPlayerConfig { SelectedCharacterClass = 5 });
+            int before = _transport.SendCallCount;
+            InvokeHandlePlayerConfig(
+                new PlayerConfigMessage { PlayerId = 1, ConfigData = configData },
+                peerId: 10);
+
+            Assert.AreEqual(before + 1, _transport.SendCallCount,
+                "a valid, sender-bound config must relay to the one mapped peer");
+        }
+
         // ── Helpers ─────────────────────────────────────────────────────────
+
+        // Force _peerToPlayer to a known single mapping so the relay count is deterministic.
+        private void SetSinglePeer(int peerId, int playerId)
+        {
+            var field = typeof(KlothoNetworkService).GetField(
+                "_peerToPlayer", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "reflection: _peerToPlayer");
+            var map = (Dictionary<int, int>)field.GetValue(_svc);
+            map.Clear();
+            map[peerId] = playerId;
+        }
+
+        private void InvokeHandlePlayerConfig(PlayerConfigMessage msg, int peerId)
+        {
+            var method = typeof(KlothoNetworkService).GetMethod(
+                "HandlePlayerConfigMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(method, "reflection: HandlePlayerConfigMessage");
+            try
+            {
+                method.Invoke(_svc, new object[] { msg, peerId });
+            }
+            catch (TargetInvocationException)
+            {
+                // Slim setup (no engine subscribed) — the relay runs at the END of the method, after any
+                // downstream apply, so the SendCallCount assertion remains valid even if a later call throws.
+            }
+        }
 
         private void BecomeHost()
         {

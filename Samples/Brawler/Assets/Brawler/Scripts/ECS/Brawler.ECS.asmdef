@@ -8,6 +8,7 @@
         "xpTURN.Klotho.Runtime",
         "xpTURN.Klotho.LiteNetLib",
         "xpTURN.Klotho.Gameplay",
+        "xpTURN.Klotho.Identity.P2pRef",
         "Brawler.DataAssets"
     ],
     "includePlatforms": [],

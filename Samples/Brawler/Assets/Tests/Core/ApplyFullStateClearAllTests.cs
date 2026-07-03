@@ -222,7 +222,7 @@ namespace xpTURN.Klotho.Core.Tests
             string result = InvokeApplyFullState(applyTick, BitConverter.GetBytes(0L), 0L, reason);
 
             Assert.AreEqual("Skipped", result,
-                "Retreat guard early-return must report Skipped — no longer disguised as success (IMP59 V1-E1)");
+                "Retreat guard early-return must report Skipped — no longer disguised as success");
             Assert.AreEqual(currentTickBefore, host.Engine.CurrentTick,
                 "Early-return path must not modify CurrentTick");
             Assert.AreEqual(verifiedBefore, host.Engine.LastVerifiedTick,

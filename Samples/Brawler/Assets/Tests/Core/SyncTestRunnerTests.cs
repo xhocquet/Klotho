@@ -271,7 +271,7 @@ namespace xpTURN.Klotho.Core.Tests
 
         #endregion
 
-        #region IMP59 V2-H6: failure containment
+        #region Failure containment
 
         /// <summary>
         /// Breaks resim determinism on purpose: writes a counter that lives OUTSIDE frame state
@@ -315,7 +315,7 @@ namespace xpTURN.Klotho.Core.Tests
             // The diverged resim branch must not stay live: the post-failure live state is the
             // forward branch (hash equals the forward hash captured before the rollback check).
             Assert.AreEqual(firstFail.Value.ExpectedHash, sim.GetStateHash(),
-                "A failed check must restore the post-forward state (side buffer, IMP59 V2-H6)");
+                "A failed check must restore the post-forward state (side buffer)");
         }
 
         [Test]

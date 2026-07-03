@@ -75,6 +75,14 @@ namespace xpTURN.Klotho.Network
         /// </summary>
         void ClearUnackedInputs();
 
+        /// <summary>
+        /// Server only: the per-player opaque entitlement blob, or null when none / unknown.
+        /// Read by the engine's tick-0 seed path so the game can initialize tick-0 sim from it; the result
+        /// is then carried to all clients via the existing Initial FullState bootstrap (so the client impl
+        /// has no entitlements and returns null). Kept off IPlayerInfo so it never leaks onto the roster wire.
+        /// </summary>
+        byte[] GetPlayerEntitlement(int playerId);
+
         // BroadcastFullState(int, byte[], long) — inherited from IKlothoNetworkService.
         // SD-server impl broadcasts to all remote SD clients (including spectators); SD-client impl
         // throws NotSupportedException.

@@ -219,7 +219,7 @@ namespace xpTURN.Klotho.Core.Tests
             _networkService.FireDesyncDetected(peer, T);
 
             Assert.AreEqual(P, LastMatched(_engine),
-                "Anchor must demote to the prior matched tick (P), not stay on the diverged tick T (IMP60-13 ①)");
+                "Anchor must demote to the prior matched tick (P), not stay on the diverged tick T");
             Assert.IsTrue(HasPendingRollback(_engine), "rung-1 rollback must be requested");
             Assert.AreEqual(P, PendingRollbackTick(_engine),
                 "Rollback target must be the demoted anchor P, not the poison tick T");

@@ -42,6 +42,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void RegisterSystems(EcsSimulation simulation) { }
             public void OnInitializeWorld(IKlothoEngine engine) { }
             public void OnPollInput(int playerId, int tick, ICommandSender sender) { }
+            public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId) { } // no per-join world state to seed
         }
 
         private static readonly FieldInfo _viewCallbacksField =
@@ -86,7 +87,7 @@ namespace xpTURN.Klotho.Core.Tests
             });
 
             Assert.IsNull(session.NetworkService,
-                "A replay session must not create a network service (IMP59-F8 ghost-service fix)");
+                "A replay session must not create a network service (ghost-service fix)");
             Assert.IsNotNull(session.Engine);
 
             // Every replay reaches Stop automatically (recorded MatchEnd → auto-shutdown
@@ -110,7 +111,7 @@ namespace xpTURN.Klotho.Core.Tests
             });
 
             Assert.AreSame(viewCallbacks, _viewCallbacksField.GetValue(session.Engine),
-                "Replay engine must keep the view callbacks (network-less overload, IMP59-F8 D2)");
+                "Replay engine must keep the view callbacks (network-less overload)");
             Assert.AreSame(simCallbacks, _simulationCallbacksField.GetValue(session.Engine),
                 "Replay engine must keep the simulation callbacks");
 
@@ -128,7 +129,7 @@ namespace xpTURN.Klotho.Core.Tests
 
             Assert.Throws<InvalidOperationException>(
                 () => engine.Initialize(sim, _logger, new StubSimulationCallbacks()),
-                "The network-less overload chains into the guarded 2-arg body (IMP59-F2 re-init guard)");
+                "The network-less overload chains into the guarded 2-arg body (re-init guard)");
         }
 
         // ── (3) Staleness threshold ─────────────────────────────────────

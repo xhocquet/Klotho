@@ -126,7 +126,7 @@ namespace xpTURN.Klotho.Network.Tests
                 // Harness dt == interval, so 1 update = 1 tick-time; 20 = 2x margin.
                 Assert.LessOrEqual(sinceProgress, 20,
                     $"Liveness violated at iteration {i}: host frozen for {sinceProgress} updates " +
-                    $"(tick={host.CurrentTick}) — the throttle latch is back (IMP60-2)");
+                    $"(tick={host.CurrentTick}) — the throttle latch is back");
             }
         }
 
@@ -175,7 +175,7 @@ namespace xpTURN.Klotho.Network.Tests
 
             Assert.GreaterOrEqual(stallMax, 12,
                 $"Longest stall was {stallMax} sub-updates — waits are being consumed per " +
-                "UPDATE instead of per skipped tick (fps-dependent under-wait, IMP60-2 D2)");
+                "UPDATE instead of per skipped tick (fps-dependent under-wait)");
             Assert.LessOrEqual(stallMax, 24,
                 $"Longest stall was {stallMax} sub-updates — exceeds the 10 tick-time liveness bound");
         }
@@ -200,7 +200,7 @@ namespace xpTURN.Klotho.Network.Tests
             host.Engine.NotifyPlayerLeft(guest.LocalPlayerId);
 
             Assert.IsFalse(remoteTicks.Contains(guest.LocalPlayerId),
-                "A departed player's timing vote must be discarded with them (IMP60-2 Step 3)");
+                "A departed player's timing vote must be discarded with them");
         }
     }
 }

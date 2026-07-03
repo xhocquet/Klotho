@@ -4,22 +4,34 @@
     <TargetFramework>net8.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>xpTURN.Samples.DevLobby</RootNamespace>
     <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
 
-  <!-- Core DLL (LiteNetLibTransport / SpanWriter / logging) + its runtime NuGet deps. -->
-  <Import Project="../GodotSdSample/addons/klotho/Klotho.Server.props" />
-
+  <!-- Core framework via the Server~ source mirrors — same model as the Brawler/SdSample dedicated servers,
+       replacing the prebuilt Klotho.Server.props DLL <Reference>. This matters because the identity Server~
+       mirrors below reference the SAME source-built xpTURN.Klotho.Runtime; mixing a prebuilt Runtime.dll
+       (props) with the source-built one (via the mirrors) would collide on one assembly name. A lobby is not
+       a game server (no RoomManager/ServerLoop/ServerNetworkService), so KlothoServer is NOT referenced.
+       Newtonsoft.Json / the LiteNetLib third-party flow transitively from the Runtime / LiteNetLib mirrors. -->
   <ItemGroup>
-    <!-- Ed25519 (BcEd25519Backend) — same NuGet the Godot samples use. -->
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.Runtime/xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.Logging/xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.LiteNetLib/xpTURN.Klotho.LiteNetLib.csproj" />
   </ItemGroup>
 
+  <!-- Source generator for any game-specific types compiled into this exe (mirrors the Server~ servers). -->
   <ItemGroup>
-    <!-- Reuse the identity reference sources (codec / issuer / Ed25519 backend) + the SD lobby core.
-         The lobby holds the private key and the redeem/match authority via DevLobbyCore. -->
-    <Compile Include="../IdentityP2pRef/Runtime/*.cs" Link="IdentityP2pRef/%(Filename)%(Extension)" />
-    <Compile Include="../IdentitySdRef/Runtime/*.cs" Link="IdentitySdRef/%(Filename)%(Extension)" />
+    <Analyzer Include="../../com.xpturn.klotho/Plugins/Analyzers/KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <!-- Reuse the identity reference sources (codec / issuer / Ed25519 backend) + the SD lobby core via their
+       Server~ mirror projects instead of globbing the raw Runtime sources. The lobby holds the private key
+       and the redeem/match authority via DevLobbyCore. BouncyCastle (BcEd25519Backend) flows transitively
+       through the P2pRef mirror — no direct PackageReference here. -->
+  <ItemGroup>
+    <ProjectReference Include="../IdentityP2pRef/Server~/xpTURN.Klotho.Identity.P2pRef/xpTURN.Klotho.Identity.P2pRef.csproj" />
+    <ProjectReference Include="../IdentitySdRef/Server~/xpTURN.Klotho.Identity.SdRef/xpTURN.Klotho.Identity.SdRef.csproj" />
   </ItemGroup>
 </Project>

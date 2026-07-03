@@ -181,7 +181,7 @@ namespace xpTURN.Klotho.Network.Tests
             Receive(guest.Engine, real);
 
             Assert.AreSame(real, buffer.GetCommand(tick, 0),
-                "guest must ALSO overwrite real-over-unsealed-empty (P2P symmetric — IMP60-19)");
+                "guest must ALSO overwrite real-over-unsealed-empty (P2P symmetric)");
             Assert.IsFalse(HasPendingRollback(guest.Engine),
                 "frontier (tick >= CurrentTick): RequestRollback self-no-ops");
         }

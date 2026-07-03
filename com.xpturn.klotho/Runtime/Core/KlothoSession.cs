@@ -482,23 +482,18 @@ namespace xpTURN.Klotho.Core
             //    transport (stale-pong RTT pollution, epoch SharedClock logs, and a live-message
             //    surface into the replay engine). NetworkService == null follows the spectator
             //    precedent — observers/forwarders/properties are already null-guarded.
+            //    NOTE: the service is constructed here but Initialize/InitializeFromConnection is deferred to
+            //    after the identity/entitlement wiring — a guest's InitializeFromConnection rebuilds the
+            //    initial roster and re-verifies each propagated ticket, which must see the entitlement gate
+            //    already enabled, else the initial roster's per-peer entitlement is skipped (gate off) and the
+            //    P2P tick-0 loadout seed diverges from the host.
             IKlothoNetworkService networkService = null;
             if (!setup.IsReplay)
             {
                 if (simConfig.Mode == NetworkMode.ServerDriven)
-                {
-                    var sdService = new ServerDrivenClientService();
-                    if (isGuest) sdService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger, setup.RoomId);
-                    else         sdService.Initialize(transport, commandFactory, setup.Logger);
-                    networkService = sdService;
-                }
+                    networkService = new ServerDrivenClientService();
                 else
-                {
-                    var p2pService = new KlothoNetworkService();
-                    if (isGuest) p2pService.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger);
-                    else         p2pService.Initialize(transport, commandFactory, setup.Logger);
-                    networkService = p2pService;
-                }
+                    networkService = new KlothoNetworkService();
             }
 
             // 5.1 Reconnect credentials wire — optional. Both KlothoNetworkService and ServerDrivenClientService
@@ -519,6 +514,37 @@ namespace xpTURN.Klotho.Core
             {
                 p2pVal.SetIdentityValidator(setup.IdentityValidator);
                 p2pVal.SetLocalIdentityTicket(setup.LocalIdentityTicket); // host validates its own ticket at self-add
+                // The re-verifier auto-derives from the validator, since the reference P2P validator also
+                // implements IPropagatedTicketVerifier. The entitlement guard gates original-ticket
+                // propagation and per-peer re-verification: when it is set, enable propagation
+                // (SetOriginalTicketPropagation is fail-closed and refuses with a log if no re-verifier is
+                // present). With no guard, propagation stays off and behaviour is unchanged.
+                if (setup.IdentityValidator is Network.IPropagatedTicketVerifier verifier)
+                    p2pVal.SetPropagatedTicketVerifier(verifier);
+                if (setup.PlayerConfigEntitlementGuard != null)
+                {
+                    p2pVal.SetPlayerConfigEntitlementGuard(setup.PlayerConfigEntitlementGuard);
+                    p2pVal.SetOriginalTicketPropagation(true);
+                }
+            }
+
+            // Initialize the service now that identity/entitlement wiring is in place. Deferred from
+            // construction so a guest's InitializeFromConnection rebuilds its initial roster with the
+            // entitlement gate already enabled — each propagated ticket is re-verified and its entitlement
+            // extracted, so this peer seeds the same tick-0 loadout the host does. (The host uses
+            // Initialize; its own roster entry is added later in CreateRoom, already after this wiring.)
+            if (!setup.IsReplay)
+            {
+                if (networkService is ServerDrivenClientService sdInit)
+                {
+                    if (isGuest) sdInit.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger, setup.RoomId);
+                    else         sdInit.Initialize(transport, commandFactory, setup.Logger);
+                }
+                else if (networkService is KlothoNetworkService p2pInit)
+                {
+                    if (isGuest) p2pInit.InitializeFromConnection(setup.Connection, commandFactory, setup.Logger);
+                    else         p2pInit.Initialize(transport, commandFactory, setup.Logger);
+                }
             }
 
             // 5.5 Late Join / cold-start Reconnect seed — restore _players / _sessionMagic / _randomSeed.

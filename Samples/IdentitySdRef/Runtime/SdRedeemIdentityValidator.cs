@@ -113,7 +113,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                             else if (BadAccountBound(r.Account))
                                 handle.SetResult(Reject(SdWireCodes.IdentityInvalid)); // bound the redeem-returned account
                             else
-                                handle.SetResult(IdentityValidationOutcome.Accept(r.Account, r.DisplayName));
+                                handle.SetResult(IdentityValidationOutcome.Accept(r.Account, r.DisplayName, r.Entitlement));
                         }
                     }
                     finally

@@ -121,11 +121,15 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
 
         public static byte[] EncodeRedeemResponse(int requestId, RedeemResult result)
         {
-            var buf = new byte[1 + 4 + 1 + Str(result.Account) + Str(result.DisplayName) + 1];
+            // entitlement (opaque, length-prefixed) is a trailing append — old decoders ignore it; the redeem
+            // channel is dedi↔lobby so both rebuild together. Language-agnostic: int32-len + raw bytes.
+            int entLen = result.Entitlement?.Length ?? 0;
+            var buf = new byte[1 + 4 + 1 + Str(result.Account) + Str(result.DisplayName) + 1 + 4 + entLen];
             var w = new SpanWriter(buf);
             w.WriteByte(RedeemResponse); w.WriteInt32(requestId);
             w.WriteBool(result.Ok); w.WriteString(result.Account); w.WriteString(result.DisplayName);
             w.WriteByte(result.RejectWireCode);
+            w.WriteBytes(result.Entitlement); // null → length 0
             return buf;
         }
 
@@ -140,7 +144,13 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             string account = r.ReadString();
             string displayName = r.ReadString();
             byte rejectCode = r.ReadByte();
-            m.Result = ok ? RedeemResult.Accept(account, displayName) : RedeemResult.Reject(rejectCode);
+            byte[] entitlement = null;
+            if (r.Remaining >= 4) // trailing append — tolerate an old encoder that omitted it
+            {
+                var span = r.ReadBytes();
+                if (span.Length > 0) entitlement = span.ToArray();
+            }
+            m.Result = ok ? RedeemResult.Accept(account, displayName, entitlement) : RedeemResult.Reject(rejectCode);
             return true;
         }
 

@@ -43,6 +43,10 @@
 **/Klotho/*.sln
 **/Klotho/*.slnx
 
+**/Brawler/*.csproj
+**/Brawler/*.sln
+**/Brawler/*.slnx
+
 **/P2pSample/*.csproj
 **/P2pSample/*.sln
 **/P2pSample/*.slnx

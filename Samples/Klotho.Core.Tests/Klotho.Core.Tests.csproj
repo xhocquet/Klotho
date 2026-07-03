@@ -15,7 +15,7 @@
 
   <ItemGroup>
     <!-- Core runtime compiled from SOURCE (not the prebuilt KlothoServer.dll) so this exercises the
-         current ServerNetworkService, including the pending-peer timeout (IMP75) + the nowProvider seam. -->
+         current ServerNetworkService, including the pending-peer timeout + the nowProvider seam. -->
     <ProjectReference Include="../Brawler/xpTURN.Klotho.Runtime.csproj" />
   </ItemGroup>
 </Project>

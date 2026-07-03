@@ -268,7 +268,7 @@ namespace xpTURN.Klotho.Network
 
         /// <summary>
         /// Set the current local frame-advantage (round of CalculateLocalAdvantage), included in
-        /// CommandMessage.SenderAdvantage for the F2 advantage exchange. Pushed each tick from the
+        /// CommandMessage.SenderAdvantage for the frame-advantage exchange. Pushed each tick from the
         /// engine OUTSIDE the timesync-enabled guard so a throttle-disabled guest still reports a
         /// truthful advantage to the host. No-op for server-driven services.
         /// </summary>

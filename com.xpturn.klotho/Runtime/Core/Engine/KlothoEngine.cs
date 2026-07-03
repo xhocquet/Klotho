@@ -108,6 +108,15 @@ namespace xpTURN.Klotho.Core
         // Sentinel int.MinValue: no prev cmd. First cmd trivially passes (targetTick > int.MinValue + 1).
         private int _lastSentCmdTick = int.MinValue;
 
+        // Late-join spawn floor. A late-joining guest's own cmd.Tick must not precede its joinTick —
+        // the PlayerJoinCommand at joinTick creates the participant slot and fires OnPlayerJoinedWorld,
+        // which seeds join-time deterministic state (e.g. loadout seeds). A command landing earlier
+        // consumes pre-seed state identically on every peer: no desync, but join-time guarantees
+        // (entitlement enforcement) are silently bypassed. 0 = no floor (host / normal join / SD).
+        // Set once via SetLateJoinCommandFloor before catchup completes; inert once
+        // CurrentTick + delays naturally passes it.
+        private int _lateJoinCommandFloorTick;
+
         // [Metrics][LagReductionLatency] tracker — measures actual clamp resolution time after
         // an ApplyExtraDelay decrease. Cleared after the first non-clamped InputCommand following the decrease.
         private bool _lagReductionPending;
@@ -475,6 +484,21 @@ namespace xpTURN.Klotho.Core
                 return null;
             return config as T;
         }
+
+        /// <summary>
+        /// Per-player opaque entitlement blob, or null when none. Server-authoritative: on the SD
+        /// server this returns the stored redeem outcome; on the SD client it is always null (the seed effect
+        /// arrives baked into the Initial FullState). The game reads this during tick-0 world init
+        /// (OnInitializeWorld, before SaveSnapshot(0)) to seed the simulation deterministically — the server's
+        /// result then propagates to every client via the existing Initial FullState / full-state resync.
+        /// </summary>
+        // The server-driven path reads the server's stored redeem outcome; the P2P path reads each peer's
+        // independently-verified entitlement off the concrete network service via a cast, which avoids an
+        // interface change so existing network-service mocks are unaffected. Every P2P peer holds the same
+        // signed bytes, so seeding the world from them in OnInitializeWorld is deterministic across peers.
+        public byte[] GetPlayerEntitlement(int playerId)
+            => _serverDrivenNetwork?.GetPlayerEntitlement(playerId)
+               ?? (_networkService as KlothoNetworkService)?.GetPlayerEntitlement(playerId);
 
         /// <summary>
         /// Gets per-player custom data. Returns false if not yet received.
@@ -1097,6 +1121,19 @@ namespace xpTURN.Klotho.Core
             FinalizeExtraDelayChange(prevEffective, isReconnect: source == ExtraDelaySource.Reconnect);
         }
 
+        /// <summary>
+        /// Floors locally-issued cmd.Tick at the late-joiner's own joinTick so the first gameplay
+        /// command (e.g. spawn) never targets a tick before the PlayerJoinCommand that seeds
+        /// join-time state — regardless of catchup speed or extra-delay drift. Called on the
+        /// late-join guest path only (KlothoNetworkService.SubscribeEngine); send-side only, so no
+        /// determinism impact — other peers execute received commands at their carried tick.
+        /// </summary>
+        public void SetLateJoinCommandFloor(int joinTick)
+        {
+            _lateJoinCommandFloorTick = joinTick;
+            _logger?.KInformation($"[KlothoEngine][LateJoin] Command floor set: joinTick={joinTick} (CurrentTick={CurrentTick})");
+        }
+
         public void EscalateExtraDelay(int step, int max)
         {
             int clampMax = _simConfig.MaxRollbackTicks / 2;
@@ -1198,6 +1235,19 @@ namespace xpTURN.Klotho.Core
                     targetTick = shifted;
                 }
 #endif
+
+                // Late-join spawn floor — lift targetTick to the joiner's joinTick so no local command
+                // precedes the PlayerJoinCommand that seeds join-time state. The catchup prefill
+                // (HandleCatchupComplete) covers the widened local-chain gap [currentTick, joinTick),
+                // and reals piling onto the floor tick reuse the monotonic-clamp semantics below
+                // ("same-tick multiple cmds are legal"). Inert (0) except on a late-join guest.
+                if (targetTick < _lateJoinCommandFloorTick)
+                {
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+                    _logger?.KDebug($"[KlothoEngine][LateJoin] cmd.Tick joinTick floor: computed={targetTick}, floored={_lateJoinCommandFloorTick}");
+#endif
+                    targetTick = _lateJoinCommandFloorTick;
+                }
 
                 // Prevent non-monotonic cmd.Tick when RecommendedExtraDelay decreases on Reconnect / mid-match.
                 // Applied after fault injection to keep production-ordering invariant in fault tests.

@@ -16,6 +16,13 @@ namespace xpTURN.Klotho.Network
         private enum LateJoinState { None, WaitingForAccept, WaitingForFullState, CatchingUp, Active }
         private LateJoinState _lateJoinState;
 
+        // This guest's own joinTick (the tick the host schedules our PlayerJoinCommand at),
+        // read from the host-computed accept field in SeedLateJoinPlayers. Flushed to the engine as a
+        // cmd.Tick floor in SubscribeEngine — the joiner's spawn must not execute before the join
+        // command that seeds its join-time state — and used by HandleCatchupComplete to size the
+        // prefill. 0 = not a late-join guest.
+        private int _lateJoinJoinTick;
+
         // ── Late Join (Guest) ──────────────────────
 
         /// <summary>
@@ -27,7 +34,10 @@ namespace xpTURN.Klotho.Network
         public void SeedLateJoinPlayers(LateJoinPayload payload)
         {
             var msg = payload.AcceptMessage;
-            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster);
+            // Host-computed joinTick carried in the accept — single-sourced, so a host-side formula
+            // change can never silently diverge from a guest-side re-derivation.
+            _lateJoinJoinTick = msg.JoinTick;
+            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster, msg.RosterTickets);
         }
 
         /// <summary>
@@ -38,15 +48,17 @@ namespace xpTURN.Klotho.Network
         public void SeedReconnectPlayers(ReconnectPayload payload)
         {
             var msg = payload.AcceptMessage;
-            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster);
+            SeedPlayersFromCatchupPayload(msg.RandomSeed, msg.Roster, msg.RosterTickets);
         }
 
         /// <summary>
         /// Common seed helper shared by Late Join and cold-start Reconnect.
         /// Restores _players / RandomSeed, sets Phase = Playing, and switches to CatchingUp so subsequent
-        /// catchup input batches flow into _inputBuffer.
+        /// catchup input batches flow into _inputBuffer. rosterTickets: per-player
+        /// original tickets index-parallel to roster; when present (gate on) each entry is re-verified and
+        /// its ticket-derived identity/entitlement adopted (mirrors RebuildPlayerList) — otherwise a no-op.
         /// </summary>
-        private void SeedPlayersFromCatchupPayload(int randomSeed, List<RosterEntry> roster)
+        private void SeedPlayersFromCatchupPayload(int randomSeed, List<RosterEntry> roster, List<string> rosterTickets)
         {
             RandomSeed = randomSeed;
             int prevPlayerCount = _players.Count;
@@ -55,14 +67,31 @@ namespace xpTURN.Klotho.Network
             for (int i = 0; i < roster.Count; i++)
             {
                 var e = roster[i];
-                // IsReady hardcoded true on this catchup-seed path (preserves prior behavior).
-                // Names omitted to match the prior P2P seed (identity arrives via a separate Notification).
+                // roster-init (mirrors RebuildPlayerList useNames:true): start from the host-relayed roster
+                // name so the re-verify below can detect a host-forged roster (name != ticket) and adopt the
+                // ticket value. IsReady hardcoded true on this catchup-seed path (preserves prior behavior).
+                string account = e.Account.ToString();
+                string displayName = e.DisplayName.ToString();
+                byte[] entitlement = null;
+                // Re-verify the propagated ticket and adopt its identity/entitlement. No-op when the
+                // gate is off (no/empty tickets) → names stay at the host-relayed roster values (aligned with
+                // warm reconnect). Bound-checked against a short RosterTickets list.
+                if (rosterTickets != null)
+                {
+                    string ticket = i < rosterTickets.Count ? rosterTickets[i] : null;
+                    ResolveRosterEntryIdentity(e.PlayerId, ticket, ref account, ref displayName, ref entitlement);
+                }
                 _players.Add(new PlayerInfo
                 {
                     PlayerId = e.PlayerId,
+                    Entitlement = entitlement,
                     IsReady = true,
                     ConnectionState = (PlayerConnectionState)e.ConnectionState,
+                    DisplayName = displayName,
+                    Account = account,
                 });
+                if (entitlement != null && entitlement.Length > 0)
+                    _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via CatchupRebuild: playerId={e.PlayerId}, bytes={entitlement.Length}");
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
@@ -93,6 +122,12 @@ namespace xpTURN.Klotho.Network
             int extraDelay = _engine.RecommendedExtraDelay;
             int totalPrefill = inputDelay + extraDelay;
             int currentTick = _engine.CurrentTick;
+            // The engine floors real cmd.Tick at joinTick (SetLateJoinCommandFloor), so when catchup
+            // ends more than (InputDelay + extraDelay) ticks before joinTick, extend the prefill to
+            // cover the widened local-chain gap [currentTick, joinTick) — otherwise the chain stalls
+            // on the uncovered ticks between the prefill end and the floored first real cmd.
+            if (_lateJoinJoinTick - currentTick > totalPrefill)
+                totalPrefill = _lateJoinJoinTick - currentTick;
             for (int i = 0; i < totalPrefill; i++)
             {
                 int tick = currentTick + i;
@@ -103,7 +138,7 @@ namespace xpTURN.Klotho.Network
                 SendCommand(_emptyCommandCache);
             }
 
-            _logger?.KInformation($"[KlothoNetworkService][LateJoin] Transition to active: tick={currentTick}, prefilled {totalPrefill} empty commands (InputDelay={inputDelay}, extraDelay={extraDelay})");
+            _logger?.KInformation($"[KlothoNetworkService][LateJoin] Transition to active: tick={currentTick}, prefilled {totalPrefill} empty commands (InputDelay={inputDelay}, extraDelay={extraDelay}, joinTick={_lateJoinJoinTick})");
         }
 
         private void HandleCatchupInputMessage(SpectatorInputMessage msg)
@@ -145,8 +180,10 @@ namespace xpTURN.Klotho.Network
             LocalPlayerId = msg.PlayerId;
             _sharedClock = new SharedTimeClock(msg.SharedEpoch, msg.ClockOffset);
             // P2P carries identity via a separate Notification, so the LateJoin handler ignores roster
-            // names and IsReady stays false (preserves prior behavior).
-            RebuildPlayerList(msg.Roster);
+            // names and IsReady stays false (preserves prior behavior). Pass the
+            // propagated tickets so the late-joiner re-verifies existing players independently when the
+            // gate is on (empty/no-op when off — prior behavior unchanged).
+            RebuildPlayerList(msg.Roster, rosterTickets: msg.RosterTickets);
             RandomSeed = msg.RandomSeed;
 
             _lateJoinState = LateJoinState.WaitingForFullState;
@@ -180,11 +217,18 @@ namespace xpTURN.Klotho.Network
             // so the same PlayerId reads identically across peers. Ping is unmeasurable on guests
             // and stays at default 0.
             // Use the authority-propagated identity instead of an empty name.
+            // Re-verify the propagated original ticket and adopt its identity before
+            // adding (no-op when the gate is off).
+            string ljnDisplayName = msg.DisplayName ?? string.Empty;
+            string ljnAccount = msg.Account ?? string.Empty;
+            byte[] ljnEntitlement = null; // adopted from the re-verified ticket
+            ReverifyAndAdoptIdentity(msg.PlayerId, msg.OriginalTicket, ref ljnAccount, ref ljnDisplayName, ref ljnEntitlement);
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                DisplayName = msg.DisplayName ?? string.Empty,
-                Account = msg.Account ?? string.Empty,
+                DisplayName = ljnDisplayName,
+                Account = ljnAccount,
+                Entitlement = ljnEntitlement,
                 IsReady = true,
                 ConnectionState = PlayerConnectionState.Connected,
             };
@@ -193,6 +237,8 @@ namespace xpTURN.Klotho.Network
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            if (ljnEntitlement != null && ljnEntitlement.Length > 0)
+                _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via LateJoinNotification: playerId={msg.PlayerId}, bytes={ljnEntitlement.Length}");
 
             OnPlayerJoined?.Invoke(newPlayer);
 
@@ -204,7 +250,7 @@ namespace xpTURN.Klotho.Network
         private void CompleteLateJoinSync(int peerId, PeerSyncState state)
         {
             // Identity validation gate — before slot reservation. P2P validation is synchronous.
-            if (!TryValidateIdentityP2P(peerId, isLateJoin: true, out bool validatorRan, out string vAccount, out string vDisplayName))
+            if (!TryValidateIdentityP2P(peerId, isLateJoin: true, out bool validatorRan, out string vAccount, out string vDisplayName, out byte[] vEntitlement))
                 return;
 
             // PlayerId allocation goes through TryReservePlayerSlot — the Post-GameStart
@@ -224,6 +270,11 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 DisplayName = validatorRan ? (vDisplayName ?? string.Empty) : (ljClaimedName ?? string.Empty),
                 Account = validatorRan ? (vAccount ?? string.Empty) : string.Empty,
+                // Promote the host-validated original ticket. "" when gate off.
+                OriginalTicket = _propagateOriginalTickets && _peerTickets.TryGetValue(peerId, out var ljCapturedTicket)
+                    ? (ljCapturedTicket ?? string.Empty) : string.Empty,
+                // Store the late-joining guest's lobby-signed entitlement (host-side).
+                Entitlement = vEntitlement,
                 Ping = avgRtt,
                 IsReady = true
             };
@@ -233,6 +284,8 @@ namespace xpTURN.Klotho.Network
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
             _peerToPlayer[peerId] = newPlayerId;
+            if (newPlayer.Entitlement != null && newPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via LateJoinHost: playerId={newPlayerId}, bytes={newPlayer.Entitlement.Length}");
 
             // 2. Target tick for PlayerJoinCommand
             int joinTick = _engine.CurrentTick + _sessionConfig.LateJoinDelayTicks;
@@ -268,11 +321,16 @@ namespace xpTURN.Klotho.Network
                 EndGraceMs = _sessionConfig.EndGraceMs,
                 ClientShutdownGraceMs = _sessionConfig.ClientShutdownGraceMs,
                 RecommendedExtraDelay = lateJoinSeedExtraDelay,
+                JoinTick = joinTick,
             };
             for (int i = 0; i < _players.Count; i++)
             {
                 accept.Roster.Add(RosterEntry.FromPlayer(
                     _players[i], _logger, (byte)_players[i].ConnectionState));
+                // Index-parallel original tickets so the late-joiner re-verifies every
+                // existing player (P2P full-state is host-authored). Only when gate on → empty list otherwise.
+                if (_propagateOriginalTickets)
+                    accept.RosterTickets.Add(_players[i].OriginalTicket ?? string.Empty);
             }
             using (var serialized = _messageSerializer.SerializePooled(accept))
             {
@@ -287,14 +345,24 @@ namespace xpTURN.Klotho.Network
             {
                 PeerId = peerId,
                 PlayerId = newPlayerId,
-                LastSentTick = _engine.CurrentTick,
+                // The FullState is served at the host's CurrentTick, which is a START-of-tick snapshot
+                // (state after CurrentTick-1, still needs CurrentTick's input to advance). The joiner
+                // restores CurrentTick and re-executes that tick during catchup, so it needs that tick's
+                // other-player inputs replayed — otherwise it runs the tick with empty input and its
+                // verified chain diverges/stalls at the served tick. Backfill therefore starts AT the
+                // served tick: LastSentTick = CurrentTick-1 (the send loop uses LastSentTick+1). This
+                // matches the reconnect / desync-resync paths (KlothoNetworkService.Reconnect.cs,
+                // KlothoNetworkService.FullStateResync.cs) which enforce the same contract.
+                LastSentTick = _engine.CurrentTick - 1,
                 JoinTick = joinTick,
             };
 
-            // 6. Insert PlayerJoinCommand + broadcast
-            OnLateJoinPlayerAdded?.Invoke(newPlayerId, joinTick);
-
-            // Notify existing peers of the new player so their _players list stays consistent.
+            // 6. Send the LateJoinNotification BEFORE the PlayerJoinCommand. The notification carries the
+            // entitlement-bearing OriginalTicket → existing guests set PlayerInfo.Entitlement in
+            // HandleLateJoinNotification; the PlayerJoinCommand triggers the deterministic OnPlayerJoinedWorld
+            // callback at joinTick. Both go on the same ReliableOrdered channel, so send-order = delivery-order:
+            // the command (and thus the callback that reads GetPlayerEntitlement) can only be delivered
+            // AFTER the notification → the entitlement is guaranteed set before the callback runs on every peer.
             // Exclude the new joiner — they already received the full roster via LateJoinAcceptMessage.
             var notification = new LateJoinNotificationMessage
             {
@@ -302,6 +370,8 @@ namespace xpTURN.Klotho.Network
                 JoinTick = joinTick,
                 Account = newPlayer.Account ?? string.Empty,
                 DisplayName = newPlayer.DisplayName ?? string.Empty,
+                // The late-joiner's original ticket so existing peers re-verify it.
+                OriginalTicket = newPlayer.OriginalTicket ?? string.Empty,
             };
             RelayMessage(notification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
 
@@ -318,6 +388,10 @@ namespace xpTURN.Klotho.Network
                     }
                 }
             }
+
+            // Insert PlayerJoinCommand + broadcast — AFTER the notification (above), so the deterministic
+            // OnPlayerJoinedWorld callback it triggers never precedes the entitlement that callback reads.
+            OnLateJoinPlayerAdded?.Invoke(newPlayerId, joinTick);
 
             // 7. Notify existing peers
             _logger?.KInformation($"[KlothoNetworkService][CompleteLateJoinSync] Late join sync complete: peerId={peerId}, playerId={newPlayerId}, joinTick={joinTick}");

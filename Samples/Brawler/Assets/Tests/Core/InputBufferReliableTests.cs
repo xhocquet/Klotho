@@ -28,19 +28,36 @@ namespace xpTURN.Klotho.Tests.Core
         }
 
         // Non-reliable system command (e.g. PlayerJoin-like) — wiped by ClearAfter, not preserved.
-        private sealed class FakeSystem : ISystemCommand
+        // CommandBase-derived so it can be rented from CommandPool (ownership-contract compliant).
+        private sealed class FakeSystem : CommandBase, ISystemCommand
         {
-            public int CommandTypeId => 701;
-            public int PlayerId { get; set; }
-            public int Tick { get; set; }
+            public override int CommandTypeId => 701;
             public int OrderKey => 1;
-            public void Serialize(ref SpanWriter writer) { }
-            public void Deserialize(ref SpanReader reader) { }
-            public int GetSerializedSize() => 0;
+            protected override void SerializeData(ref SpanWriter writer) { }
+            protected override void DeserializeData(ref SpanReader reader) { }
         }
 
+        // Rent test doubles from the pool so the buffer's cleanup Return() sees pool-owned instances
+        // (game-side `new` would trip CommandPool's ownership-violation diagnostic).
         private static FakeReliable Reliable(int tick, int playerId, int seq)
-            => new FakeReliable { Tick = tick, PlayerId = playerId, SequenceNumber = seq };
+        {
+            var c = CommandPool.Get<FakeReliable>();
+            c.Tick = tick;
+            c.PlayerId = playerId;
+            c.SequenceNumber = seq;
+            return c;
+        }
+
+        private static FakeSystem System(int tick, int playerId)
+        {
+            var c = CommandPool.Get<FakeSystem>();
+            c.Tick = tick;
+            c.PlayerId = playerId;
+            return c;
+        }
+
+        [TearDown]
+        public void TearDown() => CommandPool.ClearAll();
 
         private static int CountAt(InputBuffer buf, int tick)
         {
@@ -70,7 +87,7 @@ namespace xpTURN.Klotho.Tests.Core
         {
             var buf = new InputBuffer();
             buf.AddCommand(Reliable(tick: 10, playerId: 0, seq: 1));      // reliable at future tick
-            buf.AddCommand(new FakeSystem { Tick = 10, PlayerId = 0 });  // non-reliable system at same tick
+            buf.AddCommand(System(tick: 10, playerId: 0));               // non-reliable system at same tick
 
             buf.ClearAfter(tick: 5);   // rollback to 5 — wipe > 5
 

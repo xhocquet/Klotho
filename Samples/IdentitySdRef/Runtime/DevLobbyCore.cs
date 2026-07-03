@@ -247,7 +247,11 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                 }
 
                 // 4. first consume — accept + reservation→occupied transition (reserved--/occupied++).
-                var result = RedeemResult.Accept(p.Account, p.DisplayName);
+                // Demo: attach the account's authoritative entitlement (owned set) in the SAME redeem snapshot
+                // as the account/displayName, so the account and its entitlement are confirmed together.
+                // Deterministic per account so replay/reconnect recovers the same blob (the idempotency cache
+                // below returns this exact result).
+                var result = RedeemResult.Accept(p.Account, p.DisplayName, DemoEntitlement.ForAccount(p.Account));
                 _consumed[p.Nonce] = new Consumed(now, p.ExpiresAt, result);
                 if (_registry.ReservationLedger.TryGetValue(p.Nonce, out var resv)
                     && _registry.Servers.TryGetValue(resv.ServerId, out var srv)

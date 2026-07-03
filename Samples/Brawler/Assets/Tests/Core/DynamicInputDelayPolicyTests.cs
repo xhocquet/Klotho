@@ -115,6 +115,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void FireTickExecuted(int tick) => OnTickExecuted?.Invoke(tick);
 
             public T GetPlayerConfig<T>(int playerId) where T : PlayerConfigBase => null;
+            public byte[] GetPlayerEntitlement(int playerId) => null;
             public bool TryGetPlayerConfig<T>(int playerId, out T config) where T : PlayerConfigBase { config = null; return false; }
 
             public void Initialize(ISimulation simulation, IKlothoNetworkService networkService, xpTURN.Klotho.Logging.IKLogger logger) { }

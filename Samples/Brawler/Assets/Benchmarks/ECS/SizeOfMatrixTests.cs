@@ -44,7 +44,7 @@ namespace xpTURN.Klotho.ECS.Benchmarks
         private const int Expected_CombatComponent                = 8;
         private const int Expected_MovementComponent              = 36;
         private const int Expected_VelocityComponent              = 24;
-        private const int Expected_CharacterComponent             = 72;
+        private const int Expected_CharacterComponent             = 84;
         private const int Expected_SkillCooldownComponent         = 16;
 
         // ── Print measured values (run in Editor Mono to fix the constants) ──────

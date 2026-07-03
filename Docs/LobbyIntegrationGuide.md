@@ -2,12 +2,14 @@
 
 > **Level**: Conceptual / mockup. The goal is to show the flow, the responsibility boundaries, and the integration points — the actual crypto/transport library is the game's choice. The code here is **illustrative of the integration shape**, not a production implementation.
 >
-> **Reference**: the formal spec is [Specification.md §9.6 Player Identity Handoff](Specification.md).
+> **Reference**: the formal spec is [Specification.md §9.6 Player Identity Handoff](Specification.md). **Trusted player data (entitlements)** — inventory / owned characters / loadout that rides the *same* verified channel — is covered here in §9.
 >
 > **Working reference implementations** (the mockups here map to real, tested code):
 > - Lobby server — [`Samples/DevLobbyServer/`](../Samples/DevLobbyServer) (ticket issue + SD redeem)
-> - P2P validator — [`Samples/IdentityP2pRef/`](../Samples/IdentityP2pRef) (offline signature)
+> - P2P validator — [`Samples/IdentityP2pRef/`](../Samples/IdentityP2pRef) (offline signature + propagated-ticket re-verify §9)
 > - SD validator — [`Samples/IdentitySdRef/`](../Samples/IdentitySdRef) (online redeem)
+> - Entitlement codec / payload — [`DemoEntitlement`](../Samples/IdentitySdRef/Runtime/DemoEntitlement.cs) (shared by SD + [P2P](../Samples/IdentityP2pRef/Runtime/DemoEntitlement.cs)) over a [`DemoEntitlementData`](../Samples/IdentityP2pRef/Runtime/DemoEntitlementData.cs) `[KlothoSerializableStruct]` bitmask (§9)
+> - Entitlement guard / gate — Brawler [`BrawlerPlayerConfigEntitlementGuard`](../Samples/Brawler/Assets/Brawler/Scripts/ECS/BrawlerPlayerConfigEntitlementGuard.cs) (① clamp) / [`BrawlerReliableCommandEntitlementGate`](../Samples/Brawler/Assets/Brawler/Scripts/ECS/BrawlerReliableCommandEntitlementGate.cs) (③ drop) + in-match [`UseConsumableCommand`](../Samples/Brawler/Assets/Brawler/Scripts/ECS/Commands/UseConsumableCommand.cs) demo (§9)
 > - Identity keys — [Samples/DevIdentityKeys.md](Samples/DevIdentityKeys.md) (generate / rotate the signing key pair)
 >
 > **No-library principle**: This guide names no specific crypto/network library. `Sign()` / `Verify()` (signing) and `PostJson()` (lobby calls) are **seams the game fills in**. The only thing the core mandates is the **contract (interface)**.
@@ -93,12 +95,14 @@ LobbyTicket (logical structure; serialization/encoding is the game's choice)
 ├─ issuedAt     : issue time
 ├─ expiresAt    : expiry time (replay / late-join defense)
 ├─ nonce        : one-time value (replay defense)
+├─ entitlement  : (optional, §9) opaque trusted player-data blob — owned characters/loadout, etc.
 └─ signature    : signature over the fields above (lobby key)
 ```
 
 - **Signing scheme**: asymmetric signing recommended — only the lobby *public* key is distributed to clients/servers, so there is no shared-secret leak risk (a symmetric key embedded in every client invites forgery). *The exact algorithm/library is the game's choice.*
 - **Carriage encoding**: the handshake carries it as a single `string` (e.g. base64url). The inner serialization (JSON/binary/etc.) is the game's choice.
 - **Verified extra fields** (MMR/level, etc.): add them as game fields *outside* the minimal set (the core is opaque, so zero changes). Mutable/unverified game data (character/team/cosmetics) goes through the separate `PlayerConfig` channel — keep it out of identity.
+- **Entitlement** (trusted player data, §9): one *signed* blob covered by the same signature — no extra key. In **P2P** it rides the ticket payload (each peer verifies offline); in **SD** the lobby returns it from `redeemTicket` instead (the server is the trust anchor). Keep it small (P2P shares the `MaxPreAuthMessageBytes` 4096 B pre-auth budget). This is the trusted counterpart to the untrusted `PlayerConfig` — see §9.
 
 ---
 
@@ -128,6 +132,9 @@ IssueTicketResponse IssueTicket(IssueTicketRequest req)
         IssuedAt    = Now(),
         ExpiresAt   = Now() + TicketTtl,      // keep short — especially for P2P
         Nonce       = NewNonce(),             // one-time
+        Entitlement = (match.Mode == "P2P")   // (§9) P2P: sign the trusted blob INTO the ticket (offline verify).
+                    ? EncodeEntitlement(account.OwnedForMatch(match)) // small: loadout, not full inventory
+                    : null,                   // SD: omit here — returned from redeemTicket instead
     };
     var ticket = Encode(payload, Sign(payload, LobbyPrivateKey));   // ← signing seam
 
@@ -145,7 +152,7 @@ IssueTicketResponse IssueTicket(IssueTicketRequest req)
 ```
 POST /lobby/redeemTicket
   req:  { ticket, sessionId, serverId, roomId }   // roomId: the room the peer was routed to (§4-D)
-  res:  { ok:true, account, displayName } | { ok:false, reason }
+  res:  { ok:true, account, displayName, entitlement? } | { ok:false, reason }   // entitlement: opaque trusted blob (§9)
 ```
 
 ```csharp
@@ -170,7 +177,10 @@ RedeemResponse RedeemTicket(RedeemRequest req)
     if (IsBanned(payload.Account))                              // real-time ban applied here
         return RedeemResponse.Fail("banned");
 
-    return RedeemResponse.Ok(payload.Account, payload.DisplayName);
+    // (§9) attach the account's trusted player data in the SAME redeem snapshot (atomic with account/name).
+    // Deterministic per account so a reconnect/late-join re-redeem recovers the identical blob.
+    var entitlement = EncodeEntitlement(LookupOwnedForMatch(payload.Account, payload.SessionId));
+    return RedeemResponse.Ok(payload.Account, payload.DisplayName, entitlement);
 }
 ```
 
@@ -277,9 +287,9 @@ public sealed class SdRedeemValidator : IPlayerIdentityValidator
             var res = await PostJson("/lobby/redeemTicket",
                 new { ticket, sessionId = MapSession(sessionMagic), serverId = ServerId, roomId });
 
-            handle.Complete(res.ok
-                ? Accept(res.account, res.displayName)
-                : Reject(MapReason(res.reason)));   // out-of-range codes clamp to 9
+            if (!res.ok)                  { handle.Complete(Reject(MapReason(res.reason))); return; } // out-of-range codes clamp to 9
+            if (IsBadAccount(res.account)) { handle.Complete(Reject(6)); return; }  // empty / >62 UTF-8 B → identity collision
+            handle.Complete(Accept(res.account, res.displayName));
         });
         return handle;   // incomplete → the core polls it
     }
@@ -301,19 +311,22 @@ public sealed class P2pSignatureValidator : IPlayerIdentityValidator
     {
         if (string.IsNullOrEmpty(req.Ticket)) return Completed(Reject(10));
 
-        // verify-over-wire: verify the bytes as transmitted (no re-serialization — avoids sig mismatch)
-        var payload = Decode(req.Ticket);
-        if (!Verify(payload, payload.Signature, LobbyPublicKey)) return Completed(Reject(6));  // signature/pubkey seam
-        if (payload.ExpiresAt <= Now())                          return Completed(Reject(7));  // expired
-        if (payload.SessionId != ExpectedSessionId(req))         return Completed(Reject(8));  // session mismatch
-        if (!_seenNonces.Add(payload.Nonce))                     return Completed(Reject(9));  // in-session replay
+        // verify-over-wire: split the wire + base64-decode to RAW bytes, verify the signature over those
+        // bytes, and parse the payload ONLY after verify passes (never deserialize an unverified ticket).
+        var (rawPayload, signature) = DecodeWire(req.Ticket);
+        if (!Verify(rawPayload, signature, LobbyPublicKey))  return Completed(Reject(6));  // signature/pubkey seam
+        var p = ParsePayload(rawPayload);                                                  // parse after verify
+        if (p.SessionId != ExpectedSessionId(req))           return Completed(Reject(8));  // session mismatch
+        if (p.ExpiresAt <= Now())                            return Completed(Reject(7));  // expired
+        if (IsBadAccount(p.Account))                         return Completed(Reject(6));  // empty / >62 UTF-8 B → identity collision
+        if (!_seenNonces.Add(p.Nonce))                       return Completed(Reject(9));  // in-session replay (session-scoped; prune expired in a long session)
 
-        return Completed(Accept(payload.Account, payload.DisplayName));
+        return Completed(Accept(p.Account, p.DisplayName));
     }
 }
 ```
 
-> **Semi-trust**: in P2P the host is the single verifier and guests trust the host's verdict (the original ticket is not propagated — only 2 strings are propagated, keeping it simple/lightweight). Guest re-validation (full zero-trust) can be added later, non-destructively, by attaching the original ticket to the notification.
+> **Semi-trust (identity-only default) → full zero-trust (with entitlements)**: with *only* identity configured, the P2P host is the single verifier and guests trust the host-relayed `Account`/`DisplayName` — the original ticket is **not** propagated (only the 2 authoritative strings are), keeping it lightweight. This remains the default. **When the entitlement hook is configured (§9)**, the core turns on original-ticket propagation: each peer's *original signed ticket* rides the roster / join notifications / late-join & reconnect accepts, and every guest **re-verifies it independently** via `IPropagatedTicketVerifier` (signature-only). That closes the semi-trust gap — a cheating host can no longer forge identity **or** entitlement — and identity is strengthened to full zero-trust *as a side effect* of enabling entitlements. Identity-only games see no propagation and no regression.
 
 ### Builder registration
 
@@ -372,12 +385,14 @@ On a multi-room dedicated server (one server hosting several independent matches
 
 | Aspect | SD (dedicated) | P2P (host) |
 |---|---|---|
-| Verifier | dedicated server | host (verifies) → guests trust the host (semi-trust) |
+| Verifier | dedicated server | host verifies at join; **with entitlements (§9)** every guest re-verifies the propagated ticket (else semi-trust: guests trust the host) |
 | Method | lobby redeem (online) + local 1st-pass signature | signature only (offline) |
 | Trust anchor | server + lobby | lobby signature |
 | Real-time ban | yes (redeem) | no — relies on expiry (keep `expiresAt` short) |
 | Replay defense | nonce idempotency window + (server, room) binding | `expiresAt` + session-scoped nonce |
 | account source | redeem response | ticket payload (verified) |
+| entitlement source (§9) | redeem response (server queries backend) | ticket payload (each peer verifies + re-verifies) |
+| entitlement clamp/gate (§9) | server single decision (authoritative rewrite/drop) | per-peer deterministic (same signed bytes → same verdict) |
 | Klotho hook | async handle (polled) | sync handle (immediately complete) |
 
 ---
@@ -409,9 +424,11 @@ With neither provider nor validator registered:
 | `Account` | `""` (never interchanged with DeviceId — reconnect fingerprint ≠ account) |
 | `DisplayName` | client-claimed value (if any, unverified) → otherwise a fabricated fallback (`"Host"`/`Player{id}`) |
 | Reject | does not occur |
-| Overall | **100% identical to current code** |
+| Overall | **identical to current code** (one micro-exception below) |
 
 LAN / prototype / samples keep working as-is; only production turns on the provider (client) + validator (server/host).
+
+> **Micro-exception**: the pre-auth message-size guard (`PlayerJoinMessage.MaxPreAuthMessageBytes`, 4096 B) applies **unconditionally** — an oversized *first* handshake message is rejected (wire 6, `IdentityInvalid`) even with no lobby. The bound is far above any legitimate join message (DeviceId + claimed name), so it is not observable in practice; it is a pre-auth memory-amplification hardening, not a behavioral change.
 
 ---
 
@@ -439,3 +456,228 @@ LAN / prototype / samples keep working as-is; only production turns on the provi
 **Common**
 - [ ] Keep identity (verified, invariant) and game data (PlayerConfig, unverified, mutable) **separate**
 - [ ] Authoritative fields that affect the simulation (team/loadout) must not be injected out-of-band — use a deterministic path (GameStart seed / ReliableCommand)
+
+**Entitlements (trusted player data — §9, optional)**
+- [ ] Lobby: attach the account's owned set — P2P into the ticket payload (`issueTicket`), SD into the `redeemTicket` response — deterministic per account (reconnect re-redeem recovers the identical blob); keep it small
+- [ ] Server/host: implement `IPlayerConfigEntitlementGuard` (clamp start-of-match selection) and/or `IReliableCommandEntitlementGate` (drop unowned in-match commands); read the seed via `IKlothoEngine.GetPlayerEntitlement` at tick-0
+- [ ] SD: register on `RoomManagerConfig.PlayerConfigEntitlementGuard` / `.ReliableCommandEntitlementGate`. P2P: `WithPlayerConfigEntitlementGuard(...)` (this also turns on original-ticket propagation + per-peer re-verify; the validator must also implement `IPropagatedTicketVerifier`)
+- [ ] P2P only: the guard/seed/no-op logic must be a **deterministic pure function** (same signed bytes → byte-identical verdict on every peer) — no RNG / float / culture / dictionary-order, else tick-0 desync
+- [ ] Leave the hooks unset for identity-only / LAN / prototype → `PlayerConfig` behaves exactly as today (no regression)
+
+---
+
+## 9. Trusted Player Data (Entitlements)
+
+> **Level**: same conceptual/mockup framing as above — the flow and integration seams, not a production implementation.
+
+§1–§8 established a **trusted identity** (which account this is). Entitlements answer the next question — **what that account owns** (inventory / owned characters / loadout / unlocks) — over the *same* verified channel. The key distinction:
+
+| | `PlayerConfig` (existing) | **Entitlement** (this section) |
+|---|---|---|
+| Author | client | account authority (lobby / backend) |
+| Trust | **untrusted intent** (client-written) | **trusted** (verified / signed) |
+| Example | *selected* character, cosmetic preference | *owned* characters, equipped loadout, unlocked stats |
+| Put owned/inventory data here? | **No** — a client can forge it | Yes |
+
+Rule of thumb: a client *selecting* something goes through `PlayerConfig`; the authority confirming the client *owns* it is the entitlement. The core treats the entitlement as an **opaque `byte[]`** — it never parses it; the game encodes/decodes it (a small owned-id list is enough — keep the *full* inventory in the backend, put only what this match needs on the wire). The reference samples standardize the payload as a fixed-width bitmask over a [`DemoEntitlementData`](../Samples/IdentityP2pRef/Runtime/DemoEntitlementData.cs) `[KlothoSerializableStruct]` (producer serializes, guard/gate/seed only deserialize — verify-over-wire preserved); the encoding remains the game's choice and the core boundary stays `byte[]`.
+
+### 9.1 Entitlement Flow (End-to-End)
+
+Entitlement rides the *same* verified channel as identity (§1–§8) — no new transport. Its journey is **origin → store → (propagate) → read**, diverging by mode only at *propagate* and *read-locality*:
+
+```
+                       ┌───────────────── ORIGIN (at join validation, §4-C) ──────────────────┐
+   Lobby / Auth        │  SD : redeemTicket response      → RedeemResult.Entitlement          │
+   (owns / signs)  ────┤  P2P: signed INTO the ticket payload (§3) → LobbyTicket.Entitlement  │
+                       └───────────────────────────────┬──────────────────────────────────────┘
+                                                       ▼
+              IdentityValidationOutcome.Accept(account, displayName, ENTITLEMENT)   ← opaque byte[]
+                                                       ▼
+                       STORE — server/peer-side PlayerInfo.Entitlement
+                       (NOT on IPlayerInfo → never serialized onto the roster wire)
+                                                       ▼
+        ┌─────────────────────── PROPAGATE (mode-divergent) ────────────────────────┐
+        │ SD : tick-0 seed EFFECT ships (Initial FullState); the raw bytes are      │
+        │       ALSO propagated to clients for READ (UI, GetPlayerEntitlement       │
+        │       non-null) — read-only, NOT a seed source                            │
+        │ P2P: the original SIGNED ticket is propagated to every peer; each guest   │
+        │       re-verifies signature-only → re-derives byte-identical entitlement  │
+        └───────────────────────────────────┬───────────────────────────────────────┘
+                                            ▼
+                       READ — IKlothoEngine.GetPlayerEntitlement(playerId)
+        ┌──────────────── ② start-of-match ────────────────┐         ┌──── ③ in-match ────┐
+        ▼ config guard (clamp selection)   ▼ tick-0 seed              ▼ reliable-cmd gate
+   IPlayerConfigEntitlement-           OnInitializeWorld (before   IReliableCommandEntitlement-
+   Guard.Check(selection) →            SaveSnapshot(0)) → seed     Gate.Check(command) →
+   Pass / Clamp / Reject               loadout deterministically   Accept / Drop
+```
+
+(The ① view/cosmetic path — a `PlayerConfig` field with no ownership stake — needs no entitlement hook, so it is not shown here; see §9.4.)
+
+**SD (dedicated)** — the entitlement rides the redeem; its tick-0 *effect* is baked into the Initial FullState (the seed source), and the raw bytes are **also** propagated to clients as **read-only** data (e.g. for UI — `GetPlayerEntitlement` is non-null there, but the client never re-seeds from it). Each hop names its endpoints — `A ──msg──► B` is a network message **from A to B**; an indented `→` is the receiver's local step:
+
+```
+origin  (during join validation, §2)
+   Dedicated Server ──redeemTicket──►  Lobby
+   Lobby ──ok{ account, name, +ENTITLEMENT }──►  Dedicated Server
+        → server stores it (PlayerInfo.Entitlement — server-only, never on the roster wire)
+
+start-of-match
+   Client ──PlayerConfig(selection)──►  Server
+        → Server runs ② Guard.Check  →  Pass / Clamp / Reject
+   Server  (local, tick-0):  GetPlayerEntitlement → seed loadout → SaveSnapshot(0)
+   Server ──Initial FullState──►  every client
+        → carries the seed EFFECT (drives the sim); the raw bytes ride the roster /
+          join notifications separately for READ-only use (GetPlayerEntitlement, UI)
+
+in-match
+   Client ──UseXxx (reliable command)──►  Server
+        → Server runs ③ Gate.Check  →  owned: accept,  unowned: Drop
+   Server ──accepted command (tick-assigned)──►  every client
+```
+
+**P2P (host)** — the entitlement rides the *signed* ticket. There is exactly **one** propagation message; after it, **every peer runs the same steps locally**, so there is no per-message routing to track (same `──►` / `→` convention as above):
+
+```
+origin  (during join validation, §3 — offline; no lobby round-trip)
+   Client ──Connect + signed ticket (entitlement signed inside)──►  Host
+        → Host verifies the signature and extracts the entitlement  (host self: signature-only)
+   Host ──ORIGINAL signed ticket──►  every peer
+
+then EVERY peer runs these locally — deterministic (identical signed bytes → identical result):
+   → ReverifyPropagatedTicket (signature-only): re-derive the entitlement bytes locally
+   → ② tick-0: GetPlayerEntitlement → seed loadout
+   → ② Guard.Check(selection)  →  Pass / Clamp / Reject
+   → ③ in-match UseXxx: no server gate — each peer checks ownership at apply,
+        deterministic + idempotent  →  exactly-once-observed
+```
+
+> The full data lifecycle (origin → store → preserve → propagate → read → dispose, with the invariants at each step) is out of scope here — see the companion reference [Entitlement (Trusted Player Data) Lifecycle](EntitlementLifecycle.md). This guide covers the **integration** view (hooks, wiring, mode differences).
+
+---
+
+### 9.2 Where it comes from (per mode)
+
+Already carried by the identity channel (§3) — no new transport:
+
+- **SD**: the lobby returns it from `redeemTicket` (§4-A) → the validator hands it to the core via `IdentityValidationOutcome.Accept(account, displayName, entitlement)`. The dedicated server is the trust anchor, so an online lookup is fine.
+- **P2P**: the lobby signs it **into the ticket payload** (§3) → the validator extracts it on accept, and (crucially) the *original signed ticket* is propagated so every guest re-verifies it independently (§4-C). Host relay is never trusted.
+
+### 9.3 Core seams the game fills in
+
+| Hook | When | Verdict | Notes |
+|---|---|---|---|
+| `IPlayerConfigEntitlementGuard.Check(playerId, entitlement, selection)` | client config arrives (post-join) | `Pass` / `Clamp(replacement)` / `Reject(wireCode)` | cross-check a *selection* against the owned set; recommended default is **clamp-to-default**, not reject |
+| `IReliableCommandEntitlementGate.Check(playerId, entitlement, command)` | in-match reliable command | `Accept` / `Drop` | an unowned action simply does not happen (no “default action” to substitute) |
+| `IPropagatedTicketVerifier.ReverifyPropagatedTicket(ticket)` | P2P guest, each propagated ticket | `IdentityValidationOutcome` | **signature-only** (do NOT re-check expiry/nonce/session) — the join-time gate already did; the reference P2P validator implements this alongside `IPlayerIdentityValidator` |
+| `IKlothoEngine.GetPlayerEntitlement(playerId)` | tick-0 world init | `byte[]` (opaque) | read it in `OnInitializeWorld` (before `SaveSnapshot(0)`) to seed the sim deterministically |
+
+### 9.4 Which channel carries a field (simulation-impact branch)
+
+The *only* thing that matters is whether the field affects the deterministic simulation:
+
+| Field kind | Channel | Determinism |
+|---|---|---|
+| ① view / metadata only (rank badge, cosmetic) | authority-authored `PlayerConfig` | non-deterministic OK |
+| ② sim-affecting, fixed at start (loadout/stats from owned character) | **tick-0 seed** — read `GetPlayerEntitlement` in `OnInitializeWorld` | must be deterministic |
+| ③ sim-affecting, changes mid-match (item consume/grant) | **`IReliableCommand`** (authority-issued → tick-assigned; delivered **exactly-once / idempotent**) | must be deterministic |
+
+> **Never** inject a sim-affecting field via an out-of-band `PlayerConfig` broadcast — that desyncs. ② and ③ are the deterministic paths.
+
+### 9.5 Where SD and P2P diverge
+
+| | SD | P2P |
+|---|---|---|
+| Clamp/gate decision (② start, ③ in-match) | **server single decision** — authoritative rewrite / drop, then broadcast | **each peer** decides locally against its own verified entitlement — must be a **deterministic pure function** (identical bytes → identical verdict), else tick-0 desync |
+| ② seed source | server applies at tick-0 → clients adopt it via the **Initial FullState** (the seed source; `OnInitializeWorld` does not run on the SD client). The raw bytes are separately propagated so client `GetPlayerEntitlement` is non-null for **read-only** use (UI), never a seed source | each peer seeds **locally** from the propagated signed bytes (no host authorship, no re-derivation) |
+| late-join / reconnect | accept unchanged — seed covered by full-state resync (server full-state is trusted) | original signed ticket is **also** bundled in the accepts (host-authored full-state is untrusted) so the joiner re-verifies |
+
+### 9.6 Wiring
+
+```csharp
+// SD (dedicated) — on the RoomManager config, alongside the identity validator
+roomManagerConfig.IdentityValidator             = new SdRedeemValidator();      // §4-C (redeem returns entitlement)
+roomManagerConfig.PlayerConfigEntitlementGuard  = new MyEntitlementGuard();     // ② clamp start-of-match selection
+roomManagerConfig.ReliableCommandEntitlementGate= new MyReliableCommandGate();  // ③ drop unowned in-match commands
+
+// P2P (host & guest) — on the flow builder
+new KlothoFlowSetupBuilder()
+    .WithHandshake(transport, endpoint)
+    .WithIdentityValidator(new P2pSignatureValidator())      // also implements IPropagatedTicketVerifier
+    .WithPlayerConfigEntitlementGuard(new MyEntitlementGuard())  // ← also ENABLES original-ticket propagation + per-peer re-verify
+    .Build();
+```
+
+> P2P: `WithPlayerConfigEntitlementGuard` is the single switch — it wires the guard **and** turns on propagation (fail-closed: refused with a log if the validator is not also an `IPropagatedTicketVerifier`, so host-relayed entitlement is never trusted blindly).
+
+### 9.7 No entitlements (opt-in OFF) — no regression
+
+Leave every hook unset and `GetPlayerEntitlement` returns `null`: the guard/gate are skipped, P2P propagation stays off (identity-only semi-trust preserved, §4-C), and `PlayerConfig` behaves exactly as before. Entitlements are a strict superset you turn on per game.
+
+### 9.8 Play test — watch it work end-to-end
+
+The fastest way to understand the whole flow is to run it and watch a restricted account get gated. The reference samples ([`DevLobbyServer`](../Samples/DevLobbyServer/Program.cs), [`Brawler/Server`](../Samples/Brawler/Server/Program.cs), [`Brawler/Assets/Brawler`](../Samples/Brawler/Assets/Brawler/Scripts/ECS/BrawlerSimSetup.cs)) use a deliberately simple demo rule:
+
+> An account whose name contains **`"guest"`** is *restricted* — it owns every class but only **skill slot 0** of each and **no consumable**. Every other account (including a blank one, which becomes a generated `dev-NNNN` id) owns the **full loadout**.
+
+So the whole feature is observable by giving one client a `"guest"` account and comparing:
+
+| | Full account | `"guest"` account |
+|---|---|---|
+| Pick any of the 4 classes | ✅ works | ✅ works — *all classes are owned in the demo, so the config-guard clamp (②) never fires here; it just passes* |
+| Skill slot 0 | ✅ fires | ✅ fires |
+| **Skill slot 1** | ✅ fires | ❌ no-ops — the **tick-0 seed** (②) never granted it |
+| **Consumable use** | ✅ happens | ❌ dropped — SD by the **in-match gate** (③); P2P no-ops from the seeded owned-set |
+
+> This is the base run flow from [Brawler.I.HowToRun.md](Samples/Brawler.I.HowToRun.md) with the lobby turned **on**. Do the common setup there first (open the scene, confirm the `.bytes` assets are bound). The lifecycle of the bytes you are watching is traced end-to-end in [EntitlementLifecycle.md](EntitlementLifecycle.md).
+
+#### Option A — Server-Driven (dedicated server + dev lobby)
+
+SD needs two processes running *before* the Unity client connects: the **dev lobby** (mints the entitlement) and the **dedicated server** (redeems it, then stores + gates).
+
+**1. Start the dev lobby** — [`Samples/DevLobbyServer`](../Samples/DevLobbyServer/Program.cs). Plain console app, default port `9999`:
+
+```bash
+cd Samples/DevLobbyServer
+dotnet run -- 9999 Information
+# → "[DevLobby] listening on 9999 — match 'sdsample-dev-match' → server 'sdsample-dev-server'"
+```
+
+**2. Start the dedicated server with `--lobby`** — [`Samples/Brawler/Server`](../Samples/Brawler/Server/Program.cs). The `--lobby host:port` flag is what turns the validator + entitlement on (without it the server runs ticketless and nothing gates):
+
+```bash
+cd Samples/Brawler/Server
+./build.sh                                                    # once (dotnet build -c Debug)
+
+# single-room:  <port> <botCount> [logLevel]  + --lobby host:port
+dotnet run --project BrawlerDedicatedServer.csproj -- 7777 0 Information --lobby localhost:9999
+# → "identity validator active — dev lobby localhost:9999 ..."
+# → "room reporter active — advertising 127.0.0.1:7777 ... to lobby localhost:9999"
+```
+
+The server registers its capacity with the lobby (`--advertise` defaults to loopback, fine for same-machine testing). Keep the dev defaults consistent: `sessionconfig.json` `MaxPlayers = 2` matches the lobby's seeded room capacity, so an assignment the server would reject never happens.
+
+**3. Configure the Unity client** — `BrawlerGameController` Inspector:
+
+- `_simulationConfig` (`SimulationConfig.asset`): **`Mode = ServerDriven`**
+- `BrawlerLobbySettings` (the `_brawlerLobby` block):
+  - `_lobbyEnabled = true` ← the runtime toggle
+  - `_account = "guest"` on one client, blank (or anything else) on another
+  - `_matchId = sdsample-dev-match` (default), `_lobbyAddress = localhost`, `_lobbyPort = 9999`
+- `BrawlerSettings`: `_roomId = -1` (single-room). `_hostAddress`/`_port` here are ignored for the join — with the lobby on, the client fetches a ticket and the **lobby-assigned** endpoint wins ([`JoinGameAsync`](../Samples/Brawler/Assets/Brawler/Scripts/Manager/BrawlerGameController.cs#L519) → `TryFetchLobbyAsync`).
+
+**4. Play.** Press Play → **Guest** → **Join Room** → **Ready**. On join the client fetches a signed ticket from the lobby, the server redeems it (minting the entitlement from the account), and the match starts once `MinPlayers` are ready. Now try skill slot 1 and the consumable on each client — the `"guest"` one is gated, the other isn't.
+
+#### Option B — P2P (no servers, in-process lobby stub)
+
+P2P needs **no** DevLobbyServer and **no** dedicated server — the lobby is an in-process signed-ticket stub, and every peer re-verifies for itself.
+
+- `_simulationConfig`: **`Mode = P2P`**
+- On **both** the host and the guest peer, set `_brawlerLobby._lobbyEnabled = true`, and set `_account = "guest"` on the peer you want restricted.
+- Run host + guest as in [Brawler.I.HowToRun §I-2](Samples/Brawler.I.HowToRun.md) (editor hosts, a standalone build joins, or vice-versa).
+
+Because the owned-set is baked into the deterministic tick-0 seed, the restriction shows up **identically on every peer** — the guest's slot-1 skill and consumable simply no-op in the simulation, with no server involved. (P2P has no reliable-command gate; it doesn't need one.)
+
+#### Turning it off
+
+Set `_lobbyEnabled = false` (or, for SD, just omit `--lobby` on the server). No ticket is fetched, `GetPlayerEntitlement` returns `null`, and every client plays with the full loadout — exactly the pre-entitlement behaviour (§9.7).

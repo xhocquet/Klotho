@@ -84,6 +84,8 @@ public sealed class PongSimulationCallbacks : ISimulationCallbacks
         cmd.Dir = _input.AxisZ;                          // captured in PreSessionUpdate (step 4)
         sender.Send(cmd);
     }
+
+    public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId) { }  // late-join world seed; empty when no per-join state
 }
 
 public sealed class PongViewCallbacks : IViewCallbacks

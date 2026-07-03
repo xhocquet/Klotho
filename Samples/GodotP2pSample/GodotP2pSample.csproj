@@ -16,7 +16,7 @@
 
   <Import Project="addons/klotho/Klotho.props" />
 
-  <!-- IMP71 Phase 3 — shared P2P identity reference (SQ5 shared source). Godot consumes the same
+  <!-- Shared P2P identity reference (SQ5 shared source). Godot consumes the same
        Runtime/*.cs as the Unity samples + BouncyCastle via NuGet (Unity gets BC from the package's
        bundled DLL instead). Verify Export/AOT/trimming; add a TrimmerRootAssembly if BC is stripped. -->
   <ItemGroup>

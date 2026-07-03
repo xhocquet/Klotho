@@ -401,6 +401,7 @@ ISimulationCallbacks (game-implemented — common to deterministic side)
   RegisterSystems(EcsSimulation)          ← register systems (before Initialize)
   OnInitializeWorld(IKlothoEngine)        ← create initial entities (before SaveSnapshot(0))
   OnPollInput(playerId, tick, sender)     ← per-tick input polling
+  OnPlayerJoinedWorld(engine, frame, playerId) ← seed a late-joiner's world at its join tick (late-join analog of OnInitializeWorld)
 
 IViewCallbacks (game-implemented — client view only, non-determinism allowed)
   OnGameStart(IKlothoEngine)              ← once at game start

@@ -44,6 +44,16 @@
     <Compile Include="$(BrawlerRoot)\ECS\**\*.cs" Link="Game\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- SD identity validator + lobby redeem client (server side), enabled at runtime by the lobby CLI flag.
+       Reuses p2pref's codec / Ed25519 backend + sdref's validator / DevLobbyCore / redeem client via the
+       samples' Server~ mirror projects (tilde folders Unity ignores), instead of globbing the raw Runtime
+       sources — so only the intended identity assemblies compile in, not client-only files, and BouncyCastle
+       flows transitively through the P2pRef mirror (no direct PackageReference here). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\IdentityP2pRef\Server~\xpTURN.Klotho.Identity.P2pRef\xpTURN.Klotho.Identity.P2pRef.csproj" />
+    <ProjectReference Include="..\..\IdentitySdRef\Server~\xpTURN.Klotho.Identity.SdRef\xpTURN.Klotho.Identity.SdRef.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Brawler Data (.bytes) → copy to bin/Data/ -->
     <Content Include="..\Assets\Brawler\Data\*.bytes">

@@ -175,7 +175,7 @@ namespace xpTURN.Klotho.Core.Tests
 
             Assert.AreEqual(0, PendingVerifiedQueueCount(engine), "Drain must empty the queue");
             Assert.AreEqual(pooledBefore + 5, CommandPool.GetTotalPooledCount(),
-                "Drain must return every queued ICommand instance to CommandPool (IMP59-F2 — I5 intent restored)");
+                "Drain must return every queued ICommand instance to CommandPool (intent restored)");
         }
     }
 }

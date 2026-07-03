@@ -44,6 +44,9 @@ if (!transport.Listen("0.0.0.0", port, maxConnections: 64))
     Environment.Exit(1);
 }
 
+// Anti-overflow sanity bound for roomReport decode (not a capacity policy — see use site below).
+const int RoomReportRoomCap = 1024;
+
 transport.OnDataReceived += (peerId, data, len) =>
 {
     byte kind = LobbyWire.PeekKind(data, len);
@@ -81,7 +84,11 @@ transport.OnDataReceived += (peerId, data, len) =>
         // dedi → lobby: capacity/endpoint advertise + reconnect-restore (one-way, no reply). Logs in core.
         lobby.HandleServerRegister(sr.ServerId, sr.Host, sr.Port, sr.MaxRooms, sr.MaxPlayersPerRoom, peerId);
     }
-    else if (kind == LobbyWire.RoomReport && LobbyWire.TryDecodeRoomReport(data, len, SdDevIdentity.MaxRooms, out var rp))
+    // Decode cap is an anti-overflow sanity bound (not a capacity policy) — generous so a dedi reporting many
+    // rooms (e.g. Brawler's multi-room) isn't silently dropped; the authoritative per-server capacity is
+    // (re)set from serverRegister. (Was SdDevIdentity.MaxRooms=2, which dropped larger reports → no heartbeat
+    // → backup-timeout "hang" → server marked unavailable → issue FULL.)
+    else if (kind == LobbyWire.RoomReport && LobbyWire.TryDecodeRoomReport(data, len, RoomReportRoomCap, out var rp))
     {
         // dedi → lobby: room occupancy/state reconcile (one-way, no reply). Core logs state changes only.
         lobby.HandleRoomReport(rp.ServerId, rp.Rooms, rp.RoomCount);

@@ -30,9 +30,10 @@ namespace xpTURN.Klotho.Network
         /// </summary>
         public static FixedString64 ToFixedName(string s, IKLogger logger, string field, int playerId)
         {
-            if (!string.IsNullOrEmpty(s) && System.Text.Encoding.UTF8.GetByteCount(s) > 62)
+            int byteCount = string.IsNullOrEmpty(s) ? 0 : System.Text.Encoding.UTF8.GetByteCount(s);
+            if (byteCount > 62)
             {
-                logger?.KWarning($"[Roster] {field} truncated: player={playerId}, {System.Text.Encoding.UTF8.GetByteCount(s)}B > 62B");
+                logger?.KWarning($"[Roster] {field} truncated: player={playerId}, {byteCount}B > 62B");
                 System.Diagnostics.Debug.Assert(false, $"[Roster] {field} exceeds FixedString64 (62B) for player {playerId}");
             }
             return FixedString64.FromString(s);
@@ -50,6 +51,16 @@ namespace xpTURN.Klotho.Network
                 return s ?? string.Empty;
             return FixedString64.FromString(s).ToString();
         }
+
+        /// <summary>
+        /// True when a (non-empty) verified account exceeds the <see cref="FixedString64"/> capacity
+        /// (62 UTF-8 bytes). Such an account would be silently truncated by <see cref="ToFixedName"/> on
+        /// the roster write — colliding distinct identities (and tripping its development-build assert).
+        /// The join trust boundary uses this to reject an over-length validator-supplied account rather
+        /// than truncate it. An empty account is NOT over-bound (the Accept contract permits empty).
+        /// </summary>
+        public static bool IsAccountOverBound(string account)
+            => !string.IsNullOrEmpty(account) && System.Text.Encoding.UTF8.GetByteCount(account) > 62;
 
         /// <summary>
         /// Builds a roster entry from a player, converting Account/DisplayName at the write boundary via

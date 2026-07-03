@@ -12,6 +12,9 @@ using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.BrawlerDedicatedServer;
 using xpTURN.Klotho.BrawlerDedicatedServer.Tests;
+using Brawler;                            // BrawlerPlayerConfigEntitlementGuard (game ECS, namespace Brawler)
+using xpTURN.Klotho.Samples.Identity;     // BcEd25519Backend
+using xpTURN.Klotho.Samples.Identity.Sd;  // SdDevIdentity, LiteNetLibLobbyRedeemClient, SdRoomReporter
 
 const string KLOTHO_CONNECTION_KEY = "xpTURN.Brawler";
 
@@ -25,6 +28,9 @@ KlothoServerBootstrap.Initialize("Brawler");
 // Test:        dotnet run -- --test
 // Config:      dotnet run -- --config-dir <dir> ...  (auto-discovered from CWD or bin directory if not specified)
 // Flags:       --rtt-metrics  (enable RTT metrics for match identification)
+//              --advertise <host>  (game-server address the lobby hands to clients; default is the
+//                                   dev loopback constant, which only works when client and server
+//                                   share a machine — set the reachable LAN/public address for remote clients)
 bool isTest = args.Length > 0 && args[0] == "--test";
 bool multiRoom = args.Length > 0 && args[0] == "--multi";
 bool rttMetricsEnabled = Array.IndexOf(args, "--rtt-metrics") >= 0;
@@ -118,15 +124,51 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
         .WithSessionConfig(sessionConfig)
         .WithDerivedSimulation(sharedRegistry)
         .Build();
+    // Entitlement guard — server-side cross-check of each client's BrawlerPlayerConfig against
+    // the account's owned set, clamping unowned picks. Inert until a lobby/validator populates the per-player
+    // entitlement (no lobby wired here → entitlement null → every selection passes, opt-in off behaviour).
+    roomManagerConfig.PlayerConfigEntitlementGuard = new BrawlerPlayerConfigEntitlementGuard();
+    // In-match reliable-command gate — server-side cross-check of each client's UseConsumableCommand
+    // against the account's owned set, dropping an unowned use before it reaches a tick. Inert until a
+    // lobby/validator populates the per-player entitlement (no lobby → entitlement null → every command
+    // accepted, opt-in off behaviour).
+    roomManagerConfig.ReliableCommandEntitlementGate = new BrawlerReliableCommandEntitlementGate();
+    // Dev lobby identity validator (SD): enabled at RUNTIME by the --lobby host:port flag (no compile
+    // define). Absent → no validator (lobby off; clients join ticketless). Run DevLobbyServer first. The
+    // redeem response also carries the account entitlement, which flows into the entitlement guard above.
+    var (lobbyEnabled, lobbyHost, lobbyPort) = ParseLobbyEndpoint(args);
+    LiteNetLibLobbyRedeemClient redeemClient = null;
+    if (lobbyEnabled)
+    {
+        redeemClient = new LiteNetLibLobbyRedeemClient(logger, lobbyHost, lobbyPort);
+        roomManagerConfig.IdentityValidator = SdDevIdentity.CreateValidator(
+            new BcEd25519Backend(), SdDevIdentity.PublicKey, redeemClient,
+            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        logger.KInformation($"[BrawlerDedicatedServer] identity validator active — dev lobby {lobbyHost}:{lobbyPort}, serverId={SdDevIdentity.DevServerId}");
+    }
     var roomManager = new RoomManager(transport, router, loggerFactory, roomManagerConfig);
 
     logger.KInformation(
         $"[BrawlerDedicatedServer] Server listening on port {port}, maxPlayers={maxPlayersPerRoom}, maxSpectators={maxSpectatorsPerRoom}, botCount={botCount}, tickInterval={tickIntervalMs}ms");
 
+    // Dedi → lobby room reporting (P1): advertise capacity (serverRegister) + push room occupancy (roomReport).
+    SdRoomReporter roomReporter = null;
+    if (lobbyEnabled)
+    {
+        string advertiseHost = ParseAdvertiseHost(args);
+        roomReporter = new SdRoomReporter(roomManager, logger, lobbyHost, lobbyPort,
+            SdDevIdentity.DevServerId, advertiseHost, port,
+            maxRooms, maxPlayersPerRoom, SdDevIdentity.RoomReportIntervalMs);
+        roomReporter.Start();
+        logger.KInformation($"[BrawlerDedicatedServer] room reporter active — advertising {advertiseHost}:{port} {maxRooms}x{maxPlayersPerRoom} to lobby {lobbyHost}:{lobbyPort}");
+    }
+
     // Main loop (includes Graceful Shutdown)
     var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
     loop.Run();
 
+    roomReporter?.Dispose();
+    redeemClient?.Dispose();
     logger.KInformation($"[BrawlerDedicatedServer] Server stopped.");
 }
 
@@ -199,16 +241,83 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
         .WithSessionConfig(sessionConfig)
         .WithDerivedSimulation(sharedRegistry)
         .Build();
+    // Entitlement guard — server-side cross-check of each client's BrawlerPlayerConfig against
+    // the account's owned set, clamping unowned picks. Inert until a lobby/validator populates the per-player
+    // entitlement (no lobby wired here → entitlement null → every selection passes, opt-in off behaviour).
+    roomManagerConfig.PlayerConfigEntitlementGuard = new BrawlerPlayerConfigEntitlementGuard();
+    // In-match reliable-command gate — server-side cross-check of each client's UseConsumableCommand
+    // against the account's owned set, dropping an unowned use before it reaches a tick. Inert until a
+    // lobby/validator populates the per-player entitlement (no lobby → entitlement null → every command
+    // accepted, opt-in off behaviour).
+    roomManagerConfig.ReliableCommandEntitlementGate = new BrawlerReliableCommandEntitlementGate();
+    // Dev lobby identity validator (SD): enabled at RUNTIME by the --lobby host:port flag (no compile
+    // define). Absent → no validator (lobby off; clients join ticketless). Run DevLobbyServer first. The
+    // redeem response also carries the account entitlement, which flows into the entitlement guard above.
+    var (lobbyEnabled, lobbyHost, lobbyPort) = ParseLobbyEndpoint(args);
+    LiteNetLibLobbyRedeemClient redeemClient = null;
+    if (lobbyEnabled)
+    {
+        redeemClient = new LiteNetLibLobbyRedeemClient(logger, lobbyHost, lobbyPort);
+        roomManagerConfig.IdentityValidator = SdDevIdentity.CreateValidator(
+            new BcEd25519Backend(), SdDevIdentity.PublicKey, redeemClient,
+            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        logger.KInformation($"[BrawlerDedicatedServer] identity validator active — dev lobby {lobbyHost}:{lobbyPort}, serverId={SdDevIdentity.DevServerId}");
+    }
     var roomManager = new RoomManager(transport, router, loggerFactory, roomManagerConfig);
 
     logger.KInformation(
         $"[BrawlerDedicatedServer] Server listening on port {port}, maxRooms={maxRooms}, maxPlayersPerRoom={maxPlayersPerRoom}, botCount={botCount}, tickInterval={tickIntervalMs}ms");
 
+    // Dedi → lobby room reporting (P1): advertise capacity (serverRegister) + push room occupancy (roomReport).
+    SdRoomReporter roomReporter = null;
+    if (lobbyEnabled)
+    {
+        string advertiseHost = ParseAdvertiseHost(args);
+        roomReporter = new SdRoomReporter(roomManager, logger, lobbyHost, lobbyPort,
+            SdDevIdentity.DevServerId, advertiseHost, port,
+            maxRooms, maxPlayersPerRoom, SdDevIdentity.RoomReportIntervalMs);
+        roomReporter.Start();
+        logger.KInformation($"[BrawlerDedicatedServer] room reporter active — advertising {advertiseHost}:{port} {maxRooms}x{maxPlayersPerRoom} to lobby {lobbyHost}:{lobbyPort}");
+    }
+
     // Main loop (includes Graceful Shutdown)
     var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);
     loop.Run();
 
+    roomReporter?.Dispose();
+    redeemClient?.Dispose();
     logger.KInformation($"[BrawlerDedicatedServer] Server stopped.");
+}
+
+// Dev lobby endpoint: --lobby host:port (default host localhost, port 9999). Presence of the flag ENABLES
+// the SD lobby at runtime (no compile define). A named flag (not a positional arg) avoids colliding with the
+// positional port/botCount/maxRooms args, which differ between single- and multi-room modes.
+static (bool enabled, string host, int port) ParseLobbyEndpoint(string[] args)
+{
+    int i = Array.IndexOf(args, "--lobby");
+    if (i < 0) return (false, "localhost", 9999);
+    string host = "localhost";
+    int port = 9999;
+    if (i + 1 < args.Length)
+    {
+        var parts = args[i + 1].Split(':');
+        if (parts.Length > 0 && parts[0].Length > 0) host = parts[0];
+        if (parts.Length > 1 && int.TryParse(parts[1], out var p)) port = p;
+    }
+    return (true, host, port);
+}
+
+// Game-server address advertised to the lobby (--advertise <host>). The lobby hands this to
+// clients verbatim as the join endpoint, so it must be reachable FROM THE CLIENTS — the dev
+// default (SdDevIdentity.DedicatedServerHost = loopback) only works when client and server
+// share a machine. The lobby stores the self-reported value as-is (it does not substitute the
+// registration connection's source address), so remote-client setups must pass this flag.
+static string ParseAdvertiseHost(string[] args)
+{
+    int i = Array.IndexOf(args, "--advertise");
+    if (i >= 0 && i + 1 < args.Length && !string.IsNullOrWhiteSpace(args[i + 1]))
+        return args[i + 1];
+    return SdDevIdentity.DedicatedServerHost;
 }
 
 // ═══════════════════════════════════════════════════════════

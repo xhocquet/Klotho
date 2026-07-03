@@ -172,4 +172,4 @@ xpTURN.Klotho.Logging.Mel (opt-in)   ← + Klotho.Logging + Microsoft.Extensions
 
 ---
 
-*Last updated: 2026-06-26 (0.3.6: removed the bundled System.Runtime.CompilerServices.Unsafe — now in-source via `KUnsafe` — and K4os.Compression.LZ4, with replays written uncompressed)*
+*Last updated: 2026-06-28 (0.5.0: removed the bundled System.Runtime.CompilerServices.Unsafe — now in-source via `KUnsafe` — and K4os.Compression.LZ4, with replays written uncompressed)*

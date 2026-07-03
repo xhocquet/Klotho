@@ -58,7 +58,7 @@ namespace xpTURN.Klotho.Network
             RunJoinValidation(peerId, state, isLateJoin: true);
         }
 
-        private void FinalizeLateJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName)
+        private void FinalizeLateJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName, byte[] entitlement)
         {
             // PlayerId allocation goes through TryReservePlayerSlot — the Post-GameStart
             // path bumps _nextPlayerId and _assignedPlayerIdCount; on overflow it rejects + cleans up.
@@ -77,6 +77,7 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, displayName),
                 Account = validatorRan ? (account ?? string.Empty) : string.Empty,
+                Entitlement = validatorRan ? entitlement : null, // server-only; null when no validator ran
                 Ping = avgRtt,
                 IsReady = true
             };
@@ -85,10 +86,17 @@ namespace xpTURN.Klotho.Network
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
+            if (newPlayer.Entitlement != null && newPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[ServerNetworkService][Entitlement] loaded via LateJoin: playerId={newPlayerId}, bytes={newPlayer.Entitlement.Length}");
             _peerToPlayer[peerId] = newPlayerId;
 
             // 2. Calculate joinTick
             int joinTick = _engine.CurrentTick + _sessionConfig.LateJoinDelayTicks;
+
+            // Hold the joiner's reliable commands (e.g. spawn) until joinTick so the join-time seed
+            // always precedes them — the SD counterpart of the P2P joiner-side cmd.Tick floor.
+            // Race-free: the client cannot submit before receiving the accept sent below.
+            _inputCollector.SetReliablePlacementFloor(newPlayerId, joinTick);
 
             // Send SimulationConfig first. The client's KlothoConnection must receive it before initialization
             // so the handshake completes in the same order as the Normal Join path.
@@ -165,6 +173,12 @@ namespace xpTURN.Klotho.Network
                 accept.PlayerConfigData = Array.Empty<byte>();
             }
 
+            // Per-player server-verified entitlement bytes, index-parallel to Roster (same
+            // concat+lengths encoding as PlayerConfigData). Covers the joiner itself plus any player
+            // whose PlayerJoinCommand is still pending in the joiner's replay window (overlapping
+            // late-joins) — the join-time seed callback reads these via GetPlayerEntitlement.
+            accept.RosterEntitlementData = BuildRosterEntitlements(accept.RosterEntitlementLengths);
+
             using (var serialized = _messageSerializer.SerializePooled(accept))
             {
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
@@ -188,7 +202,9 @@ namespace xpTURN.Klotho.Network
             // 7. Add player to InputCollector
             _inputCollector.AddPlayer(newPlayerId);
 
-            // 8. PlayerJoinCommand → store directly in InputBuffer (unlike P2P: instead of SendCommand broadcast)
+            // 8. PlayerJoinCommand — the engine handler schedules it into the input collector's
+            //    system lane at joinTick (SD SendCommand is a no-op; unlike P2P there is no broadcast
+            //    here — the command reaches clients inside the verified stream of tick joinTick).
             OnLateJoinPlayerAdded?.Invoke(newPlayerId, joinTick);
 
             // 9. Immediately resend the missed VerifiedState (lastVerifiedTick) — avoids hitting the guest client's Hard limit.
@@ -211,6 +227,10 @@ namespace xpTURN.Klotho.Network
                 JoinTick = joinTick,
                 Account = ljNewInfo?.Account ?? string.Empty,
                 DisplayName = ljNewInfo?.DisplayName ?? string.Empty,
+                // Server-verified entitlement bytes so connected clients seed the same deterministic
+                // join-time state when the joinTick command executes (arrives before the tick-joinTick
+                // verified state on the same ReliableOrdered stream).
+                Entitlement = ljNewInfo?.Entitlement,
             };
             using (var notificationSerialized = _messageSerializer.SerializePooled(notification))
             {
@@ -229,6 +249,36 @@ namespace xpTURN.Klotho.Network
             _logger?.KInformation(
                 $"[ServerNetworkService] Late join complete: peerId={peerId}, playerId={newPlayerId}, joinTick={joinTick}");
             OnPlayerJoined?.Invoke(newPlayer);
+        }
+
+        // Builds roster-parallel entitlement propagation data (index-parallel to a roster built from
+        // _players in the same order; concat bytes + per-entry lengths, the PlayerConfigData encoding).
+        // Shared by the late-join and reconnect accept builders. Clears the lengths list first
+        // (reconnect uses a reused cache instance).
+        private byte[] BuildRosterEntitlements(List<int> lengths)
+        {
+            lengths.Clear();
+            int total = 0;
+            for (int i = 0; i < _players.Count; i++)
+            {
+                var ent = _players[i].Entitlement;
+                int len = ent?.Length ?? 0;
+                lengths.Add(len);
+                total += len;
+            }
+            if (total == 0)
+                return Array.Empty<byte>();
+
+            var data = new byte[total];
+            int offset = 0;
+            for (int i = 0; i < _players.Count; i++)
+            {
+                var ent = _players[i].Entitlement;
+                if (ent == null || ent.Length == 0) continue;
+                Buffer.BlockCopy(ent, 0, data, offset, ent.Length);
+                offset += ent.Length;
+            }
+            return data;
         }
 
         // Pending handshake count (LateJoin + general — both use _peerSyncStates).

@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.5.1] - 2026-07-03
+
+### Trusted player data (entitlements)
+
+- **A player can now carry server-authoritative "entitlement" data into a match.** This is an opaque, lobby-signed blob attached when the login is verified — distinct from the client-authored player config, which a client can freely set. The engine carries it through the join and hands it to the game, which reads it to seed the simulation deterministically. Optional: with no entitlement path wired, nothing changes.
+- **Start-of-match loadouts are now checked against what a player actually owns.** A game can supply a guard that cross-checks a client's selection against its entitlement and either passes it, clamps it to an owned default, or rejects it. On a dedicated server the decision is authoritative and broadcast once; in peer-to-peer every peer applies the same deterministic clamp — so an unowned pick can neither desync the match nor grant an unearned advantage.
+- **In-match actions can be gated the same way.** A game can supply a gate that drops a client-submitted reliable command whose effect the player isn't entitled to — the action simply doesn't happen. This is aimed at ownership that lives off the wire (e.g. a server-only catalog) rather than in the replicated simulation.
+
+> Guides: [Entitlement lifecycle](Docs/EntitlementLifecycle.md) (how the data flows origin → dispose) · [Lobby integration §9](Docs/LobbyIntegrationGuide.md) (which hooks to wire, plus an end-to-end play test).
+
+### Stronger peer-to-peer trust
+
+- **Each peer-to-peer guest can now re-verify a peer's login itself instead of trusting the host's word.** The host propagates the original lobby-signed ticket and every guest independently checks its signature, so no single peer is the sole authority on who everyone is. When not enabled, the previous host-relayed identity is used unchanged.
+
+### Late join carries entitlements
+
+- **A player joining mid-match now gets the same trusted-data treatment as players present from the start.** A new per-join world-seeding hook lets the game initialize that player's simulation state (e.g. an entitlement-derived loadout) deterministically at the exact tick they enter, on every peer, the same way tick-0 players are seeded. Loadout and action enforcement apply to late joiners too.
+
+### Networking
+
+- **Join ordering hardened for late join** — a join is now sequenced ahead of the same-tick gameplay commands, so the joining player's slot and world setup exist before anything else on that tick runs.
+- **A reject reason coming back from a game's identity validator is now clamped to the identity range** — an out-of-range code could otherwise be read as a retryable "room full" and send the client into a retry-loop with a credential the authority had already rejected.
+- **Fixed a peer-to-peer late-join desync when joining an in-progress match.** The joiner was not sent the confirmed inputs for the exact tick its state snapshot was taken at, so it re-simulated that tick with empty input while everyone else used the real input — its physics (positions/velocities) diverged within a single step, tripping the first post-join sync check and stalling the joiner out of the match. Most visible when joining during active movement/combat. The join now backfills inputs starting at the snapshot tick, matching the reconnect and desync-resync paths.
+
+### API additions
+
+- **Identity validation can return an entitlement blob alongside the verified account** via a new `Accept` overload; the existing one is unchanged.
+- **The engine exposes each player's entitlement (`GetPlayerEntitlement`)** for use while seeding the world.
+- **Peer-to-peer setup gained an opt-in to wire the loadout guard and enable ticket propagation.**
+
+### Breaking changes
+
+- **`ISimulationCallbacks` gained `OnPlayerJoinedWorld`.** Every implementer must add it; leave it empty when there is no per-join state to seed.
+- **`IServerDrivenNetworkService` gained `GetPlayerEntitlement`.** Custom implementers must add it.
+- **`IKlothoEngine` gained `GetPlayerEntitlement`.** Consumers only *calling* the engine are unaffected; a custom or mock engine implementation must add it.
+- **Custom transports must deliver reliable-ordered messages on a single per-peer stream across both send and broadcast.** Late join relies on a roster update reaching a peer before the join that consumes it. The built-in transport already satisfies this; a custom `INetworkTransport` that routes broadcasts through a separate channel must be corrected.
+- **A verified account longer than 62 UTF-8 bytes is now rejected at join instead of being silently truncated.** The account is an identity key, and truncation could collide two distinct accounts into one roster identity. A custom `IPlayerIdentityValidator` must ensure the account it accepts is at most 62 UTF-8 bytes; otherwise those users — previously admitted with a truncated account — are now turned away with the identity-invalid reason. Display names are unaffected (still truncated, as they are cosmetic). The reference validator already bounds account length, so it is unaffected.
+
+### Samples
+
+- **The Brawler sample now wires lobby entitlements** (config-driven on/off, mode-aware), demonstrating loadout seeding and in-match action gating end to end. The dedicated-server demo's guest permissions were aligned with the peer-to-peer rules.
+- **Fixed the dedicated-server sample handing remote clients a loopback address** — the lobby now advertises the server's real address instead of the local one.
+
 ## [0.5.0] - 2026-06-28
 
 ### Verified player identity from the lobby

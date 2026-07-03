@@ -188,7 +188,7 @@ namespace xpTURN.Klotho.Network
 
             // Identity validation gate — before slot reservation so a reject consumes no slot.
             // P2P validation is synchronous: on accept we proceed inline with the validated identity.
-            if (!TryValidateIdentityP2P(peerId, isLateJoin: false, out bool validatorRan, out string vAccount, out string vDisplayName))
+            if (!TryValidateIdentityP2P(peerId, isLateJoin: false, out bool validatorRan, out string vAccount, out string vDisplayName, out byte[] vEntitlement))
                 return;
 
             if (!TryReservePlayerSlot(peerId, out int newPlayerId))
@@ -206,12 +206,21 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, vDisplayName),
                 Account = validatorRan ? (vAccount ?? string.Empty) : string.Empty,
+                // Promote the original ticket the host validated (already captured in
+                // _peerTickets at PlayerJoin receipt) onto the durable PlayerInfo so it survives for
+                // re-propagation. "" when the propagation gate is off.
+                OriginalTicket = _propagateOriginalTickets && _peerTickets.TryGetValue(peerId, out var capturedTicket)
+                    ? (capturedTicket ?? string.Empty) : string.Empty,
+                // Store the guest's lobby-signed entitlement (host-side, never exposed on the roster wire).
+                Entitlement = vEntitlement,
                 IsReady = false,
                 Ping = avgRtt
             };
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Add(newPlayer);
+            if (newPlayer.Entitlement != null && newPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via NormalJoin(host): playerId={newPlayerId}, bytes={newPlayer.Entitlement.Length}");
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
 
@@ -236,6 +245,10 @@ namespace xpTURN.Klotho.Network
                 msg.Roster.Add(RosterEntry.FromPlayer(
                     _players[i], _logger, (byte)_players[i].ConnectionState,
                     _players[i].IsReady ? (byte)1 : (byte)0));
+                // Index-parallel original tickets so the joining guest re-verifies every
+                // existing player. Only when the gate is on → empty list otherwise (guest skips).
+                if (_propagateOriginalTickets)
+                    msg.RosterTickets.Add(_players[i].OriginalTicket ?? string.Empty);
             }
             using (var serialized = _messageSerializer.SerializePooled(msg))
             {
@@ -255,6 +268,9 @@ namespace xpTURN.Klotho.Network
                 IsReady = newPlayer.IsReady,
                 Account = newPlayer.Account ?? string.Empty,
                 DisplayName = newPlayer.DisplayName ?? string.Empty,
+                // The new player's original ticket so existing peers re-verify it.
+                // Already "" when the gate is off (newPlayer.OriginalTicket gated above).
+                OriginalTicket = newPlayer.OriginalTicket ?? string.Empty,
             };
             RelayMessage(joinNotification, excludePeerId: peerId, DeliveryMethod.ReliableOrdered);
             // RelayMessage only reaches _peerToPlayer; spectators (_spectators, disjoint) need a separate send.

@@ -36,7 +36,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
             _passed = 0;
             _failed = 0;
 
-            Console.WriteLine("\n=== SingleRoom Lifecycle Tests (IMP36) ===\n");
+            Console.WriteLine("\n=== SingleRoom Lifecycle Tests ===\n");
 
             SR1_LazyCreateOnFirstHandshake();
             SR2_LobbyDrainAndRecreate();

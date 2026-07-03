@@ -231,7 +231,7 @@ namespace xpTURN.Klotho.Core.Tests
             Assert.AreEqual(42, ReadLastMatchedSyncTick(guest.Engine),
                 "Mismatch path must preserve _lastMatchedSyncTick (mid-match desync recovery)");
             Assert.AreEqual(2, ReadConsecutiveDesyncCount(guest.Engine),
-                "Post-apply mismatch counts toward escalation: 1 + 1 = 2 (IMP59 V1-E2)");
+                "Post-apply mismatch counts toward escalation: 1 + 1 = 2");
             Assert.AreEqual(2, ReadResyncRetryCount(guest.Engine),
                 "Below threshold — no re-request, _resyncRetryCount preserved");
             Assert.AreEqual(0, ReadResyncState(guest.Engine),

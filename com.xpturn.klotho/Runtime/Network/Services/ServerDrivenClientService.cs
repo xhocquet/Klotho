@@ -251,6 +251,9 @@ namespace xpTURN.Klotho.Network
                 }
                 RaisePlayerCountIfChanged(prevCount);
                 RaiseAllPlayersReadyIfChanged(prevReady);
+                // Server-verified entitlement bytes (index-parallel to the roster just rebuilt) so
+                // GetPlayerEntitlement returns non-null for tick-0 / initial-entry players (UI reads).
+                ApplyRosterEntitlements(result.RosterEntitlementData, result.RosterEntitlementLengths, "NormalJoin");
             }
 
             Phase = SessionPhase.Synchronized;
@@ -338,6 +341,7 @@ namespace xpTURN.Klotho.Network
         {
             var msg = payload.AcceptMessage;
             SeedPlayersFromCatchupPayload(msg.Magic, msg.RandomSeed, msg.Roster);
+            ApplyRosterEntitlements(msg.RosterEntitlementData, msg.RosterEntitlementLengths, "LateJoinSeed");
         }
 
         /// <summary>
@@ -351,6 +355,7 @@ namespace xpTURN.Klotho.Network
             // SD has no Magic field on ReconnectAcceptMessage — _sessionMagic is already set by InitializeFromConnection
             // from creds. Pass current _sessionMagic to keep helper signature symmetric.
             SeedPlayersFromCatchupPayload(_sessionMagic, msg.RandomSeed, msg.Roster);
+            ApplyRosterEntitlements(msg.RosterEntitlementData, msg.RosterEntitlementLengths, "ReconnectSeed");
         }
 
         // roster carries authoritative identity + ConnectionState. IsReady stays hardcoded true on this
@@ -599,6 +604,35 @@ namespace xpTURN.Klotho.Network
         public int GetMinClientAckedTick()
         {
             throw new NotSupportedException("The client cannot call GetMinClientAckedTick.");
+        }
+
+        // Server-propagated entitlement bytes (late-join notification / accept roster-parallel data).
+        // Deterministic input for join-time seeding: when a PlayerJoinCommand replays in the verified
+        // stream, OnPlayerJoinedWorld reads this and must decode the same bytes the server decoded —
+        // otherwise the seeded state diverges from the authority hash. Tick-0 remains covered by the
+        // Initial FullState (players joined before this client see no callback re-execution).
+        public byte[] GetPlayerEntitlement(int playerId) => FindPlayerById(playerId)?.Entitlement;
+
+        // Adopts server-propagated roster-parallel entitlement bytes (index-parallel to the roster
+        // that just rebuilt _players; concat+lengths — the PlayerConfigData encoding). Malformed
+        // input degrades to null entries (defensive; the server is trusted, so this is belt-and-braces).
+        private void ApplyRosterEntitlements(byte[] data, List<int> lengths, string via)
+        {
+            if (lengths == null || lengths.Count == 0)
+                return;
+            int count = Math.Min(lengths.Count, _players.Count);
+            int offset = 0;
+            for (int i = 0; i < count; i++)
+            {
+                int len = lengths[i];
+                if (len <= 0) continue;
+                if (data == null || offset + len > data.Length) break;
+                var bytes = new byte[len];
+                Buffer.BlockCopy(data, offset, bytes, 0, len);
+                _players[i].Entitlement = bytes;
+                offset += len;
+                _logger?.KInformation($"[SDClientService][Entitlement] loaded via {via}: playerId={_players[i].PlayerId}, bytes={len}");
+            }
         }
 
         // ── Update ──────────────────────────────────────────
@@ -906,6 +940,7 @@ namespace xpTURN.Klotho.Network
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            ApplyRosterEntitlements(msg.RosterEntitlementData, msg.RosterEntitlementLengths, "LateJoinAccept");
 
             OnLocalPlayerIdAssigned?.Invoke(_localPlayerId);
             _engine?.ExpectFullState();
@@ -946,12 +981,18 @@ namespace xpTURN.Klotho.Network
                 Account = msg.Account ?? string.Empty,
                 IsReady = true,
                 ConnectionState = PlayerConnectionState.Connected,
+                // Server-verified entitlement — deterministic input for the join-time seed when this
+                // player's PlayerJoinCommand replays at joinTick (must precede it: same ReliableOrdered
+                // stream as the verified state, and joinTick is LateJoinDelayTicks in the future).
+                Entitlement = msg.Entitlement,
             };
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            if (msg.Entitlement != null && msg.Entitlement.Length > 0)
+                _logger?.KInformation($"[SDClientService][Entitlement] loaded via LateJoinNotification: playerId={msg.PlayerId}, bytes={msg.Entitlement.Length}");
 
             OnPlayerJoined?.Invoke(newPlayer);
 
@@ -986,12 +1027,16 @@ namespace xpTURN.Klotho.Network
                 Account = msg.Account ?? string.Empty,
                 IsReady = msg.IsReady,
                 ConnectionState = (PlayerConnectionState)msg.ConnectionState,
+                // Server-verified entitlement so GetPlayerEntitlement returns non-null for this player (UI reads).
+                Entitlement = msg.Entitlement,
             };
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            if (msg.Entitlement != null && msg.Entitlement.Length > 0)
+                _logger?.KInformation($"[SDClientService][Entitlement] loaded via JoinNotification: playerId={msg.PlayerId}, bytes={msg.Entitlement.Length}");
 
             OnPlayerJoined?.Invoke(newPlayer);
             _logger?.KInformation($"[SDClientService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");
@@ -1171,6 +1216,7 @@ namespace xpTURN.Klotho.Network
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            ApplyRosterEntitlements(msg.RosterEntitlementData, msg.RosterEntitlementLengths, "ReconnectAccept");
 
             _reconnectState = ReconnectState.WaitingForFullState;
             ApplyOrPendExtraDelay(msg.RecommendedExtraDelay, ExtraDelaySource.Reconnect);

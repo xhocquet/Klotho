@@ -348,6 +348,13 @@ namespace xpTURN.Klotho.Core
                 // Forward the pre-game roster snapshot (incl. ReadyState + authoritative identity) so
                 // InitializeFromConnection can build the player list.
                 Roster = msg.Roster,
+                // Forward per-player original tickets (index-parallel to Roster) so
+                // InitializeFromConnection re-verifies each peer independently. Empty when the gate is off.
+                RosterTickets = msg.RosterTickets,
+                // Forward per-player server-verified entitlement bytes (SD normal join, index-parallel to
+                // Roster) so InitializeFromConnection sets each player's entitlement. Empty on P2P.
+                RosterEntitlementData = msg.RosterEntitlementData,
+                RosterEntitlementLengths = msg.RosterEntitlementLengths,
             };
             _logger?.KInformation($"[KlothoConnection] SyncComplete: playerId={msg.PlayerId}, players={msg.Roster.Count}, waiting for SimulationConfig");
         }

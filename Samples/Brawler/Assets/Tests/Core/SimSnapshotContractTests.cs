@@ -152,6 +152,7 @@ namespace xpTURN.Klotho.Core.Tests
             public void SendBootstrapReady(int playerId) { }
             public int GetMinClientAckedTick() => 0;
             public void ClearUnackedInputs() { }
+            public byte[] GetPlayerEntitlement(int playerId) => null;
         }
 
         private IKLogger _logger;
@@ -202,7 +203,7 @@ namespace xpTURN.Klotho.Core.Tests
             // per executed tick (tick 0 initial save + one save per ExecuteTick; internal resim
             // adds more). The counter only counts engine-triggered calls, not Tick auto-saves.
             Assert.GreaterOrEqual(host.Simulation.EngineSaveSnapshotCallCount, tickAtRequest,
-                "Engine must trigger ISimulation.SaveSnapshot at least once per executed tick (IMP59-F1)");
+                "Engine must trigger ISimulation.SaveSnapshot at least once per executed tick");
 
             int rollbackTarget = tickAtRequest - 5;
             int executedCount = 0;
@@ -266,7 +267,7 @@ namespace xpTURN.Klotho.Core.Tests
             // Current behavior (deviation note): the P2P NoSnapshot branch does not
             // escalate to a FullState resync — _resyncState stays None.
             Assert.AreEqual(0, Convert.ToInt32(_resyncStateField.GetValue(host.Engine)),
-                "P2P NoSnapshot failure must not request a resync (current behavior, plan §8)");
+                "P2P NoSnapshot failure must not request a resync (current behavior)");
 
             // The session keeps running on the straight-line state.
             _harness.AssertStateHashConsistent();

@@ -19,9 +19,17 @@ namespace xpTURN.Klotho.Samples.Identity
         public readonly long ExpiresAt;
         /// <summary>One-time nonce providing session-scoped replay defence.</summary>
         public readonly string Nonce;
+        /// <summary>
+        /// Opaque lobby-signed entitlement blob (for example the account's owned characters or loadout). It
+        /// is carried inside the same signed payload as the identity fields, so a single Ed25519 signature
+        /// covers both and no separate signature is required. A null or empty value denotes an identity-only
+        /// ticket. The game layer interprets the bytes; the validator only verifies that the signature
+        /// covers them.
+        /// </summary>
+        public readonly byte[] Entitlement;
 
         public LobbyTicket(string account, string displayName, string sessionId,
-                           long issuedAt, long expiresAt, string nonce)
+                           long issuedAt, long expiresAt, string nonce, byte[] entitlement = null)
         {
             Account = account ?? string.Empty;
             DisplayName = displayName ?? string.Empty;
@@ -29,6 +37,7 @@ namespace xpTURN.Klotho.Samples.Identity
             IssuedAt = issuedAt;
             ExpiresAt = expiresAt;
             Nonce = nonce ?? string.Empty;
+            Entitlement = entitlement;
         }
     }
 }

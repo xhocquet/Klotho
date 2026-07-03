@@ -125,6 +125,11 @@ namespace xpTURN.Klotho.Network
             // Seed push baseline so the first mid-match recompute does not redundantly push the same value.
             _lastPushedExtraDelay[peerId] = reconnectSeedExtraDelay;
 
+            // Per-player entitlement bytes, index-parallel to Roster (mirrors LateJoinAcceptMessage) —
+            // covers any player whose PlayerJoinCommand is still pending in the reconnector's replay
+            // window. BuildRosterEntitlements clears the reused cache's lengths list before filling.
+            _reconnectAcceptCache.RosterEntitlementData = BuildRosterEntitlements(_reconnectAcceptCache.RosterEntitlementLengths);
+
             using (var serialized = _messageSerializer.SerializePooled(_reconnectAcceptCache))
                 _transport.Send(peerId, serialized.Data, serialized.Length, DeliveryMethod.ReliableOrdered);
 

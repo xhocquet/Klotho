@@ -191,7 +191,7 @@ namespace xpTURN.Klotho.Network.Tests
             DriveHostTicks(20, null); // host fills g2 empty; g1 reconciles its g2 predictions
 
             Assert.AreEqual(0, g1Rollbacks,
-                "guest must not roll back on the disconnected peer's empty fill — empty-prediction matches (was per-tick rollback pre-IMP60-7)");
+                "guest must not roll back on the disconnected peer's empty fill — empty-prediction matches (was per-tick rollback before the fix)");
         }
 
         [Test]

@@ -1,0 +1,46 @@
+<!--
+  xpTURN.Klotho.Identity.P2pRef — server mirror of the IdentityP2pRef Runtime asmdef.
+  Engine-agnostic P2P identity reference: LobbyTicket + codec, Ed25519 backend/validator, DemoEntitlement.
+
+  Mirrors the com.xpturn.klotho/Server~ convention: a "Server~" (tilde) folder is ignored by Unity, so
+  it needs no .meta and never enters the Unity import; dedicated-server .csproj files reference it instead
+  of globbing the raw Runtime sources. The asmdef (noEngineReferences: true) guarantees these sources are
+  engine-agnostic, so they compile unchanged here.
+
+  References the Runtime server mirror (Serialization/Network/Core types). BouncyCastle is a NuGet
+  PackageReference here (BcEd25519Backend) and flows transitively to consumers.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>xpTURN.Klotho.Identity.P2pRef</AssemblyName>
+    <RootNamespace>xpTURN.Klotho.Samples.Identity</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <P2pRefRuntimeRoot>$(MSBuildThisFileDirectory)..\..\Runtime</P2pRefRuntimeRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
+  </ItemGroup>
+
+  <!-- Source generator: DemoEntitlementData is a [KlothoSerializableStruct] whose
+       Serialize/Deserialize/GetSerializedSize are codegen-emitted, so this project runs the generator. -->
+  <ItemGroup>
+    <Analyzer Include="..\..\..\..\com.xpturn.klotho\Plugins\Analyzers\KlothoGenerator.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(P2pRefRuntimeRoot)\**\*.cs"
+             Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

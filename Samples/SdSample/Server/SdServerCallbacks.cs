@@ -31,5 +31,7 @@ namespace xpTURN.Samples.SdSample.Server
             // no-op: the server produces no local input. ServerInputCollector gathers the
             // client input messages and injects them into the simulation per tick.
         }
+
+        public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId) { } // no per-join world state to seed
     }
 }

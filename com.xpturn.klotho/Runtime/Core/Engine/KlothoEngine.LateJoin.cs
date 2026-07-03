@@ -133,6 +133,27 @@ namespace xpTURN.Klotho.Core
             cmd.PlayerId = _networkService.LocalPlayerId;
             cmd.Tick = joinTick;
             cmd.JoinedPlayerId = playerId;
+
+            if (_simConfig.Mode == NetworkMode.ServerDriven)
+            {
+                // SD server: SendCommand is a no-op (no local input on the server), so schedule the
+                // command directly into the input collector's system lane. It then enters the tick-J
+                // command list that ServerTick executes, replay-records, and broadcasts in one pass —
+                // every node (server sim + client replay) sees the join at the same tick.
+                if (_serverNetwork == null)
+                    _serverNetwork = _serverDrivenNetwork as xpTURN.Klotho.Network.ServerNetworkService;
+                if (_serverNetwork != null)
+                {
+                    _serverNetwork.InputCollector.AddSystemCommand(joinTick, cmd);
+                }
+                else
+                {
+                    _logger?.KWarning($"[KlothoEngine][LateJoin] PlayerJoinCommand dropped: SD network service is not a ServerNetworkService (playerId={playerId}, joinTick={joinTick})");
+                    CommandPool.Return(cmd);
+                }
+                return;
+            }
+
             _networkService.SendCommand(cmd);
         }
 
@@ -158,6 +179,14 @@ namespace xpTURN.Klotho.Core
                 {
                     PlayerId = joinedPlayerId,
                 });
+
+                // Late-join analog of OnInitializeWorld's per-player setup. Invoked inside the
+                // create-iff-not-exists slot guard, right after the participant slot, so it fires exactly once
+                // per join and is rollback-safe (re-sim re-creates the slot iff absent, re-firing this; if the
+                // snapshot already holds the slot, the whole block is skipped). The game writes deterministic
+                // per-player world state (e.g. an entitlement loadout) via the live frame; engine is for reads
+                // only (InitFrame is init-only, hence the frame is passed explicitly).
+                _simulationCallbacks?.OnPlayerJoinedWorld(this, frame, joinedPlayerId);
             }
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR

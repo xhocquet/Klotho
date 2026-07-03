@@ -287,7 +287,7 @@ namespace xpTURN.Klotho.Network.Tests
                 // must not (re-)insert a _remoteTicks entry.
                 _handleFrameAdvantageMethod.Invoke(hostEngine, new object[] { 999, harness.Host.CurrentTick, 0 });
                 Assert.IsFalse(RemoteTicksContains(hostEngine, 999),
-                    "Non-roster sender must not get a timing vote (IMP60-5 roster guard).");
+                    "Non-roster sender must not get a timing vote (roster guard).");
 
                 // Positive control: a roster remote peer still gets its entry.
                 _handleFrameAdvantageMethod.Invoke(hostEngine, new object[] { guest.LocalPlayerId, harness.Host.CurrentTick, 0 });
@@ -329,7 +329,7 @@ namespace xpTURN.Klotho.Network.Tests
                 Assert.AreEqual(playersBefore - 1, harness.Host.NetworkService.PlayerCount,
                     "Timeout must remove the silent player from the match.");
                 Assert.IsFalse(guest.Transport.IsConnected,
-                    "Timeout leave must cut the still-alive transport (IMP60-5 D3(a'')) — " +
+                    "Timeout leave must cut the still-alive transport — " +
                     "otherwise the removed player keeps sending into timing/input paths.");
                 // The cut's disconnect event lands AFTER the leave (player gone, pool entry
                 // reset, mappings cleared) — the empty-room phase reset must not drop a

@@ -695,7 +695,8 @@ namespace xpTURN.Klotho.Network
             LocalPlayerId = msg.PlayerId;
             _sharedClock = new SharedTimeClock(msg.SharedEpoch, msg.ClockOffset);
             // Preserve identity across the reconnect roster rebuild (IsReady stays false).
-            RebuildPlayerList(msg.Roster, useReady: false, useNames: true);
+            // Re-verify every player's propagated ticket (P2P full-state is host-authored).
+            RebuildPlayerList(msg.Roster, useReady: false, useNames: true, rosterTickets: msg.RosterTickets);
 
             _reconnectState = ReconnectState.WaitingForFullState;
             _fullStateRequestTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -710,7 +711,12 @@ namespace xpTURN.Klotho.Network
         // existing Ready flags; LateJoin/Reconnect leave IsReady false (entry.ReadyState meaningful only
         // on normal join). useNames reads the roster's authoritative identity; the LateJoin handler omits
         // it (P2P carries identity via a separate Notification).
-        private void RebuildPlayerList(List<RosterEntry> roster, bool useReady = false, bool useNames = false)
+        // rosterTickets: per-player original tickets index-parallel to roster, present on the
+        // wire only when the propagation gate is on (SyncComplete/LateJoinAccept/ReconnectAccept). When
+        // supplied, each entry is re-verified independently and the ticket-derived identity adopted.
+        // Re-verification runs inside the build loop, BEFORE the count/ready events below (reverify
+        // then publish), so no unverified value is ever observed.
+        private void RebuildPlayerList(List<RosterEntry> roster, bool useReady = false, bool useNames = false, List<string> rosterTickets = null)
         {
             int prevPlayerCount = _players.Count;
             bool prevAllReady = AllPlayersReady;
@@ -718,17 +724,51 @@ namespace xpTURN.Klotho.Network
             for (int i = 0; i < roster.Count; i++)
             {
                 var e = roster[i];
+                string displayName = useNames ? e.DisplayName.ToString() : string.Empty;
+                string account = useNames ? e.Account.ToString() : string.Empty;
+                byte[] entitlement = null; // adopted from the re-verified ticket below
+                // Re-verify the propagated ticket and adopt its identity/entitlement (shared helper).
+                // Guard kept so the diff is byte-identical when no tickets are supplied (gate off).
+                if (rosterTickets != null)
+                {
+                    string ticket = i < rosterTickets.Count ? rosterTickets[i] : null;
+                    ResolveRosterEntryIdentity(e.PlayerId, ticket, ref account, ref displayName, ref entitlement);
+                }
                 _players.Add(new PlayerInfo
                 {
                     PlayerId = e.PlayerId,
+                    Entitlement = entitlement,
                     ConnectionState = (PlayerConnectionState)e.ConnectionState,
                     IsReady = useReady && e.ReadyState != 0,
-                    DisplayName = useNames ? e.DisplayName.ToString() : string.Empty,
-                    Account = useNames ? e.Account.ToString() : string.Empty,
+                    DisplayName = displayName,
+                    Account = account,
                 });
+                if (entitlement != null && entitlement.Length > 0)
+                    _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via ReconnectRebuild: playerId={e.PlayerId}, bytes={entitlement.Length}");
             }
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+        }
+
+        // Re-verify a propagated original ticket and adopt its identity/entitlement into the refs.
+        // For a peer OTHER than us we adopt the ticket's account/displayName (zero-trust — not the host relay).
+        // For our OWN entry we keep the locally-known account/displayName (throwaway refs) but still extract our
+        // own entitlement from the propagated, signature-verified ticket — otherwise this peer seeds its own
+        // loadout from a null entitlement while every other peer derives the real bytes for us, diverging the
+        // tick-0 seed. No-op when the gate is off / the ticket is absent (ReverifyAndAdoptIdentity guards).
+        // Shared by RebuildPlayerList (normal join / warm reconnect) and SeedPlayersFromCatchupPayload
+        // (late-join / cold-start reconnect) so the per-peer re-verification lives in exactly one place.
+        private void ResolveRosterEntryIdentity(int playerId, string ticket, ref string account, ref string displayName, ref byte[] entitlement)
+        {
+            if (playerId != LocalPlayerId)
+            {
+                ReverifyAndAdoptIdentity(playerId, ticket, ref account, ref displayName, ref entitlement);
+            }
+            else
+            {
+                string ownAccount = account, ownDisplayName = displayName;
+                ReverifyAndAdoptIdentity(playerId, ticket, ref ownAccount, ref ownDisplayName, ref entitlement);
+            }
         }
 
         private void HandleReconnectReject(ReconnectRejectMessage msg)
@@ -827,12 +867,17 @@ namespace xpTURN.Klotho.Network
             _reconnectAcceptCache.ClockOffset = 0;
             _reconnectAcceptCache.PlayerCount = _players.Count;
             _reconnectAcceptCache.Roster.Clear();            // reused cache — clear the roster
+            _reconnectAcceptCache.RosterTickets.Clear();     // reused cache — clear before repopulate (else stale ticket bleed)
             for (int i = 0; i < _players.Count; i++)
             {
                 bool isDisconnected = IsPlayerDisconnected(_players[i].PlayerId);
                 _reconnectAcceptCache.Roster.Add(RosterEntry.FromPlayer(
                     _players[i], _logger,
                     isDisconnected ? (byte)PlayerConnectionState.Disconnected : (byte)PlayerConnectionState.Connected));
+                // Index-parallel original tickets so the reconnector re-verifies every
+                // player (P2P full-state is host-authored). Only when gate on → empty list otherwise.
+                if (_propagateOriginalTickets)
+                    _reconnectAcceptCache.RosterTickets.Add(_players[i].OriginalTicket ?? string.Empty);
             }
 
             // SessionConfig block — used by the cold-start guest to rebuild SessionConfig.

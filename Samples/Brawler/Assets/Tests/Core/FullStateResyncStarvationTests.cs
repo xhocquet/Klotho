@@ -113,7 +113,7 @@ namespace xpTURN.Klotho.Core.Tests
 
                 Assert.Greater(g0.Engine.LastVerifiedTick, resyncTick,
                     $"Verified chain must resume past the resync tick ({resyncTick}); stuck at " +
-                    $"{g0.Engine.LastVerifiedTick} reproduces the IMP60-15 starvation regression.");
+                    $"{g0.Engine.LastVerifiedTick} reproduces the starvation regression.");
 
                 // Guest half of the fix: the catchup-ingest guard (HandleCatchupInputMessage)
                 // requires _lateJoinState in {CatchingUp, Active}; the resync path must set Active.

@@ -153,7 +153,7 @@ namespace xpTURN.Klotho.Network.Tests
 
             Assert.Greater(waitFrames, 0,
                 $"Fast peer must reach RecommendWaitFrames > 0 (host tick={host.CurrentTick}, guest tick={guest.CurrentTick}) " +
-                "— before IMP60-1 this was structurally impossible (self entry pinned advantage at ~1)");
+                "— before the fix this was structurally impossible (self entry pinned advantage at ~1)");
 
             // _remoteTicks must never contain the local player (engine defense filter,
             // indirect surface — the dictionary is private).
@@ -192,7 +192,7 @@ namespace xpTURN.Klotho.Network.Tests
 
             Assert.IsTrue(released,
                 $"Throttle must release once the remote catches up (host={host.CurrentTick}, guest={guest.CurrentTick}) " +
-                "— a sustained recommendation here means the latch regressed (IMP60-2)");
+                "— a sustained recommendation here means the latch regressed");
             Assert.Less(host.CurrentTick - guest.CurrentTick, gapAtEngage,
                 "Gap must converge while the host is throttled");
             // Throttle strength: while engaged, the host advanced fewer ticks than the guest

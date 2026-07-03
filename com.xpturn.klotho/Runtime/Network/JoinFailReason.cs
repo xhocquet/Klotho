@@ -114,6 +114,25 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
+        /// Clamps a validator-supplied reject wire code into the identity range (6~11) at the core trust
+        /// boundary. A game-implemented <see cref="IPlayerIdentityValidator"/> returns the wire byte directly
+        /// (<see cref="IdentityValidationOutcome.RejectWireCode"/>); an out-of-range value would either lose
+        /// the reason (decoded as Unknown) or — worse, for codes 1~5 — be decoded as a retryable room reason,
+        /// making the client retry in a loop with a credential the authority already rejected. Anything
+        /// outside 6~11 defaults to 9 (IdentityRejected). Bounds derive from <see cref="ToWireCode"/> so they
+        /// track the wire table. Mirrors the sample's SdWireCodes.ClampIdentityCode, applied here so the guard
+        /// does not depend on the validator implementing it.
+        /// </summary>
+        public static byte ClampIdentityWireCode(byte wireCode)
+        {
+            byte lo = JoinFailReason.IdentityInvalid.ToWireCode();          // 6
+            byte hi = JoinFailReason.IdentityValidationFailed.ToWireCode(); // 11
+            return (wireCode >= lo && wireCode <= hi)
+                ? wireCode
+                : JoinFailReason.IdentityRejected.ToWireCode();            // 9
+        }
+
+        /// <summary>
         /// Returns the symbolic name for a reason (e.g. "TimedOut"). Game/UI layers should
         /// localize these via their own string table; the values here are stable identifiers.
         /// </summary>

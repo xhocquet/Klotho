@@ -19,6 +19,7 @@ MonoBehaviour:
   <AllowLateJoin>k__BackingField: 1
   <LateJoinDelayTicks>k__BackingField: 10
   <ReconnectTimeoutMs>k__BackingField: 60000
+  <ValidationTimeoutMs>k__BackingField: 5000
   <ReconnectMaxRetries>k__BackingField: 3
   <LateJoinDelaySafety>k__BackingField: 2
   <RttSanityMaxMs>k__BackingField: 240

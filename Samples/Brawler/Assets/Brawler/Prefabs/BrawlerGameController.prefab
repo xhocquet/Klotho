@@ -78,6 +78,12 @@ MonoBehaviour:
     _isHost: 0
     _botCount: 1
     _characterClass: 1
+  _brawlerLobby:
+    _lobbyEnabled: 0
+    _account: 
+    _matchId: sdsample-dev-match
+    _lobbyAddress: localhost
+    _lobbyPort: 9999
   _simulationConfig: {fileID: 11400000, guid: a8bcc9ab45c7e4c14b07725c3b103952, type: 2}
   _sessionConfig: {fileID: 11400000, guid: 9e6f2c1a8b5d44329a7f3e1c8d4b6a25, type: 2}
   _gameMenu: {fileID: 0}

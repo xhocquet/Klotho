@@ -105,6 +105,7 @@ namespace xpTURN.Klotho.Core.Tests
 
             public int ClearUnackedInputsCallCount { get; private set; }
             public void ClearUnackedInputs() { ClearUnackedInputsCallCount++; }
+            public byte[] GetPlayerEntitlement(int playerId) => null;
         }
 
         // ── Reflection handles ───────────────────────────────────────────────

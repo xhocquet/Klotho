@@ -31,6 +31,9 @@ namespace xpTURN.Klotho.Core
         // Authority-side ticket validator (P2P host). Optional; null = no validation (behaviour unchanged).
         // The SD dedicated server injects its validator via the server config / RoomManager instead.
         public IPlayerIdentityValidator IdentityValidator { get; set; }
+        // Optional P2P player-config entitlement guard. When set, the host enables original-ticket
+        // propagation with per-peer re-verification; null means no entitlement enforcement.
+        public IPlayerConfigEntitlementGuard PlayerConfigEntitlementGuard { get; set; }
         public IKlothoSessionObserver LifecycleObserver { get; set; }
 
         /// <summary>

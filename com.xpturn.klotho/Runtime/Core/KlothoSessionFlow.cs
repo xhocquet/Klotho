@@ -45,6 +45,7 @@ namespace xpTURN.Klotho.Core
                 SessionConfig = sessionConfig,
                 IdentityValidator = _setup.IdentityValidator, // P2P host: validate guest tickets + its own
                 LocalIdentityTicket = _setup.IdentityProvider?.GetTicket(), // host's own ticket for self-validation
+                PlayerConfigEntitlementGuard = _setup.PlayerConfigEntitlementGuard, // enables clamp + ticket propagation
             });
             FireOnSessionCreated(session, SessionEntryKind.Host);
             return session;
@@ -183,6 +184,12 @@ namespace xpTURN.Klotho.Core
                 CredentialsStore = _setup.CredentialsStore,
                 AppVersion = _setup.AppVersion,
                 DeviceIdProvider = _setup.DeviceIdProvider,
+                // A P2P guest needs the re-verifier (auto-derived from the validator) and the entitlement
+                // guard so it can independently re-verify propagated tickets and clamp configs locally. The
+                // validator is never invoked for join-validation on a guest — that is host-only — so passing
+                // it here is harmless and serves only as the re-verifier source in KlothoSession.Create.
+                IdentityValidator = _setup.IdentityValidator,
+                PlayerConfigEntitlementGuard = _setup.PlayerConfigEntitlementGuard,
             });
             FireOnSessionCreated(session, SessionEntryKind.Guest);
             return session;

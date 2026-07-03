@@ -6,6 +6,7 @@ using xpTURN.Klotho.ECS.Systems;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.Deterministic.Physics;
 using xpTURN.Klotho.Deterministic.Random;
+using xpTURN.Klotho.Samples.Identity; // DemoEntitlement, DemoEntitlementData
 using System.Collections.Generic;
 
 namespace Brawler
@@ -58,10 +59,71 @@ namespace Brawler
                 MoveProgress   = FP64.Zero,
             });
 
+            // Per-player tick-0 entitlement loadout seed. Runs before SaveSnapshot(0) on every peer (P2P)
+            // / on the server (SD, then propagated via the Initial FullState). Deterministic pure decode of
+            // each peer's verified entitlement -> fixed-width masks -> LoadoutSeedComponent.
+            SeedLoadouts(ref frame, engine);
+
             // Bot spawn — place bots beyond the player range
             if (botCount > 0)
                 SpawnBots(ref frame, maxPlayers, botCount,
                           frame.GetReadOnlySingleton<RandomSeedComponent>().Seed);
+        }
+
+        // ── Entitlement loadout seed ───────────────────────────────────────────────────────────
+        // The entitlement is decoded via DemoEntitlement.Decode to a DemoEntitlementData; the seed reads
+        // OwnedSkillMask (8 bits: classIdx*2+slot) and OwnedConsumableMask directly. A null/empty entitlement
+        // decodes to "all owned" (no gating), so with no lobby every player gets the full loadout.
+        const int FullConsumableMask = ~0; // bots: every consumable owned (no entitlement)
+
+        static void SeedLoadouts(ref Frame frame, xpTURN.Klotho.Core.IKlothoEngine engine)
+        {
+            // Seed exactly the authoritative active players — the engine's SessionParticipant slots, written
+            // from the synced roster before this callback runs. Keying off those (not a local maxPlayers,
+            // which on a non-host peer can be a guess until the authoritative SessionConfig arrives) makes the
+            // tick-0 seed-entity set identical on every peer. Collect the ids first, then create, so we never
+            // create entities while iterating the participant filter. Bots are not participants → seeded full
+            // directly in SpawnBots.
+            var participants = new List<int>();
+            var filter = frame.Filter<xpTURN.Klotho.ECS.SessionParticipantComponent>();
+            while (filter.Next(out var slot))
+                participants.Add(frame.GetReadOnly<xpTURN.Klotho.ECS.SessionParticipantComponent>(slot).PlayerId);
+
+            for (int i = 0; i < participants.Count; i++)
+                SeedOneLoadout(ref frame, engine, participants[i]);
+        }
+
+        /// <summary>
+        /// Seeds one player's entitlement loadout — shared by the tick-0 seed (<see cref="SeedLoadouts"/>)
+        /// and the late-join seed (<c>BrawlerSimulationCallbacks.OnPlayerJoinedWorld</c>). Deterministic pure
+        /// decode of the player's verified entitlement → fixed-width masks → LoadoutSeedComponent. create-iff-
+        /// not-exists (defensive: the late-join callback already fires once per join / rollback-safe, and tick-0
+        /// ids are distinct — the guard keeps re-entry harmless either way; also preserves the tick-0 output).
+        /// </summary>
+        public static void SeedOneLoadout(ref Frame frame, xpTURN.Klotho.Core.IKlothoEngine engine, int pid)
+        {
+            if (HasLoadoutSeed(ref frame, pid))
+                return;
+
+            // null/empty entitlement → "all owned" (no gating).
+            var ent = DemoEntitlement.Decode(engine.GetPlayerEntitlement(pid));
+
+            var seed = frame.CreateEntity();
+            frame.Add(seed, new LoadoutSeedComponent
+            {
+                PlayerId            = pid,
+                OwnedSkillMask      = ent.OwnedSkillMask,
+                OwnedConsumableMask = ent.OwnedConsumableMask,
+            });
+        }
+
+        static bool HasLoadoutSeed(ref Frame frame, int pid)
+        {
+            var filter = frame.Filter<LoadoutSeedComponent>();
+            while (filter.Next(out var e))
+                if (frame.GetReadOnly<LoadoutSeedComponent>(e).PlayerId == pid)
+                    return true;
+            return false;
         }
 
         // PlayerId range invariant.
@@ -97,6 +159,9 @@ namespace Brawler
                 ref var character = ref frame.Get<CharacterComponent>(entity);
                 character.PlayerId       = botPlayerId;
                 character.StockCount     = 3;
+                // Bots carry no entitlement -> full loadout (never disable bots). 0b11 = both skill slots.
+                character.AcquiredSkillMask   = 0b11;
+                character.OwnedConsumableMask = FullConsumableMask;
 
                 ref var owner = ref frame.Get<OwnerComponent>(entity);
                 owner.OwnerId = botPlayerId;

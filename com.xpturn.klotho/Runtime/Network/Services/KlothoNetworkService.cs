@@ -18,6 +18,21 @@ namespace xpTURN.Klotho.Network
         public bool IsReady { get; set; }
         public int Ping { get; set; }
         public PlayerConnectionState ConnectionState { get; set; }
+
+        // Server-only opaque entitlement blob: not on IPlayerInfo, so it never leaks onto the roster wire.
+        // Set at join (authoritative redeem outcome), rides the PlayerInfo lifetime (so it is preserved
+        // across disconnect and cleared with the player on evict — no separate bookkeeping). Null when no
+        // entitlement is used. Read by the player-config entitlement guard and the tick-0 seed path.
+        public byte[] Entitlement { get; set; }
+
+        // P2P host-only: the player's ORIGINAL lobby-signed ticket (the opaque string the peer presented),
+        // captured at join. Propagated to all peers so each guest can
+        // independently re-verify the signature instead of trusting the host-relayed Account/DisplayName.
+        // Like Entitlement it is not on IPlayerInfo (never on the roster wire) and rides the PlayerInfo
+        // lifetime (preserved across disconnect for reconnect re-propagation). Empty when the P2P
+        // original-ticket propagation gate is off. Host-side only — guests rebuild their roster from the
+        // wire and re-verify each receipt, so they do not retain this.
+        public string OriginalTicket { get; set; } = "";
     }
 
     /// <summary>
@@ -152,6 +167,23 @@ namespace xpTURN.Klotho.Network
         // P2P validation is offline and synchronous — the returned handle must be immediately complete;
         // the P2P host keeps no pending-validation queue or drain.
         private IPlayerIdentityValidator _identityValidator;
+        // Optional guest-side signature-only re-verifier of propagated original tickets.
+        // Companion to _identityValidator, NOT a method on it (SD never re-verifies). The same P2P
+        // validator object typically implements both. null = no re-verification capability.
+        private IPropagatedTicketVerifier _propagatedTicketVerifier;
+        // The SINGLE gate for original-ticket propagation + per-peer re-verification. When
+        // false (default), host does NOT populate OriginalTicket/RosterTickets and guests skip
+        // re-verification, i.e. semi-trust. This is enabled when the P2P entitlement
+        // hook is configured (the entitlement hook is itself the gate), with a fail-closed guard that a
+        // _propagatedTicketVerifier is present (else host-relay entitlement would be blindly trusted —
+        // an entitlement-forgery cheat). Read identically by host populate, guest re-verify, and GameStart-cache paths.
+        private bool _propagateOriginalTickets;
+        // Optional cross-check that clamps a client's PlayerConfig selection against the player's verified
+        // entitlement. In P2P every peer runs it independently, clamping the relayed config with its own
+        // verified entitlement; because every peer holds the same signed bytes the result is deterministic.
+        // Unset leaves selections untouched. The dedicated server uses the same seam, but P2P never rewrites
+        // the relayed message — it relays the raw config (see HandlePlayerConfigMessage).
+        private IPlayerConfigEntitlementGuard _entitlementGuard;
         // The host's own lobby ticket, self-validated when the host adds itself in CreateRoom. Empty when no lobby.
         private string _localIdentityTicket = string.Empty;
         private readonly Dictionary<int, string> _peerDeviceIds = new Dictionary<int, string>();
@@ -176,6 +208,16 @@ namespace xpTURN.Klotho.Network
         private readonly List<string> _gameStartNameCache = new List<string>();
         // Parallel cache preserving Account across the GameStart roster rebuild.
         private readonly List<string> _gameStartAccountCache = new List<string>();
+        // Parallel cache preserving host-only PlayerInfo.OriginalTicket across the
+        // GameStart roster rebuild (_players.Clear()+rebuild drops it otherwise → post-GameStart
+        // late-join/reconnect would propagate empty tickets). Snapshots ALL players incl. host-self.
+        private readonly List<string> _gameStartTicketCache = new List<string>();
+        // Parallel cache preserving PlayerInfo.Entitlement across the GameStart roster rebuild, mirroring the
+        // ticket cache. Without it the rebuild would drop each peer's entitlement, so a post-GameStart
+        // late-join or reconnect would carry an empty entitlement, the joining guest's seed would be missing,
+        // and the match would desync. It snapshots every player including the host, holding the byte[] by
+        // reference (no copy).
+        private readonly List<byte[]> _gameStartEntitlementCache = new List<byte[]>();
 
         // Cached message objects (GC avoidance)
         private readonly CommandMessage _commandMessageCache = new CommandMessage();
@@ -209,6 +251,15 @@ namespace xpTURN.Klotho.Network
         public bool IsHost { get; private set; }
         public int RandomSeed { get; private set; }
         public IReadOnlyList<IPlayerInfo> Players => _players;
+
+        /// <summary>
+        /// The independently-verified entitlement bytes this peer extracted and re-verified from the player's
+        /// propagated ticket, or null. It is deliberately not on <see cref="IPlayerInfo"/> so it never leaks
+        /// onto the roster wire; the engine reaches it through a concrete cast to read the P2P seed. The bytes
+        /// are used directly with no re-derivation, and they are identical on every peer, so a seed computed
+        /// from them locally is deterministic.
+        /// </summary>
+        public byte[] GetPlayerEntitlement(int playerId) => FindPlayerById(playerId)?.Entitlement;
 
         // Capture-free equivalent of _players.Find(p => p.PlayerId == id) (no closure allocation).
         private PlayerInfo FindPlayerById(int playerId)
@@ -326,6 +377,13 @@ namespace xpTURN.Klotho.Network
                 _engine.ApplyExtraDelay(_pendingExtraDelayValue.Value, _pendingExtraDelaySource);
                 _pendingExtraDelayValue = null;
             }
+
+            // Flush the joinTick reconstructed in SeedLateJoinPlayers (called before the engine exists)
+            // as the engine's cmd.Tick floor: the late-joiner's own commands must not target a tick
+            // before the PlayerJoinCommand that seeds its join-time state. Concrete-cast like
+            // GetLocalStaticFingerprint — keeps the floor off the canonical IKlothoEngine surface.
+            if (_lateJoinJoinTick > 0)
+                (_engine as KlothoEngine)?.SetLateJoinCommandFloor(_lateJoinJoinTick);
         }
 
         public void Initialize(INetworkTransport transport, ICommandFactory commandFactory, IKLogger logger)
@@ -368,6 +426,75 @@ namespace xpTURN.Klotho.Network
         }
 
         /// <summary>
+        /// Injects the optional guest-side propagated-ticket re-verifier. Typically the
+        /// same object as the identity validator. null = no re-verification capability.
+        /// </summary>
+        public void SetPropagatedTicketVerifier(IPropagatedTicketVerifier verifier)
+        {
+            _propagatedTicketVerifier = verifier;
+        }
+
+        /// <summary>
+        /// Injects the optional player-config entitlement guard that cross-checks and clamps a client's
+        /// selection. A null guard leaves behaviour unchanged. In P2P every peer holds the guard and clamps
+        /// the relayed config locally, which is deterministic because every peer shares the same signed bytes.
+        /// </summary>
+        public void SetPlayerConfigEntitlementGuard(IPlayerConfigEntitlementGuard guard)
+        {
+            _entitlementGuard = guard;
+        }
+
+        /// <summary>
+        /// Enables original-ticket propagation + per-peer re-verification (the single gate).
+        /// Off by default, i.e. semi-trust. Enabled when the P2P entitlement hook
+        /// is configured. Fail-closed: enabling without a re-verifier would let the
+        /// host-relay entitlement be trusted blindly (an entitlement-forgery cheat), so it is refused (gate stays off + log).
+        /// </summary>
+        public void SetOriginalTicketPropagation(bool enabled)
+        {
+            if (enabled && _propagatedTicketVerifier == null)
+            {
+                _logger?.KError($"[KlothoNetworkService] Original-ticket propagation requested without an IPropagatedTicketVerifier — refused (host-relay entitlement would be trusted blindly). Gate stays off.");
+                _propagateOriginalTickets = false;
+                return;
+            }
+            _propagateOriginalTickets = enabled;
+        }
+
+        /// <summary>
+        /// Guest-side independent re-verification of a propagated original ticket.
+        /// When the gate is on and a non-empty ticket is present, re-verify signature-only and ADOPT
+        /// the ticket-derived Account/DisplayName (replace — the host-relayed roster value is untrusted);
+        /// on a host-relay mismatch, log (host-forge detection). On signature failure the identity
+        /// is host-forged: surface it (log) and KEEP the host-relayed values — do NOT silently drop the
+        /// player (a roster drop itself diverges). When entitlement is in play the rejected trusted data leaves
+        /// the seed missing → desync abort; without entitlement there is no seed path.
+        /// No-op (host-relayed values unchanged) when the gate is off / no verifier / empty ticket.
+        /// Caller skips its OWN entry (the guest already knows its own ticket).
+        /// </summary>
+        private void ReverifyAndAdoptIdentity(int playerId, string originalTicket, ref string account, ref string displayName, ref byte[] entitlement)
+        {
+            if (!_propagateOriginalTickets || _propagatedTicketVerifier == null || string.IsNullOrEmpty(originalTicket))
+                return;
+            var outcome = _propagatedTicketVerifier.ReverifyPropagatedTicket(originalTicket);
+            if (!outcome.Accepted)
+            {
+                _logger?.KError($"[KlothoNetworkService] Propagated ticket re-verification FAILED for playerId={playerId} — host-forged identity (match integrity violated). Keeping host-relayed value; trusted entitlement data rejected.");
+                return;
+            }
+            if (account != outcome.Account || displayName != outcome.DisplayName)
+                _logger?.KWarning($"[KlothoNetworkService] Host-relayed identity for playerId={playerId} differs from re-verified ticket — adopting ticket value (host may have tampered the roster).");
+            account = outcome.Account ?? string.Empty;
+            displayName = outcome.DisplayName ?? string.Empty;
+            // Adopt the entitlement extracted from the same signature-verified ticket. Every peer derives
+            // identical bytes from the same propagated ticket via signature-only re-verification, so peers
+            // agree on a player's entitlement without trusting the host's relay. This stays null when the
+            // signature check above fails: there is no trusted entitlement to fall back to, and the missing
+            // seed surfaces as a desync rather than a silent default.
+            entitlement = outcome.Entitlement;
+        }
+
+        /// <summary>
         /// The host's own lobby ticket, validated when the host adds itself to the roster. Empty when no lobby.
         /// </summary>
         public void SetLocalIdentityTicket(string ticket)
@@ -378,8 +505,22 @@ namespace xpTURN.Klotho.Network
         // Validates the host's own ticket as it adds itself to the roster. Synchronous (P2P is offline).
         // The host is NEVER rejected: on reject, a contract-violating pending handle, or an empty result,
         // keep the "Host" fallback and log. Validated values overlay the defaults.
-        private void ResolveHostSelfIdentity(ref string displayName, ref string account)
+        private void ResolveHostSelfIdentity(ref string displayName, ref string account, ref byte[] entitlement)
         {
+            // The host's own entitlement is extracted with a signature-only re-verification — the same path
+            // guests use on the propagated host ticket — rather than from the enforcing Evaluate below. That
+            // matters because Evaluate early-returns on an expiry, nonce, or sessionId reject (keeping the
+            // "Host" fallback), which would leave the host's entitlement empty locally while guests still
+            // extract it from the same propagated ticket. The host's tick-0 seed would then disagree with the
+            // guests' view and desync. Extracting it independently here keeps them consistent.
+            entitlement = null;
+            if (_propagateOriginalTickets && _propagatedTicketVerifier != null && !string.IsNullOrEmpty(_localIdentityTicket))
+            {
+                var entOutcome = _propagatedTicketVerifier.ReverifyPropagatedTicket(_localIdentityTicket);
+                if (entOutcome.Accepted)
+                    entitlement = entOutcome.Entitlement;
+            }
+
             var request = new IdentityValidationRequest(_localIdentityTicket, string.Empty, _sessionMagic,
                 LocalPlayerId, GetDeviceId(), isLateJoin: false, isHostSelf: true, roomId: -1);
             using (var handle = _identityValidator.BeginValidate(request))
@@ -397,7 +538,17 @@ namespace xpTURN.Klotho.Network
                     return;
                 }
                 if (!string.IsNullOrEmpty(outcome.DisplayName)) displayName = outcome.DisplayName;
-                account = outcome.Account ?? string.Empty;
+                // An over-bound account (>62B) would truncate in the roster field → identity collision. The
+                // host cannot be rejected, so drop it to the fallback (empty) instead of propagating it.
+                if (RosterEntry.IsAccountOverBound(outcome.Account))
+                {
+                    _logger?.KWarning($"[KlothoNetworkService] Host self-validation account exceeds 62B — dropping to empty");
+                    account = string.Empty;
+                }
+                else
+                {
+                    account = outcome.Account ?? string.Empty;
+                }
             }
         }
 
@@ -405,11 +556,12 @@ namespace xpTURN.Klotho.Network
         // no pending queue or drain. Returns true to proceed (validatorRan + resolved validated identity
         // out-params); false if the peer was rejected (disconnect sent, sync state removed) and the caller
         // must return.
-        private bool TryValidateIdentityP2P(int peerId, bool isLateJoin, out bool validatorRan, out string account, out string displayName)
+        private bool TryValidateIdentityP2P(int peerId, bool isLateJoin, out bool validatorRan, out string account, out string displayName, out byte[] entitlement)
         {
             validatorRan = false;
             account = string.Empty;
             displayName = string.Empty;
+            entitlement = null; // remains null on every reject and on the no-validator path
             if (_identityValidator == null)
                 return true; // no validator: skip validation and proceed with the fallback identity
 
@@ -430,14 +582,44 @@ namespace xpTURN.Klotho.Network
                     return false;
                 }
                 var outcome = handle.Outcome;
-                if (!outcome.Accepted)
+                // Reject on a validator reject, OR an accepted-but-over-bound account (>62B would truncate in
+                // the roster field → identity collision). Empty account is allowed (Accept contract permits empty).
+                if (!outcome.Accepted || RosterEntry.IsAccountOverBound(outcome.Account))
                 {
-                    DisconnectWithReason(peerId, outcome.RejectWireCode);
+                    byte code = outcome.Accepted
+                        ? JoinFailReason.IdentityInvalid.ToWireCode()
+                        : JoinFailReasonExtensions.ClampIdentityWireCode(outcome.RejectWireCode);
+                    if (outcome.Accepted)
+                        // Accepted-but-over-bound: validator OK'd the identity but its account would truncate in
+                        // the 62-byte roster field (→ identity collision), so the join is refused. Log it —
+                        // otherwise a consumer whose validator emits long accounts without its own length guard
+                        // sees only an opaque code-6 disconnect for peers that previously joined (truncated).
+                        _logger?.KWarning($"[KlothoNetworkService] Join rejected: validator-accepted account exceeds the 62 UTF-8 byte roster bound (peer={peerId}) — refused to avoid identity-collision truncation.");
+                    DisconnectWithReason(peerId, code);
                     _peerSyncStates.Remove(peerId);
                     return false;
                 }
                 account = outcome.Account;
                 displayName = outcome.DisplayName;
+                // The stored entitlement must be byte-identical to what every guest independently derives for
+                // this player — both feed the deterministic config clamp and the tick-0 seed, so any divergence
+                // desyncs. When original-ticket propagation is on, guests derive it via signature-only
+                // ReverifyPropagatedTicket (ReverifyAndAdoptIdentity), so the host derives from the SAME path
+                // here rather than from the enforcing BeginValidate outcome — mirrors ResolveHostSelfIdentity.
+                // A validator that normalizes/augments entitlement on Accept, or re-verifies non-signature-only,
+                // would otherwise make the host-stored bytes differ from the guest-derived bytes. Falls back to
+                // the validator outcome when propagation is off (host is the sole authority; no guest re-derivation)
+                // or if the re-verify unexpectedly rejects a ticket BeginValidate just accepted. Null when
+                // entitlements are off or the ticket is identity-only.
+                if (_propagateOriginalTickets && _propagatedTicketVerifier != null && !string.IsNullOrEmpty(ticket))
+                {
+                    var entOutcome = _propagatedTicketVerifier.ReverifyPropagatedTicket(ticket);
+                    entitlement = entOutcome.Accepted ? entOutcome.Entitlement : outcome.Entitlement;
+                }
+                else
+                {
+                    entitlement = outcome.Entitlement;
+                }
                 return true;
             }
         }
@@ -502,7 +684,7 @@ namespace xpTURN.Klotho.Network
             // LateJoin and Reconnect carry their roster separately, so this is guarded on the normal join.
             if (result.Kind == JoinKind.Normal && result.Roster != null && result.Roster.Count > 0)
             {
-                RebuildPlayerList(result.Roster, useReady: true, useNames: true);
+                RebuildPlayerList(result.Roster, useReady: true, useNames: true, rosterTickets: result.RosterTickets);
             }
 
             Phase = SessionPhase.Synchronized;
@@ -564,18 +746,28 @@ namespace xpTURN.Klotho.Network
             // synchronous (P2P is offline) — no pending-validation drain is running yet at this point.
             string hostDisplayName = "Host";
             string hostAccount = string.Empty;
+            byte[] hostEntitlement = null; // the host's own entitlement, extracted signature-only below
             if (_identityValidator != null)
-                ResolveHostSelfIdentity(ref hostDisplayName, ref hostAccount);
+                ResolveHostSelfIdentity(ref hostDisplayName, ref hostAccount, ref hostEntitlement);
             var hostPlayer = new PlayerInfo
             {
                 PlayerId = LocalPlayerId,
                 DisplayName = hostDisplayName,
                 Account = hostAccount,
+                // Host-self OriginalTicket source = the durable _localIdentityTicket
+                // field (NOT _peerTickets — the host has no peer entry). Propagated like any peer's so
+                // guests re-verify the host (the guest is the real verifier). "" when no lobby / gate off.
+                OriginalTicket = _propagateOriginalTickets ? _localIdentityTicket : string.Empty,
+                // The host's own entitlement — the same bytes guests derive from the propagated host ticket
+                // via signature-only re-verification, so the host's tick-0 seed agrees with every guest's view.
+                Entitlement = hostEntitlement,
                 IsReady = false
             };
             int prevCount = _players.Count;
             bool prevReady = AllPlayersReady;
             _players.Add(hostPlayer);
+            if (hostPlayer.Entitlement != null && hostPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via HostSelf: playerId={LocalPlayerId}, bytes={hostPlayer.Entitlement.Length}");
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
         }
@@ -686,17 +878,83 @@ namespace xpTURN.Klotho.Network
             }
         }
 
-        private void HandlePlayerConfigMessage(PlayerConfigMessage msg)
+        // peerId is the sender's peer when the message arrived over the wire, or -1 for the host's own
+        // config sent through SendPlayerConfig. It drives the per-peer entitlement clamp and the anti-spoof
+        // binding below.
+        private void HandlePlayerConfigMessage(PlayerConfigMessage msg, int peerId = -1)
         {
             // Deserialize ConfigData into a PlayerConfigBase
             var configMsg = _messageSerializer.Deserialize(msg.ConfigData, msg.ConfigData.Length) as Core.PlayerConfigBase;
-            if (configMsg != null)
+            // A config whose ConfigData does not deserialize would skip the spoof-binding and entitlement
+            // guards below — drop it WITHOUT relaying. Otherwise the host forwards a message carrying an
+            // attacker-chosen msg.PlayerId to every peer, bypassing the unmapped-peer / spoof-id drop. Mirrors
+            // the SD server's null-selection drop. A legitimate config always deserializes non-null; and in
+            // lockstep every peer must share the config type, so a config the host cannot parse (thus cannot
+            // clamp) must not be relayed unchecked.
+            if (configMsg == null)
             {
-                (_engine as KlothoEngine)?.HandlePlayerConfigReceived(msg.PlayerId, configMsg);
+                _logger?.KWarning($"[KlothoNetworkService] PlayerConfig ConfigData did not deserialize (peer={peerId}) — dropped (no apply/relay).");
+                return;
             }
 
-            // If we are the host, relay to every peer (including the sender — the sender also needs to be
-            // stored in the local engine via the MessageSerializer path, so we echo it back)
+            // When the host receives a config directly from a guest, bind msg.PlayerId to the
+            // authenticated sender and drop a spoofed id before relaying, so a cheating guest cannot
+            // submit a config for another player. The host's own config (peerId below zero) and a config
+            // relayed to a guest (peerId is the host) trust msg.PlayerId, since the host already bound it
+            // on direct receipt.
+            int resolvedPlayerId = msg.PlayerId;
+            if (IsHost && peerId >= 0)
+            {
+                // The sender MUST be a joined player. A config from an unmapped peer — a spectator, or a
+                // peer still mid-handshake before CompletePeerSync registers it — is dropped (no apply/
+                // relay) so it cannot inject or overwrite another player's config. Mirrors the SD server's
+                // unmapped-peer drop; without it the wire-claimed msg.PlayerId would be trusted verbatim.
+                if (!_peerToPlayer.TryGetValue(peerId, out int boundPlayerId))
+                {
+                    _logger?.KWarning($"[KlothoNetworkService] PlayerConfig from unmapped peer={peerId} (not a joined player) — dropped (no apply/relay).");
+                    return;
+                }
+                if (msg.PlayerId != boundPlayerId)
+                {
+                    _logger?.KWarning($"[KlothoNetworkService] PlayerConfig PlayerId spoof: peer={peerId} claimed playerId={msg.PlayerId} != bound {boundPlayerId} — dropped (no apply/relay).");
+                    return;
+                }
+                resolvedPlayerId = boundPlayerId;
+            }
+
+            // Cross-check and clamp the selection. This runs on every peer and is deterministic: each
+            // peer applies the same guard with the same verified entitlement bytes for this player, so
+            // they reach an identical verdict. An unset guard leaves the selection untouched. Unlike the
+            // dedicated server, which rewrites msg.ConfigData for an authoritative broadcast, P2P leaves
+            // msg untouched: the host relays the raw config and each peer clamps locally. Clamping before
+            // relay would make the seed host-authored and clamp it twice on guests.
+            var effective = configMsg;
+            if (_entitlementGuard != null)
+            {
+                var verdict = _entitlementGuard.Check(resolvedPlayerId, FindPlayerById(resolvedPlayerId)?.Entitlement, configMsg);
+                if (verdict.Kind == PlayerConfigVerdictKind.Reject)
+                {
+                    // Post-join reject (strict-policy-only): drop locally and DO NOT relay — no peer
+                    // receives it, so every peer falls back to the default for this player (consistent).
+                    _logger?.KWarning($"[KlothoNetworkService] PlayerConfig rejected by entitlement guard: playerId={resolvedPlayerId} — dropped (no apply/relay).");
+                    return;
+                }
+                if (verdict.Kind == PlayerConfigVerdictKind.Clamp && verdict.Replacement == null)
+                {
+                    // Fail-closed: a Clamp verdict with no replacement cannot be applied. Drop locally and
+                    // DO NOT relay (mirrors Reject) instead of relaying the un-clamped client original, so a
+                    // guard meant to restrict an over-privileged selection never fails open. Every peer runs
+                    // the same deterministic guard and reaches the same drop, so all fall back to the default.
+                    _logger?.KWarning($"[KlothoNetworkService] PlayerConfig clamp with null replacement: playerId={resolvedPlayerId} — dropped (no apply/relay).");
+                    return;
+                }
+                if (verdict.Kind == PlayerConfigVerdictKind.Clamp && verdict.Replacement != null)
+                    effective = verdict.Replacement; // applied to the engine only; msg stays raw for relay
+            }
+            (_engine as KlothoEngine)?.HandlePlayerConfigReceived(resolvedPlayerId, effective);
+
+            // If we are the host, relay the RAW message to every peer (including the sender — it also stores
+            // via the MessageSerializer path; each peer clamps the raw config locally).
             if (IsHost)
             {
                 foreach (var kv in _peerToPlayer)
@@ -1104,7 +1362,7 @@ namespace xpTURN.Klotho.Network
                     break;
 
                 case PlayerConfigMessage playerConfigMsg:
-                    HandlePlayerConfigMessage(playerConfigMsg);
+                    HandlePlayerConfigMessage(playerConfigMsg, peerId); // pass the sender peer for id binding
                     break;
 
                 case PlayerReadyMessage readyMsg:
@@ -1341,6 +1599,13 @@ namespace xpTURN.Klotho.Network
                 var existing = FindPlayerById(msg.PlayerIds[i]);
                 _gameStartNameCache.Add(existing?.DisplayName);
                 _gameStartAccountCache.Add(existing?.Account);  // preserve Account too
+                // Preserve host-only OriginalTicket across the rebuild for ALL players
+                // incl. host-self — else post-GameStart late-join/reconnect propagates empty tickets
+                // and guests can't re-verify. Harmlessly "" when the propagation gate is off.
+                _gameStartTicketCache.Add(existing?.OriginalTicket);
+                // Preserve each peer's entitlement across the rebuild for every player including the host;
+                // otherwise a post-GameStart late-join or reconnect carries an empty entitlement and desyncs.
+                _gameStartEntitlementCache.Add(existing?.Entitlement);
             }
             _players.Clear();
             for (int i = 0; i < msg.PlayerIds.Count; i++)
@@ -1350,12 +1615,18 @@ namespace xpTURN.Klotho.Network
                     PlayerId = msg.PlayerIds[i],
                     DisplayName = _gameStartNameCache[i] ?? string.Empty,
                     Account = _gameStartAccountCache[i] ?? string.Empty,
+                    OriginalTicket = _gameStartTicketCache[i] ?? string.Empty,
+                    Entitlement = _gameStartEntitlementCache[i], // null is fine and means no entitlement
                     IsReady = true
                 };
                 _players.Add(player);
+                if (player.Entitlement != null && player.Entitlement.Length > 0)
+                    _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via GameStartRebuild: playerId={player.PlayerId}, bytes={player.Entitlement.Length}");
             }
             _gameStartNameCache.Clear();
             _gameStartAccountCache.Clear();
+            _gameStartTicketCache.Clear();
+            _gameStartEntitlementCache.Clear();
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
 
@@ -1405,11 +1676,18 @@ namespace xpTURN.Klotho.Network
             }
 
             // Use the authority-propagated identity instead of locally fabricating a name.
+            // Re-verify the propagated original ticket and adopt the ticket-derived
+            // identity (replace host-relayed) before adding — no-op when the gate is off.
+            string pjDisplayName = msg.DisplayName ?? string.Empty;
+            string pjAccount = msg.Account ?? string.Empty;
+            byte[] pjEntitlement = null; // adopted from the re-verified ticket
+            ReverifyAndAdoptIdentity(msg.PlayerId, msg.OriginalTicket, ref pjAccount, ref pjDisplayName, ref pjEntitlement);
             var newPlayer = new PlayerInfo
             {
                 PlayerId = msg.PlayerId,
-                DisplayName = msg.DisplayName ?? string.Empty,
-                Account = msg.Account ?? string.Empty,
+                DisplayName = pjDisplayName,
+                Account = pjAccount,
+                Entitlement = pjEntitlement,
                 IsReady = msg.IsReady,
                 ConnectionState = (PlayerConnectionState)msg.ConnectionState,
             };
@@ -1418,6 +1696,8 @@ namespace xpTURN.Klotho.Network
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevPlayerCount);
             RaiseAllPlayersReadyIfChanged(prevAllReady);
+            if (newPlayer.Entitlement != null && newPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[KlothoNetworkService][Entitlement] loaded via JoinNotification: playerId={msg.PlayerId}, bytes={newPlayer.Entitlement.Length}");
 
             OnPlayerJoined?.Invoke(newPlayer);
             _logger?.KInformation($"[KlothoNetworkService][HandlePlayerJoinNotification] Lobby player added: playerId={msg.PlayerId}");

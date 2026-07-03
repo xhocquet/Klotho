@@ -37,6 +37,24 @@ namespace Brawler
         // so InputBuffer never holds two slots referencing the same cmd.
         private Func<ICommand> _spawnBuilder;
 
+        // Bound delegate for the in-match UseConsumableCommand (retry path reuses it, no per-retry closure).
+        // Factory stamps the captured _pendingUseSeq so the initial send and every retry of one use carry the
+        // same UseSeq (the simulation dedups on it).
+        private Func<ICommand> _consumeBuilder;
+
+        // Outstanding reliable handle for the local player's UseConsumableCommand. Resolved by state-driven
+        // Confirm() (OnPollInput, once the use's UseSeq is applied to the local character), which stops the
+        // P2P legacy-slot retry loop. _pendingUseSeq is the current use's id; _useCounter is the per-player
+        // monotonic source, lower-bounded at issue by the applied seq so a cold reconnect does not collide.
+        private IReliableCommandHandle _consumeHandle;
+        private int _pendingUseSeq;
+        private int _useCounter;
+
+        // Demo consumable id. MUST match the lobby producer's owned id (IdentitySdRef DemoEntitlement.ConsumableId)
+        // so the authority's entitlement gate recognizes it; kept as a local constant to avoid a Manager→identity
+        // sample dependency (the gate likewise decodes ownership inline).
+        private const int DemoConsumableId = 100;
+
         public FPNavMesh NavMesh { get { return _navMesh; } }
         public FPNavMeshQuery NavQuery { get; private set; }
         public BotFSMSystem BotFSMSystem { get; private set; }
@@ -59,8 +77,9 @@ namespace Brawler
             _maxPlayers = maxPlayers;
             _botCount = botCount;
 
-            // Cache bound delegate once — retry path reuses this instance, no per-call closure alloc.
+            // Cache bound delegates once — retry path reuses these instances, no per-call closure alloc.
             _spawnBuilder = BuildSpawnCommand;
+            _consumeBuilder = BuildUseConsumableCommand;
         }
 
         public void RegisterSystems(EcsSimulation simulation)
@@ -95,6 +114,16 @@ namespace Brawler
             BrawlerSimSetup.InitializeWorldState(engine, _maxPlayers, _botCount);
         }
 
+        // A late-joiner enters the world at its (deterministic) join tick — seed its entitlement loadout the
+        // same way tick-0 players are seeded, so a restricted (e.g. "guest") late-joiner is actually gated
+        // in-match instead of falling back to full via the spawn else-branch. Deterministic (same signed
+        // entitlement bytes on every peer via the propagated ticket) + rollback-safe (invoked once per join
+        // inside the participant-slot guard; SeedOneLoadout is also create-iff-not-exists).
+        public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId)
+        {
+            BrawlerSimSetup.SeedOneLoadout(ref frame, engine, playerId);
+        }
+
         public void OnPollInput(int playerId, int tick, ICommandSender sender)
         {
             if (_engine == null) return;
@@ -123,6 +152,23 @@ namespace Brawler
                 _spawnHandle.Confirm();
                 _spawnHandle = null;
             }
+
+            // In-match consumable handle: resolve once the use's effect is observed in the frame (its UseSeq
+            // has been applied to the local character). This is the state-driven ack that stops the reliable
+            // retry loop (P2P legacy slot path has no wire-level ack).
+            if (_consumeHandle != null && !_consumeHandle.IsResolved
+                && OwnConsumableSeq(frame, playerId) >= _pendingUseSeq)
+            {
+                _consumeHandle.Confirm();
+                _consumeHandle = null;
+            }
+
+            // The consumable retry and this per-tick input share the single (tick, playerId) slot (last write
+            // wins). On the tick the outstanding consumable targets, skip this send so it is not overwritten;
+            // leave the one-shot inputs unconsumed so they fire next tick (deferred, not lost). Only the move
+            // axis of this one tick is dropped (physics keeps momentum).
+            if (_consumeHandle != null && !_consumeHandle.IsResolved && _consumeHandle.WouldCollideAt(tick))
+                return;
 
             // Single unified per-tick input (InputCommand sets Tick to CurrentTick+InputDelay). Move +
             // jump + attack + skill packed into one (tick, playerId) slot. Attack and skill are NOT
@@ -242,6 +288,55 @@ namespace Brawler
             cmd.CharacterClass = playerConfig?.SelectedCharacterClass ?? 0;
             cmd.SpawnPosition  = new FPVector2(pos.x, pos.z);
             return cmd;
+        }
+
+        // One-shot entry point for an in-match consumable use (call from a UI button / key input during a
+        // match). Issues on the reliable channel; the framework owns retry/resolution. On a dedicated
+        // server the authority drops this command when the local account does not own the consumable
+        // (the in-match entitlement gate), which the local player observes as the effect not happening.
+        // No-op before the engine exists.
+        public void SendUseConsumableCommand(IKlothoEngine engine)
+        {
+            if (engine == null) return;
+            int playerId = engine.LocalPlayerId;
+            var frame = ((EcsSimulation)engine.Simulation).Frame;
+
+            // spawn-confirmed guard: only issue when the local character exists. IssueOnce replaces the single
+            // per-player tracker slot, so issuing during the spawn window would cancel the outstanding spawn
+            // handle → the character would never spawn. No character yet → ignore the button.
+            int appliedSeq = OwnConsumableSeq(frame, playerId);
+            if (appliedSeq < 0) return;
+
+            // Stable per-use id, lower-bounded by the applied seq so a cold reconnect (new callbacks instance
+            // → _useCounter reset to 0, LastConsumableUseSeq restored high via full-state) does not emit a
+            // UseSeq the simulation already applied (which would be dedup-skipped).
+            _pendingUseSeq = Math.Max(_useCounter + 1, appliedSeq + 1);
+            _useCounter = _pendingUseSeq;
+            _consumeHandle = engine.IssueOnce(_consumeBuilder);
+        }
+
+        // Factory invoked by the reliability tracker on initial send and any retry. Acquires a fresh
+        // CommandPool instance each call (framework takes ownership). Stamps the captured _pendingUseSeq so
+        // every send of this use carries the same UseSeq (simulation dedups on it).
+        private ICommand BuildUseConsumableCommand()
+        {
+            var cmd = CommandPool.Get<UseConsumableCommand>();
+            cmd.ConsumableId = DemoConsumableId;
+            cmd.UseSeq       = _pendingUseSeq;
+            return cmd;
+        }
+
+        // Own character's LastConsumableUseSeq, or -1 when the character does not exist yet.
+        private static int OwnConsumableSeq(Frame frame, int playerId)
+        {
+            var filter = frame.Filter<OwnerComponent, CharacterComponent>();
+            while (filter.Next(out var entity))
+            {
+                ref readonly var owner = ref frame.GetReadOnly<OwnerComponent>(entity);
+                if (owner.OwnerId == playerId)
+                    return frame.GetReadOnly<CharacterComponent>(entity).LastConsumableUseSeq;
+            }
+            return -1;
         }
     }
 }

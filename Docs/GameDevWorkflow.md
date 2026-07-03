@@ -96,7 +96,7 @@ public class HeroSystem : ISystem, IInitSystem
 ### Step 4: Implement Callbacks & Create a Session
 
 Callbacks are split into two interfaces.
-- **`ISimulationCallbacks`** — common to the deterministic side (server, client, replay all behave the same). `RegisterSystems`, `OnInitializeWorld`, `OnPollInput`.
+- **`ISimulationCallbacks`** — common to the deterministic side (server, client, replay all behave the same). `RegisterSystems`, `OnInitializeWorld`, `OnPollInput`, `OnPlayerJoinedWorld`.
 - **`IViewCallbacks`** — client view only (non-determinism allowed). `OnGameStart`, `OnTickExecuted`, `OnLateJoinActivated`.
 
 `RegisterSystems` is called immediately after `EcsSimulation` construction and before `KlothoEngine.Initialize()`. Construct `EventSystem` without arguments; it references `frame.EventRaiser` directly each tick.
@@ -126,6 +126,12 @@ public class MySimulationCallbacks : ISimulationCallbacks
         var cmd = CommandPool.Get<MoveCommand>();
         // ... fill input ...
         sender.Send(cmd);
+    }
+
+    public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId)
+    {
+        // Late-join analog of OnInitializeWorld — seed this player's deterministic world state
+        // (e.g. an entitlement-derived loadout). Leave empty if there is no per-join state.
     }
 }
 

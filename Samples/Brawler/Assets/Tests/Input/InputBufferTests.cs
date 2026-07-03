@@ -417,7 +417,7 @@ namespace xpTURN.Klotho.Input.Tests
             var result = _buffer.AddCommandChecked(dup);
 
             Assert.AreEqual(CommandStoreResult.DroppedDuplicate, result);
-            Assert.AreSame(first, _buffer.GetCommand(10, 0), "Keep-first must survive (IMP59 V2-H3)");
+            Assert.AreSame(first, _buffer.GetCommand(10, 0), "Keep-first must survive");
         }
 
         [Test]

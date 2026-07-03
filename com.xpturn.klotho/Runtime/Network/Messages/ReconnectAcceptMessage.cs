@@ -34,5 +34,19 @@ namespace xpTURN.Klotho.Network
 
         // Server-recommended extra InputDelay ticks for catchup-gap compensation.
         [KlothoOrder] public int RecommendedExtraDelay;
+
+        // Per-player ORIGINAL lobby-signed tickets, index-parallel to Roster, so the
+        // reconnector re-verifies every player independently (P2P full-state is host-authored). Declared
+        // LAST so wire offsets stay stable. Empty when the propagation gate is off. base64url strings.
+        // NOTE: _reconnectAcceptCache is a reused instance — populate must Clear() this before Add.
+        [KlothoOrder] public List<string> RosterTickets = new List<string>();
+
+        // SD: per-player server-verified entitlement bytes, index-parallel to Roster (same
+        // concat+lengths encoding as LateJoinAcceptMessage) — covers any player whose
+        // PlayerJoinCommand is still pending in the reconnector's replay window. Unused (empty) on
+        // the P2P path. Declared LAST so wire offsets stay stable.
+        // NOTE: reused-cache instance — populate must Clear() the lengths list before Add.
+        [KlothoOrder] public byte[] RosterEntitlementData;
+        [KlothoOrder] public List<int> RosterEntitlementLengths = new List<int>();
     }
 }

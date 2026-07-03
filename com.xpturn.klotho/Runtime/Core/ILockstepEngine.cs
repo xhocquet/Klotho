@@ -648,6 +648,16 @@ namespace xpTURN.Klotho.Core
         bool TryGetPlayerConfig<T>(int playerId, out T config) where T : PlayerConfigBase;
 
         /// <summary>
+        /// Per-player opaque entitlement blob, or null when none. Server-authoritative trusted data
+        /// (not the client-authored PlayerConfig). The game reads this during tick-0 world init
+        /// (OnInitializeWorld, before SaveSnapshot(0)) to seed the simulation deterministically.
+        /// SD: returns the server's stored redeem outcome (null on the SD client — the seed effect
+        /// arrives baked into the Initial FullState). P2P: returns each peer's independently-verified
+        /// entitlement; every peer holds the same signed bytes, so seeding from them is deterministic.
+        /// </summary>
+        byte[] GetPlayerEntitlement(int playerId);
+
+        /// <summary>
         /// Raised when player config data is received (playerId, firstTime).
         /// firstTime is true if this is the first time the config for this player is received.
         /// </summary>

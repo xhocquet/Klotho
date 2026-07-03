@@ -1,0 +1,53 @@
+<!--
+  xpTURN.Klotho.Identity.SdRef — server mirror of the IdentitySdRef Runtime asmdef.
+  Engine-agnostic SD identity reference: DevLobbyCore redeem, SdRedeem validator, lobby wire + LiteNetLib
+  lobby clients, DemoEntitlement, room registry/reporter.
+
+  Mirrors the com.xpturn.klotho/Server~ convention: a "Server~" (tilde) folder is ignored by Unity (no
+  .meta, no import) and is referenced by dedicated-server .csproj files instead of globbing raw sources.
+  The asmdef (noEngineReferences: true) guarantees these sources are engine-agnostic.
+
+  Reference set mirrors the asmdef references: Runtime, Logging, the Klotho LiteNetLib transport + the
+  LiteNetLib third-party (LobbyWire uses it directly), and the P2pRef server mirror (codec / Ed25519 backend
+  reused by SdDevIdentity / DevLobbyCore / SdRedeemIdentityValidator). BouncyCastle is not used directly
+  here — it flows transitively through the P2pRef reference.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>xpTURN.Klotho.Identity.SdRef</AssemblyName>
+    <RootNamespace>xpTURN.Klotho.Samples.Identity.Sd</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <SdRefRuntimeRoot>$(MSBuildThisFileDirectory)..\..\Runtime</SdRefRuntimeRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Runtime\xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="..\..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.Logging\xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="..\..\..\..\com.xpturn.klotho\Server~\xpTURN.Klotho.LiteNetLib\xpTURN.Klotho.LiteNetLib.csproj" />
+    <ProjectReference Include="..\..\..\..\com.xpturn.klotho\Server~\LiteNetLib\LiteNetLib.csproj" />
+    <ProjectReference Include="..\..\..\IdentityP2pRef\Server~\xpTURN.Klotho.Identity.P2pRef\xpTURN.Klotho.Identity.P2pRef.csproj" />
+  </ItemGroup>
+
+  <!-- The dev lobby server drives the wire protocol directly, so it needs SdRef's deliberately-internal
+       LobbyWire (see LobbyWire.cs). Historically DevLobbyServer globbed these sources into its own assembly,
+       which gave the same access; with the Server~ mirror it is a separate assembly, so grant it as a friend.
+       Server-build only (this attribute is not emitted into the Unity asmdef); other consumers (the Brawler
+       dedicated server) use only public types and are unaffected. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>DevLobbyServer</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="$(SdRefRuntimeRoot)\**\*.cs"
+             Link="Runtime\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

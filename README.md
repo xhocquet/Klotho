@@ -205,6 +205,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/FEATURES.md](Docs/FEATURES.md) | Full feature list |
 | [Docs/Specification.md](Docs/Specification.md) | Engine specification (state machines · configuration · events · message protocol · formats) |
 | [Docs/LobbyIntegrationGuide.md](Docs/LobbyIntegrationGuide.md) | Lobby ↔ dedicated server ↔ client integration (mockup) — ticket carriage · validation hooks · identity propagation |
+| [Docs/EntitlementLifecycle.md](Docs/EntitlementLifecycle.md) | Trusted player data (entitlements) lifecycle reference — origin · store · preserve · propagate · read · dispose · invariants |
 | [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md) | Synchronization design direction (determinism · two-chain model · prediction/rollback · timing · authority models · recovery ladder) |
 | [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md) | Game-developer workflow (step-by-step) |
 | [Docs/GameDevAPI.md](Docs/GameDevAPI.md) | Game-developer API status |

@@ -16,6 +16,7 @@ using xpTURN.Klotho.Deterministic.Physics;
 using xpTURN.Klotho.LiteNetLib;
 using xpTURN.Klotho.Network;
 using xpTURN.Klotho.Unity;
+using xpTURN.Klotho.Samples.Identity.Sd; // SD dev lobby: SdDevIdentity, SdLobbyIssueProvider, LiteNetLibLobbyIssueClient, IssueResult
 
 using xpTURN.Klotho.Diagnostics;
 
@@ -40,6 +41,25 @@ namespace Brawler
     }
 
     /// <summary>
+    /// Dev lobby identity settings. The single <see cref="_lobbyEnabled"/> toggle drives On/Off at RUNTIME
+    /// (no compile define); the path (P2P in-process stub vs SD lobby-issued ticket) follows the
+    /// SimulationConfig Mode. Off → no lobby hooks → current behaviour (no-regression). ⚠ The sample dev
+    /// keys (BrawlerDevIdentity) compile into every build — a real game replaces them with a real lobby.
+    /// </summary>
+    [Serializable]
+    public class BrawlerLobbySettings
+    {
+        [Tooltip("Enable dev lobby identity at runtime. For SD, also start the dedicated server with --lobby host:port.")]
+        [SerializeField] public bool _lobbyEnabled = false;
+        [SerializeField] public string _account = ""; // blank → a dev-NNNN id is generated per process
+
+        [field: Header("ServerDriven lobby")]
+        [SerializeField] public string _matchId = SdDevIdentity.DevMatchId; // SD only; P2P session id is a BrawlerDevIdentity constant
+        [SerializeField] public string _lobbyAddress = "localhost";         // SD only — DevLobbyServer Issue endpoint
+        [SerializeField] public int _lobbyPort = 9999;
+    }
+
+    /// <summary>
     /// Brawler sample game controller.
     ///
     /// </summary>
@@ -53,6 +73,7 @@ namespace Brawler
 
         [field: Header("Settings")]
         [SerializeField] private BrawlerSettings _brawlerSettings = new BrawlerSettings();
+        [SerializeField] private BrawlerLobbySettings _brawlerLobby = new BrawlerLobbySettings();
         [SerializeField] private USimulationConfig _simulationConfig;
         [SerializeField] private USessionConfig _sessionConfig;
 
@@ -113,6 +134,14 @@ namespace Brawler
         private BrawlerInputCapture _input;
         private BrawlerSimulationCallbacks _simCallbacks;
         private BrawlerViewCallbacks _viewCallbacks;
+
+        // Local player display name (random nickname). Promoted to a field so the SD lobby Issue request
+        // (JoinGameAsync) can reuse the same name the builder's WithDisplayName carries.
+        private string _displayName;
+        // SD dev lobby: mutable carry-only provider. The ticket is fetched on Join (TryFetchLobbyAsync) and
+        // stored here before connecting; GetTicket() returns it synchronously during the handshake. Created
+        // only when SD lobby is enabled at runtime (see builder block); null otherwise.
+        private SdLobbyIssueProvider _identityProvider;
 
         private string _replayPath = Application.dataPath + "/../Replays/brawler.rply";
 
@@ -181,7 +210,7 @@ namespace Brawler
                 "OnyxBloom", "TitanRoar", "WispCharm", "RogueSpark", "ChaosKite", "VividScar",
                 "JadeRift", "HollowMoon", "QuartzEdge", "ThornLace", "PrismShade", "AzureFlux"
             };
-            string displayName = nicknames[UnityEngine.Random.Range(0, nicknames.Count)];
+            _displayName = nicknames[UnityEngine.Random.Range(0, nicknames.Count)];
 
             // Pre-load data
             _staticColliders = FPStaticColliderSerializer.Load(_staticCollidersAsset.bytes);
@@ -205,7 +234,7 @@ namespace Brawler
             _modeStrategy = KlothoModeStrategy.Resolve(_simulationConfig);
             _brawlerSettings._roomId = _modeStrategy.NormalizeRoomId(_brawlerSettings._roomId);
 
-            var setup = new KlothoFlowSetupBuilder(BuildCallbacks)
+            var builder = new KlothoFlowSetupBuilder(BuildCallbacks)
                 .WithLogger(_logger)
                 .WithTransport(_transport)
                 .WithAssetRegistry(_assetRegistry)
@@ -220,12 +249,38 @@ namespace Brawler
                 .WithHandshake(Application.version, new FaultInjectionDeviceIdProvider())
 #endif
                 .WithReconnect(_credentialsStore)
-                .WithDisplayName(displayName)
+                .WithDisplayName(_displayName)
                 .WithAutoPlayerConfig(() => new BrawlerPlayerConfig { SelectedCharacterClass = _brawlerSettings._characterClass })
-                .WithSpectator(() => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY))
-                .Build();
+                .WithSpectator(() => new LiteNetLibTransport(_logger, connectionKey: KLOTHO_CONNECTION_KEY));
 
-            _flow = new KlothoSessionFlow(setup);
+            // Dev lobby identity wiring — opt-in via _brawlerLobby._lobbyEnabled, mode-aware (the single
+            // RUNTIME toggle picks the path from the resolved Mode; no compile define). Off → no hooks →
+            // current behaviour (no-regression).
+            if (_brawlerLobby._lobbyEnabled)
+            {
+                if (_modeStrategy.Mode == NetworkMode.P2P)
+                {
+                    // P2P: in-process signed-ticket stub. Provider (carry) + validator (host offline verify)
+                    // are both set on the single shared builder; a guest never consults the validator.
+                    builder = builder
+                        .WithLobbyIdentity(BrawlerDevIdentity.CreateProvider(_brawlerLobby._account, _displayName, _logger))
+                        .WithIdentityValidator(BrawlerDevIdentity.CreateValidator())
+                        // The entitlement guard makes every peer re-verify the propagated lobby-signed
+                        // entitlement and clamp the selected character to the owned set, deterministically on
+                        // each peer. Setting it also enables original-ticket propagation. This is the same
+                        // guard the dedicated server uses — a mode-agnostic pure function.
+                        .WithPlayerConfigEntitlementGuard(new BrawlerPlayerConfigEntitlementGuard());
+                }
+                else if (_modeStrategy.Mode == NetworkMode.ServerDriven)
+                {
+                    // SD: client carries a lobby-issued ticket fetched on Join (TryFetchLobbyAsync); the
+                    // dedicated server validates it via redeem (enable with --lobby on the server).
+                    _identityProvider = new SdLobbyIssueProvider();
+                    builder = builder.WithLobbyIdentity(_identityProvider);
+                }
+            }
+
+            _flow = new KlothoSessionFlow(builder.Build());
 
             // Hand the main transport to the driver (before any session is created): the driver pumps it
             // while idle and routes idle disconnects to OnIdleDisconnected. Subscribing here keeps the
@@ -455,12 +510,29 @@ namespace Brawler
             _logger?.KInformation($"[Brawler] Joining game");
             _gameMenu.ReconnectStatus = "Connecting...";
 
+            string host = _brawlerSettings._hostAddress;
+            int port = _brawlerSettings._port;
+            int roomId = _brawlerSettings._roomId;
+
             try
             {
+                // SD + lobby on: fetch a signed ticket + room assignment BEFORE connecting; the lobby-assigned
+                // endpoint/roomId win over the Inspector values. Abort on Full / decline / timeout — never
+                // connect with an empty ticket (the server validator would reject it with IdentityRequired).
+                if (_brawlerLobby._lobbyEnabled && _modeStrategy.Mode == NetworkMode.ServerDriven)
+                {
+                    var issue = await TryFetchLobbyAsync(ct);
+                    if (!issue.HasValue)
+                    {
+                        _gameMenu.ReconnectStatus = null;
+                        _gameMenu.SetActionType(GameMenu.ActionType.JoinRoom);
+                        return;
+                    }
+                    host = issue.Value.Host; port = issue.Value.Port; roomId = issue.Value.RoomId;
+                }
                 _session = await _flow.JoinAsync(
                     _modeStrategy, _transport,
-                    _brawlerSettings._hostAddress, _brawlerSettings._port,
-                    _brawlerSettings._roomId, _sessionConfig, ct);
+                    host, port, roomId, _sessionConfig, ct);
 
                 _gameMenu.ReconnectStatus = null;
                 _gameMenu.SetActionType(GameMenu.ActionType.Ready);
@@ -482,6 +554,43 @@ namespace Brawler
                 _logger?.KError(e, $"[Brawler] JoinGame failed");
                 _gameMenu.ReconnectStatus = null;
                 _gameMenu.SetActionType(GameMenu.ActionType.JoinRoom);
+            }
+        }
+
+        // SD only. Fetches a lobby ticket + room assignment over LiteNetLib and stores the ticket in the
+        // provider, then returns the assignment (Ok) — or null (abort join) on Full / timeout / decline.
+        // Start DevLobbyServer first. Mirrors SdSample's SdGameController.TryFetchLobbyAsync.
+        private async UniTask<IssueResult?> TryFetchLobbyAsync(CancellationToken ct)
+        {
+            using var issueClient = new LiteNetLibLobbyIssueClient(_logger, _brawlerLobby._lobbyAddress, _brawlerLobby._lobbyPort);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(5000);
+            try
+            {
+                string account = string.IsNullOrEmpty(_brawlerLobby._account)
+                    ? "dev-" + Guid.NewGuid().ToString("N").Substring(0, 8)
+                    : _brawlerLobby._account;
+                string matchId = string.IsNullOrWhiteSpace(_brawlerLobby._matchId)
+                    ? SdDevIdentity.DevMatchId : _brawlerLobby._matchId.Trim();
+                IssueResult issue = await issueClient.IssueAsync(account, _displayName, matchId, cts.Token);
+                if (issue.Full)
+                {
+                    _logger?.KWarning($"[Brawler] lobby FULL (all rooms occupied) — retry later.");
+                    return null;
+                }
+                if (!issue.Ok || string.IsNullOrEmpty(issue.Ticket))
+                {
+                    _logger?.KWarning($"[Brawler] lobby declined (empty ticket) — aborting join.");
+                    return null;
+                }
+                _identityProvider?.SetTicket(issue.Ticket);
+                _logger?.KInformation($"[Brawler] lobby assigned {issue.Host}:{issue.Port} room={issue.RoomId} ({account}).");
+                return issue;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger?.KWarning($"[Brawler] lobby fetch timed out — is DevLobbyServer running?");
+                return null;
             }
         }
 
@@ -830,5 +939,10 @@ namespace Brawler
         public void OnAllPlayersReadyChanged(bool v)      => _gameMenu.IsAllReady = v;
 
         private void OnIpAddressInputChanged(string addr) => _brawlerSettings._hostAddress = addr;
+
+        public void OnBtnSlot1()
+        {
+            _simCallbacks?.SendUseConsumableCommand(_session?.Engine);
+        }
     }
 }

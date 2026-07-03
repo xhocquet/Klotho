@@ -67,5 +67,24 @@ namespace xpTURN.Klotho.Core
         /// (in-memory only; this type is not serialized).
         /// </summary>
         public System.Collections.Generic.List<Network.RosterEntry> Roster { get; set; }
+
+        /// <summary>
+        /// Per-player ORIGINAL lobby-signed tickets forwarded from SyncCompleteMessage.RosterTickets,
+        /// index-parallel to <see cref="Roster"/>. The joining guest re-verifies each entry independently
+        /// in InitializeFromConnection. Null/empty when the P2P original-ticket propagation gate is off
+        /// (the guest then keeps host-relayed roster identity, i.e. semi-trust). In-memory only (this type
+        /// is not serialized); the wire carrier is SyncCompleteMessage.RosterTickets.
+        /// </summary>
+        public System.Collections.Generic.List<string> RosterTickets { get; set; }
+
+        /// <summary>
+        /// Per-player server-verified entitlement bytes forwarded from SyncCompleteMessage (SD normal join),
+        /// index-parallel to <see cref="Roster"/>: all players' bytes concatenated, with each player's byte
+        /// length in <see cref="RosterEntitlementLengths"/>. InitializeFromConnection applies these to the
+        /// rebuilt player list so GetPlayerEntitlement returns non-null for tick-0 players. Null/empty on P2P
+        /// and when no validator ran. In-memory only; the wire carrier is SyncCompleteMessage.RosterEntitlementData.
+        /// </summary>
+        public byte[] RosterEntitlementData { get; set; }
+        public System.Collections.Generic.List<int> RosterEntitlementLengths { get; set; }
     }
 }

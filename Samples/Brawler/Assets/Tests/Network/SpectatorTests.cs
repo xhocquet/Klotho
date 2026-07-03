@@ -116,6 +116,7 @@ namespace xpTURN.Klotho.Network.Tests
             public ISessionConfig SessionConfig { get; set; } = new SessionConfig();
             public event Action<int, bool> OnPlayerConfigReceived;
             public T GetPlayerConfig<T>(int playerId) where T : PlayerConfigBase => null;
+            public byte[] GetPlayerEntitlement(int playerId) => null;
             public bool TryGetPlayerConfig<T>(int playerId, out T config) where T : PlayerConfigBase { config = null; return false; }
             public KlothoState State { get; set; } = KlothoState.Idle;
             public ISimulation Simulation { get; set; }

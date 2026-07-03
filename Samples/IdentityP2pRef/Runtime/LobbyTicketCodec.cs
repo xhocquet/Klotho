@@ -59,7 +59,12 @@ namespace xpTURN.Klotho.Samples.Identity
             AppendString(sb, "sessionId", t.SessionId); sb.Append(',');
             AppendNumber(sb, "issuedAt", t.IssuedAt); sb.Append(',');
             AppendNumber(sb, "expiresAt", t.ExpiresAt); sb.Append(',');
-            AppendString(sb, "nonce", t.Nonce);
+            AppendString(sb, "nonce", t.Nonce); sb.Append(',');
+            // The entitlement is appended last. This canonical field order is the signature input, so the
+            // issuer and validator must agree on it. JSON carries no binary, so the bytes are encoded as a
+            // base64url string; a null or empty entitlement is written as "".
+            AppendString(sb, "entitlement",
+                (t.Entitlement != null && t.Entitlement.Length > 0) ? Base64UrlEncode(t.Entitlement) : string.Empty);
             sb.Append('}');
             return Encoding.UTF8.GetBytes(sb.ToString());
         }
@@ -105,6 +110,7 @@ namespace xpTURN.Klotho.Samples.Identity
             var r = new JsonReader(json);
             string account = string.Empty, displayName = string.Empty, sessionId = string.Empty, nonce = string.Empty;
             long issuedAt = 0, expiresAt = 0;
+            byte[] entitlement = null; // an absent key parses to null, so older tickets remain compatible
 
             r.SkipWs();
             r.Expect('{');
@@ -130,6 +136,15 @@ namespace xpTURN.Klotho.Samples.Identity
                         case "nonce":       nonce = r.ReadString(); break;
                         case "issuedAt":    issuedAt = r.ReadLong(); break;
                         case "expiresAt":   expiresAt = r.ReadLong(); break;
+                        case "entitlement":
+                        {
+                            // Decode the base64url string back to bytes; an empty string maps to null (an
+                            // identity-only ticket). Malformed base64 throws FormatException, so the caller
+                            // rejects a signed-but-malformed ticket.
+                            string b64 = r.ReadString();
+                            entitlement = string.IsNullOrEmpty(b64) ? null : Base64UrlDecode(b64);
+                            break;
+                        }
                         default:            r.SkipValue(); break; // forward-compat: ignore unknown keys
                     }
                     r.SkipWs();
@@ -139,10 +154,10 @@ namespace xpTURN.Klotho.Samples.Identity
                     throw new FormatException("expected ',' or '}'");
                 }
             }
-            return new LobbyTicket(account, displayName, sessionId, issuedAt, expiresAt, nonce);
+            return new LobbyTicket(account, displayName, sessionId, issuedAt, expiresAt, nonce, entitlement);
         }
 
-        // Minimal JSON cursor — supports string/number/object/array/bool/null; only the 6 known keys are
+        // Minimal JSON cursor — supports string/number/object/array/bool/null; only the 7 known keys are
         // materialised, unknown values are skipped. Throws FormatException on any malformed input.
         private sealed class JsonReader
         {

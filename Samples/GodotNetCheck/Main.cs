@@ -174,6 +174,8 @@ internal sealed class NetCheckSimCallbacks : ISimulationCallbacks
         int actionId = rng.NextInt(0, 10);
         sender.Send(new DeterminismTestCommand(playerId, tick, moveDir, actionId));
     }
+
+    public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId) { } // no per-join world state to seed
 }
 
 internal sealed class NoopViewCallbacks : IViewCallbacks

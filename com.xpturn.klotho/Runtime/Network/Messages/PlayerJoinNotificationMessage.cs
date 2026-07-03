@@ -18,5 +18,13 @@ namespace xpTURN.Klotho.Network
         // Authoritative identity, declared after the prior fields so wire offsets stay stable. Unset = "".
         [KlothoOrder] public string Account;
         [KlothoOrder] public string DisplayName;
+        // The new player's ORIGINAL lobby-signed ticket, so existing peers re-verify it
+        // independently. Trailing — declared last so wire offsets stay stable; "" when the P2P
+        // original-ticket propagation gate is off (older readers ignore the absent field).
+        [KlothoOrder] public string OriginalTicket;
+        // Server-verified entitlement bytes (SD only), so connected SD clients set the joining player's
+        // entitlement for GetPlayerEntitlement reads. Trailing; null on the P2P host (guests re-derive
+        // their entitlement from OriginalTicket instead).
+        [KlothoOrder] public byte[] Entitlement;
     }
 }

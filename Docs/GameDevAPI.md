@@ -143,6 +143,13 @@ public class MySimulationCallbacks : ISimulationCallbacks
         // ... fill input ...
         sender.Send(cmd);
     }
+
+    // A late-joiner entered the world at its deterministic join tick — the late-join analog of
+    // OnInitializeWorld. Seed that player's world state here (e.g. an entitlement-derived loadout
+    // via engine.GetPlayerEntitlement). Deterministic code only; leave empty if no per-join state.
+    public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId)
+    {
+    }
 }
 ```
 

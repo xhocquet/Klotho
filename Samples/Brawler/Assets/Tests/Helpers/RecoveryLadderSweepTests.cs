@@ -82,7 +82,7 @@ namespace xpTURN.Klotho.Helper.Tests
 
                 Assert.Greater(matchedCompares, 0,
                     "Hash gate must be alive: matched comparisons fire during a clean baseline " +
-                    "(regression to the dormant pre-IMP59 gate if 0)");
+                    "(regression to the previously dormant gate if 0)");
                 Assert.Greater((int)LastMatchedSyncTickField.GetValue(host.Engine), 0,
                     "Matched comparisons must promote the rollback anchor (event-based promotion)");
                 Assert.AreEqual(0, desyncDetections, "Clean baseline must not report desyncs");

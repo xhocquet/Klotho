@@ -104,7 +104,7 @@ namespace xpTURN.Klotho.Network.Tests
             engine.ReceiveConfirmedCommand(new MoveCommand(1, t, Dir(5))); // real != predicted
 
             Assert.IsTrue(HasPendingRollback(engine),
-                "catchup confirmed input that mispredicts must request a rollback (was bare AddCommand before IMP60-20)");
+                "catchup confirmed input that mispredicts must request a rollback (was bare AddCommand before the fix)");
             Assert.LessOrEqual(PendingRollbackTick(engine), t);
         }
 
@@ -307,7 +307,7 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.AreEqual(EmptyCommand.TYPE_ID, buffer.GetCommand(t, 1)?.CommandTypeId,
                 "sealed slot hard-blocks the real (DroppedSealed)");
             Assert.AreEqual(outstandingBefore - 1, CommandPool.GetOutstandingCount(),
-                "DroppedSealed must return the rented instance to the pool (bare AddCommand leaked it before IMP60-20)");
+                "DroppedSealed must return the rented instance to the pool (bare AddCommand leaked it before the fix)");
         }
     }
 }

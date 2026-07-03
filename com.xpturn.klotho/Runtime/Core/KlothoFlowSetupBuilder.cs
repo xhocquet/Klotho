@@ -86,6 +86,16 @@ namespace xpTURN.Klotho.Core
             return this;
         }
 
+        // ── P2P player-config entitlement guard. When set, the host enables original-ticket propagation with
+        // per-peer re-verification and every peer clamps client selections against the lobby-signed
+        // entitlement. Requires WithIdentityValidator, since the validator doubles as the re-verifier; when
+        // unset, no entitlement enforcement is applied and behaviour is unchanged.
+        public KlothoFlowSetupBuilder WithPlayerConfigEntitlementGuard(IPlayerConfigEntitlementGuard guard)
+        {
+            _s.PlayerConfigEntitlementGuard = guard ?? throw new ArgumentNullException(nameof(guard));
+            return this;
+        }
+
         // ── Spectator no-transport overload support ──
         public KlothoFlowSetupBuilder WithSpectator(Func<INetworkTransport> transportFactory)
         {

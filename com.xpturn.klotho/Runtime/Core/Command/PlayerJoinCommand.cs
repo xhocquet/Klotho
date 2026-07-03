@@ -9,7 +9,13 @@ namespace xpTURN.Klotho.Core
     public partial class PlayerJoinCommand : CommandBase, ISystemCommand
     {
         public int JoinedPlayerId;
-        public int OrderKey => JoinedPlayerId;
+
+        // Sorts before same-tick gameplay reliable commands (OrderKey 0): a join must establish the
+        // player's participant slot and any join-time world setup before that tick's other commands run.
+        // The negative base keeps joins ahead of gameplay; +JoinedPlayerId is a stable tiebreak for
+        // simultaneous joins. OrderKey is sort-only (CommandOrdering.Compare), never serialized.
+        private const int JoinOrderBase = -1_000_000;
+        public int OrderKey => JoinOrderBase + JoinedPlayerId;
 
         public override int GetSerializedSize() => base.GetSerializedSize() + 4;
 

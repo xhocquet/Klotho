@@ -16,12 +16,17 @@ using xpTURN.Klotho.Samples.Identity.Sd;  // SdDevIdentity, LiteNetLibLobbyRedee
 // is constructed (see KlothoServerBootstrap for why this is required).
 KlothoServerBootstrap.Initialize("SdSample", "xpTURN.Samples");
 
-// CLI: dotnet run -- [port] [logLevel] [lobbyHost] [lobbyPort]   (default 7777 / Information / localhost / 9999)
+// CLI: dotnet run -- [port] [logLevel] [lobbyHost] [lobbyPort] [advertiseHost]
+//      (default 7777 / Information / localhost / 9999 / SdDevIdentity.DedicatedServerHost)
+// advertiseHost: game-server address the lobby hands to clients verbatim — must be reachable
+// FROM THE CLIENTS. The dev loopback default only works when client and server share a machine.
 int port = args.Length > 0 ? int.Parse(args[0]) : 7777;
 var logLevel = args.Length > 1 ? Enum.Parse<KLogLevel>(args[1]) : KLogLevel.Information;
 #if KLOTHO_DEV_LOBBY
 string lobbyHost = args.Length > 2 ? args[2] : "localhost";
 int lobbyPort = args.Length > 3 ? int.Parse(args[3]) : 9999;
+string advertiseHost = args.Length > 4 && !string.IsNullOrWhiteSpace(args[4])
+    ? args[4] : SdDevIdentity.DedicatedServerHost;
 #endif
 const int maxRooms = 2;   // multi-room; MUST match the lobby's SdDevIdentity.MaxRooms
 
@@ -89,10 +94,10 @@ logger.KInformation($"[SdServer] listening on port {port}, maxPlayers={maxPlayer
 // dev-only, gated like the redeem client; advertises this dedi's actual config (D4 capacity authority).
 #if KLOTHO_DEV_LOBBY
 var roomReporter = new SdRoomReporter(roomManager, logger, lobbyHost, lobbyPort,
-    SdDevIdentity.DevServerId, SdDevIdentity.DedicatedServerHost, port,
+    SdDevIdentity.DevServerId, advertiseHost, port,
     maxRooms, maxPlayers, SdDevIdentity.RoomReportIntervalMs);
 roomReporter.Start();
-logger.KInformation($"[SdServer] room reporter active — advertising {maxRooms}x{maxPlayers} to lobby {lobbyHost}:{lobbyPort}");
+logger.KInformation($"[SdServer] room reporter active — advertising {advertiseHost}:{port} {maxRooms}x{maxPlayers} to lobby {lobbyHost}:{lobbyPort}");
 #endif
 
 var loop = new ServerLoop(transport, roomManager, tickIntervalMs, logger);

@@ -71,6 +71,12 @@ namespace xpTURN.Klotho.Network
         // by RoomManager from the server config. A pending (async) redeem parks in _pendingValidation until
         // the poll-drain completes it. SD only — P2P validation is synchronous.
         private IPlayerIdentityValidator _identityValidator;
+        // Authority-side player-config entitlement guard. null = no cross-check (selection passes through
+        // unchanged). Injected like _identityValidator (SetPlayerConfigEntitlementGuard).
+        private IPlayerConfigEntitlementGuard _entitlementGuard;
+        // Authority-side gate for client-submitted in-match reliable commands. null = no cross-check (every
+        // reliable command is accepted). Injected like _entitlementGuard (SetReliableCommandEntitlementGate).
+        private IReliableCommandEntitlementGate _reliableCommandGate;
         // Peers whose async ticket validation is in flight (slot not yet reserved). Drained each tick in
         // Update → DrainPendingValidations, and evicted on disconnect. _pendingValidationDrainKeys is a
         // reused scratch buffer to iterate without mutating the dict.
@@ -88,6 +94,8 @@ namespace xpTURN.Klotho.Network
         private readonly Dictionary<int, PeerSyncState> _peerSyncStates = new Dictionary<int, PeerSyncState>();
         // peerId → connectedAtMs (first-message timeout anchor; see PENDING_PEER_TIMEOUT_MS).
         private readonly Dictionary<int, long> _pendingPeers = new Dictionary<int, long>();
+        // Reused scratch for the pending-peer sweep (collect-then-remove without mutating during iteration).
+        private readonly List<int> _expiredPendingPeers = new List<int>();
 
         // Injectable clock for the pending-peer sweep (deterministic unit tests). Defaults to wall clock;
         // Initialize may override. Only the sweep path (Update's `now` + HandlePeerConnected anchor) uses it.
@@ -284,6 +292,11 @@ namespace xpTURN.Klotho.Network
             return null;
         }
 
+        // Server-only accessor for the per-player opaque entitlement blob. Read by the engine's tick-0 seed
+        // path — kept off IPlayerInfo so it never leaks onto the roster wire. Null when the player is unknown
+        // or has no entitlement.
+        public byte[] GetPlayerEntitlement(int playerId) => FindPlayerById(playerId)?.Entitlement;
+
         // ── IServerDrivenNetworkService properties ────────────────
 
         public bool IsServer => true;
@@ -383,6 +396,25 @@ namespace xpTURN.Klotho.Network
         public void SetIdentityValidator(IPlayerIdentityValidator validator)
         {
             _identityValidator = validator;
+        }
+
+        /// <summary>
+        /// Injects the authority-side player-config entitlement guard. null (default) = no cross-check;
+        /// client selections pass through unchanged. Called by RoomManager alongside SetIdentityValidator.
+        /// </summary>
+        public void SetPlayerConfigEntitlementGuard(IPlayerConfigEntitlementGuard guard)
+        {
+            _entitlementGuard = guard;
+        }
+
+        /// <summary>
+        /// Sets the authority-side gate for client-submitted in-match reliable commands. null (default) skips
+        /// the cross-check, so every client-submitted reliable command is accepted (no regression). Called
+        /// by RoomManager alongside SetIdentityValidator / SetPlayerConfigEntitlementGuard.
+        /// </summary>
+        public void SetReliableCommandEntitlementGate(IReliableCommandEntitlementGate gate)
+        {
+            _reliableCommandGate = gate;
         }
 
         private void HandleInputCollectorRejected(int peerId, int tick, int cmdTypeId, RejectionReason reason)
@@ -698,21 +730,18 @@ namespace xpTURN.Klotho.Network
             // during iteration; the disconnect's OnPeerDisconnected does the rest of the cleanup.
             if (_pendingPeers.Count > 0)
             {
-                List<int> expiredPending = null;
+                _expiredPendingPeers.Clear();
                 foreach (var kvp in _pendingPeers)
                 {
                     if (now - kvp.Value > PENDING_PEER_TIMEOUT_MS)
-                        (expiredPending ??= new List<int>()).Add(kvp.Key);
+                        _expiredPendingPeers.Add(kvp.Key);
                 }
-                if (expiredPending != null)
+                for (int i = 0; i < _expiredPendingPeers.Count; i++)
                 {
-                    for (int i = 0; i < expiredPending.Count; i++)
-                    {
-                        int pendingPeerId = expiredPending[i];
-                        _logger?.KWarning($"[ServerNetworkService] Pending peer {pendingPeerId} timed out (no join), disconnecting");
-                        _pendingPeers.Remove(pendingPeerId);
-                        _transport.DisconnectPeer(pendingPeerId);
-                    }
+                    int pendingPeerId = _expiredPendingPeers[i];
+                    _logger?.KWarning($"[ServerNetworkService] Pending peer {pendingPeerId} timed out (no join), disconnecting");
+                    _pendingPeers.Remove(pendingPeerId);
+                    _transport.DisconnectPeer(pendingPeerId);
                 }
             }
 
@@ -1004,7 +1033,7 @@ namespace xpTURN.Klotho.Network
                     break;
 
                 case PlayerConfigMessage playerConfigMsg:
-                    HandlePlayerConfigMessage(playerConfigMsg);
+                    HandlePlayerConfigMessage(peerId, playerConfigMsg);
                     break;
 
                 case PlayerBootstrapReadyMessage bootReady:
@@ -1180,19 +1209,68 @@ namespace xpTURN.Klotho.Network
             return true;
         }
 
-        private void HandlePlayerConfigMessage(PlayerConfigMessage msg)
+        private void HandlePlayerConfigMessage(int peerId, PlayerConfigMessage msg)
         {
-            // Deserialize ConfigData and store in the server engine
-            var configMsg = _messageSerializer.Deserialize(msg.ConfigData, msg.ConfigData.Length) as Core.PlayerConfigBase;
-            if (configMsg != null)
+            // Security: bind to the authenticated peer's playerId — never trust the
+            // wire-claimed msg.PlayerId (the dispatch does not verify it, so a client could otherwise write
+            // another player's config / be checked against another player's entitlement). Drop a config from
+            // an unmapped peer (not a joined player). Stamp the authoritative id so engine/cache/broadcast agree.
+            if (!_peerToPlayer.TryGetValue(peerId, out int playerId))
+                return;
+            msg.PlayerId = playerId;
+
+            // Deserialize the client's selection. A config the authoritative server cannot parse is dropped
+            // (no apply/cache/broadcast) — it cannot be applied, entitlement-clamped, or late-join seeded, so
+            // propagating its raw bytes would diverge the server from clients and bypass the guard. Mirrors the
+            // P2P null-config drop. Logged: on a dedicated server a deserialize failure is an operational signal
+            // (garbage/attack or a client/server config-type version mismatch), not a silent no-op.
+            var selection = _messageSerializer.Deserialize(msg.ConfigData, msg.ConfigData.Length) as Core.PlayerConfigBase;
+            if (selection == null)
             {
-                (_engine as KlothoEngine)?.HandlePlayerConfigReceived(msg.PlayerId, configMsg);
+                _logger?.KWarning($"[ServerNetworkService] PlayerConfig ConfigData did not deserialize (peer={peerId}, playerId={playerId}) — dropped (no apply/cache/broadcast).");
+                return;
             }
+
+            // Entitlement cross-check (server-authoritative, post-join). Unset guard → passthrough.
+            if (_entitlementGuard != null)
+            {
+                var verdict = _entitlementGuard.Check(playerId, GetPlayerEntitlement(playerId), selection);
+                if (verdict.Kind == PlayerConfigVerdictKind.Reject)
+                {
+                    // Post-join reject is strict-policy-only: drop the selection (no apply/cache/broadcast),
+                    // do not disconnect a joined player. Default-recommended verdict is Clamp, not Reject.
+                    _logger?.KWarning($"[ServerNetworkService] PlayerConfig rejected by entitlement guard: playerId={playerId}, code={JoinFailReasonExtensions.ClampIdentityWireCode(verdict.RejectWireCode)}");
+                    return;
+                }
+                if (verdict.Kind == PlayerConfigVerdictKind.Clamp && verdict.Replacement == null)
+                {
+                    // Fail-closed: a Clamp verdict with no replacement selection cannot be applied. Drop the
+                    // selection (no apply/cache/broadcast) instead of passing the un-clamped client original,
+                    // so a guard that intended to restrict an over-privileged selection never fails open.
+                    _logger?.KWarning($"[ServerNetworkService] PlayerConfig clamp with null replacement: playerId={playerId} — dropped (no apply/cache/broadcast).");
+                    return;
+                }
+                if (verdict.Kind == PlayerConfigVerdictKind.Clamp && verdict.Replacement != null)
+                {
+                    // Replace with the server-chosen selection and re-serialize so engine apply, late-join
+                    // cache, and broadcast all carry the same authoritative bytes (server single decision).
+                    selection = verdict.Replacement;
+                    int size = selection.GetSerializedSize();
+                    byte[] clamped = new byte[size];
+                    var writer = new SpanWriter(clamped);
+                    selection.Serialize(ref writer);
+                    msg.ConfigData = clamped;
+                    _logger?.KInformation($"[ServerNetworkService] PlayerConfig clamped by entitlement guard: playerId={playerId}");
+                }
+            }
+
+            // Apply (validated/clamped) selection to the server engine.
+            (_engine as KlothoEngine)?.HandlePlayerConfigReceived(playerId, selection);
 
             // Cache as raw bytes for late-join guests (copy since the source buffer may be pooled)
             byte[] cached = new byte[msg.ConfigData.Length];
             Buffer.BlockCopy(msg.ConfigData, 0, cached, 0, msg.ConfigData.Length);
-            _playerConfigBytes[msg.PlayerId] = cached;
+            _playerConfigBytes[playerId] = cached;
 
             // Broadcast to all clients (including sender — sender also stores locally via MessageSerializer)
             using (var serialized = _messageSerializer.SerializePooled(msg))
@@ -1252,6 +1330,28 @@ namespace xpTURN.Klotho.Network
             var command = _commandFactory.DeserializeCommandRaw(ref reader);
             if (command == null)
                 return;
+
+            // In-match entitlement gate (opt-in; null = accept all, no regression). The entire block is
+            // gated on the gate being set so an unset gate is byte-identical to the prior path. Resolve the
+            // authoritative playerId from the authenticated peer (the wire-claimed msg.PlayerId is untrusted)
+            // and validate ONLY for a registered peer — an unregistered peer falls through to
+            // TryAcceptReliable, which emits the existing PeerMismatch reject (preserving telemetry and
+            // avoiding a KeyNotFound on the indexer). The gate runs BEFORE TryAcceptReliable so a dropped
+            // sequence number is NOT consumed by the high-water dedup: a later resubmit of the same sequence
+            // (e.g. after a resync) is re-evaluated rather than silently ignored as a duplicate.
+            if (_reliableCommandGate != null
+                && _peerToPlayer.TryGetValue(peerId, out int gatePlayerId))
+            {
+                var verdict = _reliableCommandGate.Check(gatePlayerId, GetPlayerEntitlement(gatePlayerId), command);
+                if (verdict.Kind == ReliableCommandVerdictKind.Drop)
+                {
+                    // Trust-boundary event (unowned in-match action, or stale client entitlement) — logged at
+                    // Information like the input-collector peer/tick rejects so it is visible without debug logs.
+                    _logger?.KInformation($"[HandleReliableCommandSubmit] gate Drop: peerId={peerId}, playerId={gatePlayerId}, cmdTypeId={command.CommandTypeId}");
+                    CommandPool.Return(command);
+                    return;
+                }
+            }
 
             int seq = command is IReliableCommand rel ? rel.SequenceNumber : 0;
             if (!_inputCollector.TryAcceptReliable(peerId, msg.PlayerId, seq, command))
@@ -1744,7 +1844,7 @@ namespace xpTURN.Klotho.Network
         {
             if (_identityValidator == null)
             {
-                FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: false, account: null, displayName: null);
+                FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: false, account: null, displayName: null, entitlement: null);
                 return;
             }
 
@@ -1779,20 +1879,31 @@ namespace xpTURN.Klotho.Network
 
         private void ApplyValidationOutcome(int peerId, PeerSyncState state, bool isLateJoin, IdentityValidationOutcome outcome)
         {
-            if (!outcome.Accepted)
+            // Reject on a validator reject, OR an accepted-but-over-bound account (>62B would truncate in the
+            // roster field → identity collision). Empty account is allowed (Accept contract permits empty).
+            if (!outcome.Accepted || RosterEntry.IsAccountOverBound(outcome.Account))
             {
                 state.AwaitingValidation = false;
-                DisconnectWithReason(peerId, outcome.RejectWireCode);
+                byte code = outcome.Accepted
+                    ? JoinFailReason.IdentityInvalid.ToWireCode()
+                    : JoinFailReasonExtensions.ClampIdentityWireCode(outcome.RejectWireCode);
+                if (outcome.Accepted)
+                    // Accepted-but-over-bound: the validator OK'd this identity but its account would truncate
+                    // in the 62-byte roster field (→ identity collision), so the join is refused. Log it —
+                    // otherwise a consumer whose validator emits long accounts without its own length guard
+                    // sees only an opaque code-6 disconnect for users that previously joined (truncated).
+                    _logger?.KWarning($"[ServerNetworkService] Join rejected: validator-accepted account exceeds the 62 UTF-8 byte roster bound (peer={peerId}) — refused to avoid identity-collision truncation.");
+                DisconnectWithReason(peerId, code);
                 _peerSyncStates.Remove(peerId);
                 return;
             }
-            FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: true, outcome.Account, outcome.DisplayName);
+            FinalizeJoinDispatch(peerId, state, isLateJoin, validatorRan: true, outcome.Account, outcome.DisplayName, outcome.Entitlement);
         }
 
-        private void FinalizeJoinDispatch(int peerId, PeerSyncState state, bool isLateJoin, bool validatorRan, string account, string displayName)
+        private void FinalizeJoinDispatch(int peerId, PeerSyncState state, bool isLateJoin, bool validatorRan, string account, string displayName, byte[] entitlement)
         {
-            if (isLateJoin) FinalizeLateJoin(peerId, state, validatorRan, account, displayName);
-            else            FinalizeNormalJoin(peerId, state, validatorRan, account, displayName);
+            if (isLateJoin) FinalizeLateJoin(peerId, state, validatorRan, account, displayName, entitlement);
+            else            FinalizeNormalJoin(peerId, state, validatorRan, account, displayName, entitlement);
         }
 
         // Resolves the display name by priority: validated value > claimed name (only when no validator
@@ -1841,7 +1952,7 @@ namespace xpTURN.Klotho.Network
             }
         }
 
-        private void FinalizeNormalJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName)
+        private void FinalizeNormalJoin(int peerId, PeerSyncState state, bool validatorRan, string account, string displayName, byte[] entitlement)
         {
             // A pending validation may complete after StartGame() flipped _gameStarted. Re-evaluate the
             // race guard at finalize time (the inline caller already passed it, so this is a no-op there).
@@ -1871,6 +1982,7 @@ namespace xpTURN.Klotho.Network
                 PlayerId = newPlayerId,
                 DisplayName = ResolveJoinDisplayName(peerId, newPlayerId, validatorRan, displayName),
                 Account = validatorRan ? (account ?? string.Empty) : string.Empty,
+                Entitlement = validatorRan ? entitlement : null, // server-only; null when no validator ran
                 IsReady = false,
                 Ping = avgRtt
             };
@@ -1879,6 +1991,8 @@ namespace xpTURN.Klotho.Network
             _players.Add(newPlayer);
             RaisePlayerCountIfChanged(prevCount);
             RaiseAllPlayersReadyIfChanged(prevReady);
+            if (newPlayer.Entitlement != null && newPlayer.Entitlement.Length > 0)
+                _logger?.KInformation($"[ServerNetworkService][Entitlement] loaded via NormalJoin: playerId={newPlayerId}, bytes={newPlayer.Entitlement.Length}");
 
             _peerStates[peerId] = new ServerPeerInfo
             {
@@ -1906,6 +2020,9 @@ namespace xpTURN.Klotho.Network
                     _players[i], _logger, (byte)_players[i].ConnectionState,
                     _players[i].IsReady ? (byte)1 : (byte)0));
             }
+            // Per-player server-verified entitlement bytes, index-parallel to the Roster built above (same
+            // _players order). Lets tick-0 SD clients read GetPlayerEntitlement for initial-entry players.
+            syncComplete.RosterEntitlementData = BuildRosterEntitlements(syncComplete.RosterEntitlementLengths);
             // Seed push baseline with the handshake-time value sent in SyncCompleteMessage so the
             // first MaybePushExtraDelayUpdate compares against the value the client already applied.
             _lastPushedExtraDelay[peerId] = seedExtraDelay;
@@ -1928,6 +2045,9 @@ namespace xpTURN.Klotho.Network
                 IsReady = newPlayer.IsReady,
                 Account = newPlayer.Account ?? string.Empty,
                 DisplayName = newPlayer.DisplayName ?? string.Empty,
+                // Server-verified entitlement so connected SD clients set this player's entitlement for
+                // GetPlayerEntitlement reads (null when no validator ran).
+                Entitlement = newPlayer.Entitlement,
             };
             using (var serialized = _messageSerializer.SerializePooled(joinNotification))
             {

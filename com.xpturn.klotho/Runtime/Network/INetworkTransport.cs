@@ -57,22 +57,32 @@ namespace xpTURN.Klotho.Network
         IEnumerable<int> GetConnectedPeerIds();
 
         /// <summary>
-        /// Send data to a specific peer
+        /// Send data to a specific peer.
+        /// Implementation requirement: for the same <see cref="DeliveryMethod"/>, Send and Broadcast
+        /// MUST share a single per-peer ordered stream — a Send followed by a Broadcast (or vice versa)
+        /// with <see cref="DeliveryMethod.ReliableOrdered"/> must be delivered to each peer in call
+        /// order. Late-join relies on this: the roster notification (Send) must reach existing peers
+        /// before the join command (Broadcast) that consumes the state it carries.
         /// </summary>
         void Send(int peerId, byte[] data, DeliveryMethod deliveryMethod);
 
         /// <summary>
-        /// Send data to a specific peer (length specified, for pooled buffers)
+        /// Send data to a specific peer (length specified, for pooled buffers).
+        /// Same cross-call ordering requirement as <see cref="Send(int, byte[], DeliveryMethod)"/>.
         /// </summary>
         void Send(int peerId, byte[] data, int length, DeliveryMethod deliveryMethod);
 
         /// <summary>
-        /// Broadcast data to all peers
+        /// Broadcast data to all peers.
+        /// Implementation requirement: must share the per-peer ordered stream with Send for the same
+        /// <see cref="DeliveryMethod"/> (see <see cref="Send(int, byte[], DeliveryMethod)"/>) — do NOT
+        /// route broadcasts through a separate channel or queue.
         /// </summary>
         void Broadcast(byte[] data, DeliveryMethod deliveryMethod);
 
         /// <summary>
-        /// Broadcast data to all peers (length specified, for pooled buffers)
+        /// Broadcast data to all peers (length specified, for pooled buffers).
+        /// Same cross-call ordering requirement as <see cref="Broadcast(byte[], DeliveryMethod)"/>.
         /// </summary>
         void Broadcast(byte[] data, int length, DeliveryMethod deliveryMethod);
 
@@ -145,7 +155,9 @@ namespace xpTURN.Klotho.Network
         Reliable,
 
         /// <summary>
-        /// Reliable and ordered transport
+        /// Reliable and ordered transport. Ordering is per peer across ALL messages sent with this
+        /// method — including across Send/Broadcast calls (single stream per peer, see
+        /// <see cref="INetworkTransport.Send(int, byte[], DeliveryMethod)"/>).
         /// </summary>
         ReliableOrdered,
 

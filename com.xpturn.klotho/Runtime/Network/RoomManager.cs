@@ -50,6 +50,20 @@ namespace xpTURN.Klotho.Network
         /// ServerNetworkService at creation.
         /// </summary>
         public IPlayerIdentityValidator IdentityValidator { get; set; }
+
+        /// <summary>
+        /// Authority-side player-config entitlement guard, shared across all rooms.
+        /// null = no cross-check (client selections pass through unchanged). Injected into every room's
+        /// ServerNetworkService at creation, alongside <see cref="IdentityValidator"/>.
+        /// </summary>
+        public IPlayerConfigEntitlementGuard PlayerConfigEntitlementGuard { get; set; }
+
+        /// <summary>
+        /// Authority-side gate for client-submitted in-match reliable commands, shared across all rooms.
+        /// null = no cross-check (every client reliable command is accepted). Injected into every room's
+        /// ServerNetworkService at creation, alongside <see cref="PlayerConfigEntitlementGuard"/>.
+        /// </summary>
+        public IReliableCommandEntitlementGate ReliableCommandEntitlementGate { get; set; }
     }
 
     /// <summary>
@@ -178,6 +192,8 @@ namespace xpTURN.Klotho.Network
             networkService.SetRoomId(roomId);
             networkService.MaxSpectatorsPerRoom = _config.MaxSpectatorsPerRoom;
             networkService.SetIdentityValidator(_config.IdentityValidator); // server-global, injected before the room goes Active
+            networkService.SetPlayerConfigEntitlementGuard(_config.PlayerConfigEntitlementGuard); // entitlement guard, same lifetime as the validator
+            networkService.SetReliableCommandEntitlementGate(_config.ReliableCommandEntitlementGate); // in-match reliable-command gate, same lifetime
 
             var room = new Room(
                 roomId, simConfig, sessionConfig, sim, commandFactory,

@@ -39,7 +39,10 @@ namespace xpTURN.Klotho.Network
     /// write. The core acquire-reads <see cref="IsComplete"/> before reading <see cref="Outcome"/>. The
     /// core reader may be a different ThreadPool worker each tick, but volatile happens-before is not
     /// thread-pair specific, so this is safe.</item>
-    /// <item><see cref="Outcome"/> is immutable once <see cref="IsComplete"/> is true.</item>
+    /// <item><see cref="Outcome"/> is immutable once <see cref="IsComplete"/> is true. This includes
+    /// <see cref="IdentityValidationOutcome.Entitlement"/>: the producer MUST NOT mutate or reuse that
+    /// byte[] after publishing (publish-once) — unlike the string fields, a byte[] is mutable, so this is
+    /// a caller contract, not a language guarantee.</item>
     /// <item><see cref="IDisposable.Dispose"/>: the core calls it when a pending peer disconnects or the
     /// validation times out, signalling the validator to cancel an in-flight redeem before it consumes
     /// the lobby nonce. Dispose must be idempotent, safe to call after completion (cancel becomes a
@@ -116,21 +119,38 @@ namespace xpTURN.Klotho.Network
         public readonly string DisplayName;
         /// <summary>Disconnect-payload reason code on reject (6~11). Ignored when <see cref="Accepted"/>.</summary>
         public readonly byte RejectWireCode;
+        /// <summary>
+        /// Opaque, authoritative entitlement bytes carried alongside the account on accept (null when none /
+        /// no entitlement path). The core treats this as an opaque blob — it never parses it; the game layer
+        /// reads it (e.g. the player-config entitlement guard, tick-0 seed). Like the string fields it is
+        /// immutable once published via <see cref="IIdentityValidation.IsComplete"/>: a producer MUST NOT
+        /// mutate or reuse the array after handing it to <see cref="Accept(string,string,byte[])"/>
+        /// (publish-once — unlike strings, a byte[] is mutable, so this is the caller's contract to honor).
+        /// </summary>
+        public readonly byte[] Entitlement;
 
-        private IdentityValidationOutcome(bool accepted, string account, string displayName, byte rejectWireCode)
+        private IdentityValidationOutcome(bool accepted, string account, string displayName, byte rejectWireCode, byte[] entitlement)
         {
             Accepted = accepted;
             Account = account ?? string.Empty;
             DisplayName = displayName ?? string.Empty;
             RejectWireCode = rejectWireCode;
+            Entitlement = entitlement;
         }
 
-        /// <summary>Accept with the authoritative account/displayName (either may be empty).</summary>
+        /// <summary>Accept with the authoritative account/displayName (either may be empty). No entitlement.</summary>
         public static IdentityValidationOutcome Accept(string account, string displayName)
-            => new IdentityValidationOutcome(true, account, displayName, 0);
+            => new IdentityValidationOutcome(true, account, displayName, 0, null);
+
+        /// <summary>
+        /// Accept carrying an opaque authoritative entitlement blob (publish-once — see <see cref="Entitlement"/>).
+        /// A null entitlement is equivalent to the no-entitlement overload.
+        /// </summary>
+        public static IdentityValidationOutcome Accept(string account, string displayName, byte[] entitlement)
+            => new IdentityValidationOutcome(true, account, displayName, 0, entitlement);
 
         /// <summary>Reject with a disconnect-payload wire reason code (6~11).</summary>
         public static IdentityValidationOutcome Reject(byte rejectWireCode)
-            => new IdentityValidationOutcome(false, string.Empty, string.Empty, rejectWireCode);
+            => new IdentityValidationOutcome(false, string.Empty, string.Empty, rejectWireCode, null);
     }
 }

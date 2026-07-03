@@ -79,6 +79,9 @@ namespace Brawler
                 case SpawnCharacterCommand spawn:
                     HandleSpawn(ref frame, spawn);
                     break;
+                case UseConsumableCommand consume:
+                    HandleUseConsumable(ref frame, consume);
+                    break;
                 case StopCommand stop:
                     HandleStop(ref frame, stop);
                     break;
@@ -213,6 +216,16 @@ namespace Brawler
 
             ref var character = ref frame.Get<CharacterComponent>(caster);
             if (character.IsDead) return;
+
+            // The skill slot must be acquired in the entitlement loadout (AcquiredSkillMask, set at spawn).
+            // Unacquired -> no-op (no cooldown/effect). This is a deterministic check against simulation
+            // state — the mask rides the tick-0 snapshot, so every peer decides identically with no network
+            // gate (the skill input still arrives as normal per-tick input; only its effect is gated here).
+            if ((character.AcquiredSkillMask & (1 << cmd.SkillSlot)) == 0)
+            {
+                frame.Logger?.KDebug($"[Skill][Skip:NotAcquired] tick={frame.Tick}, player={cmd.PlayerId}, slot={cmd.SkillSlot}");
+                return;
+            }
 
             ref var cooldown = ref frame.Get<SkillCooldownComponent>(caster);
             bool slot0 = cmd.SkillSlot == 0;
@@ -431,6 +444,27 @@ namespace Brawler
             character.PlayerId        = cmd.PlayerId;
             character.StockCount      = 3;
 
+            // Apply the tick-0 entitlement loadout seed for this player's chosen class. The seed
+            // (LoadoutSeedComponent) was written deterministically in OnInitializeWorld from each peer's
+            // verified entitlement, so every peer sets the same masks here. Extract the 2 skill bits for the
+            // spawned class; carry the consumable mask onto the character for the in-match check.
+            if (TryFindLoadoutSeed(ref frame, cmd.PlayerId, out var seed))
+            {
+                character.AcquiredSkillMask   = (seed.OwnedSkillMask >> (classId * 2)) & 0b11;
+                character.OwnedConsumableMask = seed.OwnedConsumableMask;
+            }
+            else
+            {
+                // Fallback → full (no lockout). Defensive only: tick-0 players are seeded in
+                // OnInitializeWorld and late-joiners at their join tick — P2P keeps the seed ahead of
+                // the spawn via the joiner-side cmd.Tick floor + join-command ordering; the dedicated
+                // server does the same via join-command injection + the reliable placement floor.
+                // Kept as a safety net: a seedless spawn degrades to the unrestricted loadout instead
+                // of locking the character out.
+                character.AcquiredSkillMask   = 0b11;
+                character.OwnedConsumableMask = ~0;
+            }
+
             ref var owner  = ref frame.Get<OwnerComponent>(entity);
             owner.OwnerId  = cmd.PlayerId;
 
@@ -454,6 +488,66 @@ namespace Brawler
         // Common helpers
         // ────────────────────────────────────────────
 
+        // ────────────────────────────────────────────
+        // UseConsumableCommand: apply the issuer's consumable effect to their own character.
+        // Demo effect — a "repair" consumable that reduces accumulated knockback (lower % = harder to
+        // launch), the natural heal in this knockback combat model. Deterministic integer math only
+        // (no float drift / RNG / culture). A real game would switch on cmd.ConsumableId; this demo has
+        // one consumable, so the effect is fixed.
+        //
+        // Ownership: checked here against simulation state — the owned-consumable mask seeded onto the
+        // character at spawn from the verified entitlement. This runs identically on every peer (P2P has no
+        // server authority to drop), so an unowned use no-ops on all peers without divergence. On a
+        // dedicated server the reliable-command entitlement gate also drops an unowned use before this tick
+        // — redundant with this check but harmless.
+        // ────────────────────────────────────────────
+        void HandleUseConsumable(ref Frame frame, UseConsumableCommand cmd)
+        {
+            frame.Logger?.KDebug($"[Consumable][Recv] tick={frame.Tick}, player={cmd.PlayerId}, consumableId={cmd.ConsumableId}");
+
+            if (!TryFindCharacter(ref frame, cmd.PlayerId, out var entity))
+            {
+                frame.Logger?.KDebug($"[Consumable][Skip:NoCharacter] tick={frame.Tick}, player={cmd.PlayerId}");
+                return;
+            }
+            ref var character = ref frame.Get<CharacterComponent>(entity);
+
+            // Idempotency + processed-marker. Advance LastConsumableUseSeq for EVERY received use (before the
+            // dead/owned checks) so it records "processed", not "applied". A reliable retry of the same use
+            // lands on a later tick with the same UseSeq → skipped here (exactly-once). Crucially, advancing
+            // on the no-effect paths (dead / unowned) too lets the issuer's handle resolve via Confirm (which
+            // observes this seq) — else an unowned use on the P2P legacy retry path would retry forever with
+            // no apply to observe. Rides the snapshot, so a rollback restores it and re-sim re-processes at
+            // the canonical tick.
+            if (cmd.UseSeq <= character.LastConsumableUseSeq)
+            {
+                frame.Logger?.KDebug($"[Consumable][Skip:Duplicate] tick={frame.Tick}, player={cmd.PlayerId}, useSeq={cmd.UseSeq} <= last={character.LastConsumableUseSeq}");
+                return;
+            }
+            character.LastConsumableUseSeq = cmd.UseSeq;
+
+            if (character.IsDead)
+            {
+                frame.Logger?.KDebug($"[Consumable][Skip:Dead] tick={frame.Tick}, player={cmd.PlayerId}");
+                return;
+            }
+
+            // Owned-consumable check: ConsumableId 100 -> bit0 (mirrors the seed namespace in BrawlerSimSetup).
+            int consumableBit = cmd.ConsumableId - 100;
+            if ((uint)consumableBit >= 32u || (character.OwnedConsumableMask & (1 << consumableBit)) == 0)
+            {
+                frame.Logger?.KDebug($"[Consumable][Skip:NotOwned] tick={frame.Tick}, player={cmd.PlayerId}, consumableId={cmd.ConsumableId}");
+                return;
+            }
+
+            const int RepairAmount = 30;
+            int before = character.KnockbackPower;
+            character.KnockbackPower = before > RepairAmount ? before - RepairAmount : 0;
+            // Repair applied — before/after lets one confirm the consumable was actually consumed (an unowned
+            // use is dropped by the authority before this point, so it never logs an Apply).
+            frame.Logger?.KInformation($"[Consumable][Apply] tick={frame.Tick}, player={cmd.PlayerId}, consumableId={cmd.ConsumableId}, knockback {before}->{character.KnockbackPower} (repair={before - character.KnockbackPower})");
+        }
+
         bool TryFindCharacter(ref Frame frame, int playerId, out EntityRef result)
         {
             var filter = frame.Filter<OwnerComponent, CharacterComponent, PhysicsBodyComponent, TransformComponent>();
@@ -462,6 +556,21 @@ namespace Brawler
                 ref readonly var owner = ref frame.GetReadOnly<OwnerComponent>(entity);
                 if (owner.OwnerId != playerId) continue;
                 result = entity;
+                return true;
+            }
+            result = default;
+            return false;
+        }
+
+        // The per-player tick-0 entitlement loadout seed (written in OnInitializeWorld).
+        bool TryFindLoadoutSeed(ref Frame frame, int playerId, out LoadoutSeedComponent result)
+        {
+            var filter = frame.Filter<LoadoutSeedComponent>();
+            while (filter.Next(out var entity))
+            {
+                ref readonly var seed = ref frame.GetReadOnly<LoadoutSeedComponent>(entity);
+                if (seed.PlayerId != playerId) continue;
+                result = seed;
                 return true;
             }
             result = default;

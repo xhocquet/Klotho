@@ -122,7 +122,7 @@ namespace xpTURN.Klotho.Network.Tests
             Assert.IsTrue(EngineDisconnectedContains(guestA, bId),
                 "Disconnected must add B to guestA's _disconnectedPlayerIds (timing-vote exclusion)");
             Assert.IsTrue(EngineActiveContains(guestA, bId),
-                "Disconnected must NOT remove B from _activePlayerIds (§7 partiality — chain fill unaffected)");
+                "Disconnected must NOT remove B from _activePlayerIds (partiality — chain fill unaffected)");
             Assert.AreEqual(PlayerConnectionState.Disconnected, ConnState(guestA, bId),
                 "_players surface should reflect Disconnected");
         }

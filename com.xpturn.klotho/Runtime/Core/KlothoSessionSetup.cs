@@ -105,6 +105,16 @@ namespace xpTURN.Klotho.Core
         /// </summary>
         public string LocalIdentityTicket { get; set; } = null;
 
+        /// <summary>
+        /// Optional P2P player-config entitlement guard. When set, the host wires it and also enables
+        /// original-ticket propagation with per-peer re-verification; the re-verifier auto-derives from
+        /// <see cref="IdentityValidator"/> when that validator also implements
+        /// <c>IPropagatedTicketVerifier</c>, and propagation is refused if no re-verifier is available. A
+        /// null guard means no entitlement enforcement. The dedicated server configures its guard through
+        /// RoomManager instead of this setup.
+        /// </summary>
+        public Network.IPlayerConfigEntitlementGuard PlayerConfigEntitlementGuard { get; set; } = null;
+
         // ── Lifecycle Observer ──
 
         /// <summary>

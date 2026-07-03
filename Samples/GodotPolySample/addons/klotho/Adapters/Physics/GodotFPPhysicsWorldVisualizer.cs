@@ -63,7 +63,7 @@ namespace xpTURN.Klotho.Godot
         [Export] public Color SelectedShapeColor = new Color(1f, 0.9f, 0f, 1f);
         [Export] public Color SelectedAABBColor = new Color(1f, 0.9f, 0f, 0.6f);
 
-        // ---- Internal state (read by the debug panel, P5) ----
+        // ---- Internal state (read by the debug panel) ----
 
         public IFPPhysicsWorldProvider Provider { get; private set; }
 
@@ -168,7 +168,7 @@ namespace xpTURN.Klotho.Godot
         {
             // Visibility follows Enabled every frame: the early-return below only stops *updating* the
             // ImmediateMesh; the baked geometry would otherwise keep rendering when disabled or after the
-            // session ends. Hide the overlay nodes instead of relying on stale surfaces (mirrors P5 panel).
+            // session ends. Hide the overlay nodes instead of relying on stale surfaces (mirrors the debug panel).
             bool show = Enabled && Provider != null;
             if (_staticMI != null) _staticMI.Visible = show;
             if (_dynamicMI != null) _dynamicMI.Visible = show;
@@ -181,7 +181,7 @@ namespace xpTURN.Klotho.Godot
             Provider.GetContacts(out var contacts, out int cc, out var sContacts, out int scc);
             Provider.GetTriggerPairs(out var triggerPairs, out int tc);
 
-            // Cache snapshot for the debug panel (P5).
+            // Cache snapshot for the debug panel.
             currentBodies = bodies; bodyCount = bc;
             currentStatics = statics; staticCount = sc;
             currentContacts = contacts; currentContactCount = cc;

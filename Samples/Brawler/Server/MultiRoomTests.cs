@@ -570,6 +570,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
         }
         public void OnInitializeWorld(IKlothoEngine engine) => _inner.OnInitializeWorld(engine);
         public void OnPollInput(int playerId, int tick, ICommandSender sender) => _inner.OnPollInput(playerId, tick, sender);
+        public void OnPlayerJoinedWorld(IKlothoEngine engine, xpTURN.Klotho.ECS.Frame frame, int playerId) { } // no per-join world state to seed
     }
 
     /// <summary>

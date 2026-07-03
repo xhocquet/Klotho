@@ -146,7 +146,7 @@ namespace xpTURN.Klotho.Core
             if (ReactiveMax > clampMax)
             {
                 string msg = $"[SimulationConfig] ReactiveMax({ReactiveMax}) > MaxRollbackTicks/2({clampMax}) " +
-                             "violates the rollback-budget invariant (§7.3).";
+                             "violates the rollback-budget invariant.";
                 if (throwOnError)
                     throw new System.ArgumentOutOfRangeException(nameof(ReactiveMax), msg);
                 logger?.KWarning($"{msg} Clamping ReactiveMax to {clampMax}.");

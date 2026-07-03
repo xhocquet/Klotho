@@ -77,7 +77,7 @@ namespace xpTURN.Klotho.Network.Tests
             int localTick = ReadLocalTick(peer);
             Assert.GreaterOrEqual(localTick, engineTick - 2,
                 $"{context}: service _localTick ({localTick}) must track engine CurrentTick ({engineTick}) " +
-                "— a frozen/stale piggyback tick re-creates the IMP60-3 advantage spike");
+                "— a frozen/stale piggyback tick re-creates the advantage spike");
         }
 
         // ── (a′) Late join — fresh engine, _timeSyncEnabled false: hoist regression ──

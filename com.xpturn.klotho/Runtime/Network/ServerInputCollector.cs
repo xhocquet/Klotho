@@ -52,6 +52,20 @@ namespace xpTURN.Klotho.Network
         private readonly Dictionary<int, int> _reliableSeqHighWater
             = new Dictionary<int, int>();
 
+        // Server-authored system commands (e.g. the late-join PlayerJoinCommand) awaiting their
+        // scheduled tick. A separate lane from _inputs: the per-(tick, playerId) slot would collide
+        // with the player's own input, and CollectTickInputs only visits _activePlayerIds — the
+        // server itself has no player slot to carry a command under.
+        private readonly Dictionary<int, List<ICommand>> _systemCommands
+            = new Dictionary<int, List<ICommand>>();
+
+        // Per-player reliable placement floor. Reliable commands are placed at their arrival tick
+        // (authoritative placement), so a late-joiner's spawn arriving before its joinTick would
+        // commit before the join-time seed. Holding the player's inbox until the floor tick keeps
+        // spawn >= joinTick server-side (the SD counterpart of the P2P joiner-side cmd.Tick floor).
+        private readonly Dictionary<int, int> _reliablePlacementFloor
+            = new Dictionary<int, int>();
+
         /// <summary>
         /// Raised when a player's input has not arrived by tick execution time and is substituted with EmptyCommand.
         /// Parameter: playerId
@@ -86,7 +100,77 @@ namespace xpTURN.Klotho.Network
 
         public void AddPlayer(int playerId) => _activePlayerIds.Add(playerId);
 
-        public void RemovePlayer(int playerId) => _activePlayerIds.Remove(playerId);
+        // Permanent leave (both call sites) — also drop the player's reliable state: the drain loop
+        // only visits active players, so a held inbox would otherwise linger until Reset, and a stale
+        // floor/high-water would misapply if the id were ever reused.
+        public void RemovePlayer(int playerId)
+        {
+            _activePlayerIds.Remove(playerId);
+            _reliablePlacementFloor.Remove(playerId);
+            _reliableSeqHighWater.Remove(playerId);
+            if (_reliableInbox.TryGetValue(playerId, out var queue))
+            {
+                while (queue.Count > 0)
+                    CommandPool.Return(queue.Dequeue());
+                _reliableInbox.Remove(playerId);
+            }
+            // Also purge any pending system-lane command scheduled for this player (the late-join
+            // PlayerJoinCommand). CollectTickInputs drains the system lane UNCONDITIONALLY — it does not
+            // gate on _activePlayerIds — so a leftover join for a player that permanently left before its
+            // joinTick would still create a participant slot at joinTick (an orphan / ghost participant,
+            // never cleaned up since the leave already ran before the slot existed).
+            PurgePendingSystemCommands(playerId);
+        }
+
+        // Drops pending _systemCommands scheduled for a departed player (currently the late-join
+        // PlayerJoinCommand, keyed by JoinedPlayerId), returning them to the pool and clearing any tick
+        // whose list empties. Called only on permanent leave (rare), so the linear scan is fine.
+        private void PurgePendingSystemCommands(int playerId)
+        {
+            _cleanupCache.Clear();
+            foreach (var kvp in _systemCommands)
+            {
+                var list = kvp.Value;
+                for (int i = list.Count - 1; i >= 0; i--)
+                {
+                    if (list[i] is PlayerJoinCommand pjc && pjc.JoinedPlayerId == playerId)
+                    {
+                        CommandPool.Return(list[i]);
+                        list.RemoveAt(i);
+                    }
+                }
+                if (list.Count == 0)
+                    _cleanupCache.Add(kvp.Key);
+            }
+            for (int i = 0; i < _cleanupCache.Count; i++)
+                _systemCommands.Remove(_cleanupCache[i]);
+        }
+
+        /// <summary>
+        /// Schedules a server-authored system command (e.g. the late-join PlayerJoinCommand) for a
+        /// future tick. Drained by CollectTickInputs at exactly that tick, so the command enters the
+        /// same list that is executed, replay-recorded, and broadcast in one server tick pass.
+        /// </summary>
+        public void AddSystemCommand(int tick, ICommand command)
+        {
+            if (!_systemCommands.TryGetValue(tick, out var list))
+            {
+                list = new List<ICommand>();
+                _systemCommands[tick] = list;
+            }
+            list.Add(command);
+            _logger?.KDebug($"[InputCollector][System] Scheduled: tick={tick}, cmd={command.GetType().Name}");
+        }
+
+        /// <summary>
+        /// Holds the player's reliable inbox until the given tick (late-join: joinTick) so the
+        /// join-time seed always precedes the player's first reliable command (e.g. spawn).
+        /// </summary>
+        public void SetReliablePlacementFloor(int playerId, int floorTick)
+        {
+            _reliablePlacementFloor[playerId] = floorTick;
+            _logger?.KDebug($"[InputCollector][Reliable] Placement floor set: playerId={playerId}, floorTick={floorTick}");
+        }
 
         public int ActivePlayerCount => _activePlayerIds.Count;
 
@@ -260,6 +344,15 @@ namespace xpTURN.Klotho.Network
             // ordering key chain (CommandOrdering) before sim/record.
             foreach (int playerId in _activePlayerIds)
             {
+                // Hold this player's inbox until its placement floor (late-join: joinTick) — the
+                // join-time seed must precede the player's first reliable command (e.g. spawn).
+                // Held commands drain naturally on the floor tick.
+                if (_reliablePlacementFloor.TryGetValue(playerId, out int floorTick) && tick < floorTick)
+                {
+                    if (_reliableInbox.TryGetValue(playerId, out var held) && held.Count > 0)
+                        _logger?.KDebug($"[InputCollector][Reliable] Held by placement floor: tick={tick}, pid={playerId}, floorTick={floorTick}, pending={held.Count}");
+                    continue;
+                }
                 if (!_reliableInbox.TryGetValue(playerId, out var queue))
                     continue;
                 while (queue.Count > 0)
@@ -273,6 +366,19 @@ namespace xpTURN.Klotho.Network
                     _resultCache.Add(rel);
                     _logger?.KDebug($"[InputCollector][Reliable] Placed: tick={tick}, pid={playerId}, cmd={rel.GetType().Name}");
                 }
+            }
+
+            // Drain server-authored system commands scheduled for this tick (late-join
+            // PlayerJoinCommand). Tick-internal ordering is the engine's deterministic sort —
+            // PlayerJoin's negative OrderKey leads the tick.
+            if (_systemCommands.TryGetValue(tick, out var sysList))
+            {
+                for (int i = 0; i < sysList.Count; i++)
+                {
+                    _resultCache.Add(sysList[i]);
+                    _logger?.KDebug($"[InputCollector][System] Placed: tick={tick}, cmd={sysList[i].GetType().Name}");
+                }
+                _systemCommands.Remove(tick);
             }
 
             _lastExecutedTick = tick;
@@ -333,6 +439,13 @@ namespace xpTURN.Klotho.Network
                     CommandPool.Return(queue.Dequeue());
             _reliableInbox.Clear();
             _reliableSeqHighWater.Clear();
+            _reliablePlacementFloor.Clear();
+
+            // System lane: return undrained server-authored commands (ticks never executed).
+            foreach (var list in _systemCommands.Values)
+                for (int i = 0; i < list.Count; i++)
+                    CommandPool.Return(list[i]);
+            _systemCommands.Clear();
 
             _activePlayerIds.Clear();
             _lastExecutedTick = -1;

@@ -44,19 +44,26 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public readonly string Account;
         public readonly string DisplayName;
         public readonly byte RejectWireCode;
+        /// <summary>Opaque authoritative entitlement blob on accept (null when none). The lobby is the
+        /// authority — this rides alongside the account/displayName in the same redeem snapshot.</summary>
+        public readonly byte[] Entitlement;
 
-        private RedeemResult(bool ok, string account, string displayName, byte rejectWireCode)
+        private RedeemResult(bool ok, string account, string displayName, byte rejectWireCode, byte[] entitlement)
         {
             Ok = ok;
             Account = account ?? string.Empty;
             DisplayName = displayName ?? string.Empty;
             RejectWireCode = rejectWireCode;
+            Entitlement = entitlement;
         }
 
         public static RedeemResult Accept(string account, string displayName)
-            => new RedeemResult(true, account, displayName, 0);
+            => new RedeemResult(true, account, displayName, 0, null);
+
+        public static RedeemResult Accept(string account, string displayName, byte[] entitlement)
+            => new RedeemResult(true, account, displayName, 0, entitlement);
 
         public static RedeemResult Reject(byte rejectWireCode)
-            => new RedeemResult(false, string.Empty, string.Empty, rejectWireCode);
+            => new RedeemResult(false, string.Empty, string.Empty, rejectWireCode, null);
     }
 }

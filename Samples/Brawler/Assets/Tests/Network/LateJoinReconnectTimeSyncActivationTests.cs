@@ -84,7 +84,7 @@ namespace xpTURN.Klotho.Network.Tests
             _harness.ReconnectPeer(guest); // -> SeedReconnectFullState -> ApplyP2PLateJoinFullState -> EnableTimeSync
 
             Assert.IsTrue(guest.Engine.IsTimeSyncEnabled,
-                "Reconnect seed path must enable timesync (IMP60-9) — pre-fix the flag stayed false " +
+                "Reconnect seed path must enable timesync — pre-fix the flag stayed false " +
                 "(ApplyP2PLateJoinFullState never called EnableTimeSync on the reused engine)");
         }
 
@@ -108,7 +108,7 @@ namespace xpTURN.Klotho.Network.Tests
             _harness.SeedLateJoinFullStateFromHost(lateJoin);
 
             Assert.IsTrue(lateJoin.Engine.IsTimeSyncEnabled,
-                "Late-join seed path must enable timesync (IMP60-9) — the message handshake's Resync " +
+                "Late-join seed path must enable timesync — the message handshake's Resync " +
                 "branch never reaches ApplyP2PLateJoinFullState");
         }
 

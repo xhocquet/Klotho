@@ -65,5 +65,14 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
         {
             // no-op: ServerInputCollector handles network input collection
         }
+
+        // A late-joiner enters the world at its join tick — seed its entitlement loadout the same way
+        // tick-0 players are seeded (OnInitializeWorld), so a restricted (e.g. "guest") late-joiner is
+        // gated in-match. The server's verified entitlement is authoritative; clients receive the same
+        // bytes via the late-join propagation, so every node seeds identical state at the join tick.
+        public void OnPlayerJoinedWorld(IKlothoEngine engine, Frame frame, int playerId)
+        {
+            BrawlerSimSetup.SeedOneLoadout(ref frame, engine, playerId);
+        }
     }
 }
