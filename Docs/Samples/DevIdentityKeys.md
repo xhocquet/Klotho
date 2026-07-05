@@ -14,7 +14,7 @@ material in the SD and P2P samples.
 - **Public key**: 32 bytes. Used to **verify** signatures → held by the game server / host (validator) and clients.
 - The public key is **deterministically derived** from the private seed (RFC 8032). The **seed is the source
   of truth**; the public key is a function of it.
-  - Derivation: [`BcEd25519Backend.DerivePublicKey(byte[] seed)`](../../Samples/IdentityP2pRef/Runtime/BcEd25519Backend.cs#L37)
+  - Derivation: [`PureEd25519Backend.DerivePublicKey(byte[] seed)`](../../Samples/IdentityP2pRef/Runtime/PureEd25519Backend.cs#L37)
 
 **Invariant**: within a model, `publicKey == DerivePublicKey(seed)` must hold. If you change the seed you
 **must** update the matching public key as well (all locations in §2).
@@ -44,20 +44,20 @@ may rotate one model alone (but always the seed↔public pair together within th
 
 ## 3. Generate a new key
 
-Generate a random 32-byte seed and derive the public key. Use the project's own `BcEd25519Backend` so the
+Generate a random 32-byte seed and derive the public key. Use the project's own `PureEd25519Backend` so the
 result matches runtime derivation exactly.
 
-Run in any context that references `BcEd25519Backend` (e.g. a temporary entry point in
+Run in any context that references `PureEd25519Backend` (e.g. a temporary entry point in
 `Samples/DevLobbyServer`, or a scratch console referencing IdentityP2pRef):
 
 ```csharp
 using System;
 using System.Security.Cryptography;
 using System.Text;
-using xpTURN.Klotho.Samples.Identity; // BcEd25519Backend
+using xpTURN.Klotho.Samples.Identity; // PureEd25519Backend
 
 byte[] seed = RandomNumberGenerator.GetBytes(32);          // new private key
-byte[] pub  = BcEd25519Backend.DerivePublicKey(seed);      // deterministically derived public key
+byte[] pub  = PureEd25519Backend.DerivePublicKey(seed);    // deterministically derived public key
 
 static string ToInit(byte[] b)
 {
