@@ -1624,12 +1624,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
         /// </remarks>
         public unsafe void Update(ref Frame frame, EntityRef[] entities, int entityCount, int currentTick, FP64 dt)
         {
-            for (int i = 0; i < entityCount; i++)
-            {
-                ref var nav = ref frame.Get<NavAgentComponent>(entities[i]);
-                ProcessPathRequest(ref nav, currentTick);
-                ProcessSteering(ref nav);
-            }
+            UpdateSteering(ref frame, entities, entityCount, currentTick);
 
             if (_avoidance != null)
             {
@@ -1663,6 +1658,21 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 }
             }
 
+            UpdateMovement(ref frame, entities, entityCount, dt);
+        }
+
+        public unsafe void UpdateSteering(ref Frame frame, EntityRef[] entities, int entityCount, int currentTick)
+        {
+            for (int i = 0; i < entityCount; i++)
+            {
+                ref var nav = ref frame.Get<NavAgentComponent>(entities[i]);
+                ProcessPathRequest(ref nav, currentTick);
+                ProcessSteering(ref nav);
+            }
+        }
+
+        public unsafe void UpdateMovement(ref Frame frame, EntityRef[] entities, int entityCount, FP64 dt)
+        {
             for (int i = 0; i < entityCount; i++)
             {
                 ref var nav = ref frame.Get<NavAgentComponent>(entities[i]);
