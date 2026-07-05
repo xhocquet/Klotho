@@ -48,6 +48,14 @@ namespace xpTURN.Klotho.Network
 
         public CancellationToken Token => _cts.Token;
 
+        /// <summary>
+        /// When set to a positive value, the first N cycles with active rooms skip the
+        /// inter-tick sleep, running the simulation at max speed.
+        /// </summary>
+        public int FastForwardTicks { get; set; }
+
+        private int _fastForwardRemaining;
+
         public ServerLoop(
             INetworkTransport transport,
             RoomManager roomManager,
@@ -70,6 +78,10 @@ namespace xpTURN.Klotho.Network
             Console.CancelKeyPress += OnCancelKeyPress;
             AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
 
+            _fastForwardRemaining = FastForwardTicks;
+            if (_fastForwardRemaining > 0)
+                _logger?.KInformation($"[ServerLoop] Fast-forward armed: {_fastForwardRemaining} ticks (waiting for active room).");
+
             _stopwatch.Start();
             long lastUpdateTime = _stopwatch.ElapsedMilliseconds;
             _startTimeMs = lastUpdateTime;
@@ -82,22 +94,38 @@ namespace xpTURN.Klotho.Network
             {
                 while (!_cts.IsCancellationRequested)
                 {
+                    bool fastForwarding = _fastForwardRemaining > 0 && _roomManager.HasRunningEngine();
+
                     long cycleStart = _stopwatch.ElapsedMilliseconds;
                     float elapsed = cycleStart - lastUpdateTime;
                     lastUpdateTime = cycleStart;
-                    float elapsedSec = elapsed / 1000f;
+                    float elapsedSec = fastForwarding
+                        ? _tickIntervalMs / 1000f
+                        : elapsed / 1000f;
 
                     ExecuteCycle(elapsedSec);
 
                     _totalCycles++;
                     LogDriftIfNeeded();
 
-                    // Yield CPU (drift correction based on target time)
-                    long now = _stopwatch.ElapsedMilliseconds;
-                    long sleepMs = _nextCycleTimeMs - now;
-                    if (sleepMs > 1)
-                        Thread.Sleep((int)sleepMs - 1);
-                    _nextCycleTimeMs += _tickIntervalMs;
+                    if (fastForwarding)
+                    {
+                        _fastForwardRemaining--;
+                        if (_fastForwardRemaining == 0)
+                        {
+                            _logger?.KInformation($"[ServerLoop] Fast-forward complete, resuming normal tick rate.");
+                            _nextCycleTimeMs = _stopwatch.ElapsedMilliseconds + _tickIntervalMs;
+                        }
+                    }
+                    else
+                    {
+                        // Yield CPU (drift correction based on target time)
+                        long now = _stopwatch.ElapsedMilliseconds;
+                        long sleepMs = _nextCycleTimeMs - now;
+                        if (sleepMs > 1)
+                            Thread.Sleep((int)sleepMs - 1);
+                        _nextCycleTimeMs += _tickIntervalMs;
+                    }
                 }
             }
             finally

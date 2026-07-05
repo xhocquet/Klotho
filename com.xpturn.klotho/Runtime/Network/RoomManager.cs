@@ -127,6 +127,18 @@ namespace xpTURN.Klotho.Network
         public int ActiveRoomCount => _activeRoomCount;
         public int MaxRooms => _config.MaxRooms;
 
+        public bool HasRunningEngine()
+        {
+            for (int i = 0; i < _rooms.Length; i++)
+            {
+                var room = _rooms[i];
+                if (room != null && room.State == RoomState.Active
+                    && room.Engine.State == Core.KlothoState.Running)
+                    return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// Total number of rooms drained while in the given phase.
         /// </summary>
