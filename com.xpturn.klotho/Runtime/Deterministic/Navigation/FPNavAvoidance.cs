@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using xpTURN.Klotho.Deterministic.Math;
 using xpTURN.Klotho.ECS;
 
@@ -256,6 +257,66 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 LinearProgram3(lineFail, agent.Speed, ref result);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Grid-accelerated overload: accepts pre-filtered neighbors instead of scanning all entities.
+        /// </summary>
+        public FPVector2 ComputeNewVelocity(EntityRef agentEntity, ref Frame frame,
+            List<EntityRef> neighbors, FP64 dt)
+        {
+            ref var agent = ref frame.Get<NavAgentComponent>(agentEntity);
+            _orcaLineCount = 0;
+
+            FPVector2 agentPosXZ = agent.Position.ToXZ();
+
+            // Select up to MAX_NEIGHBORS closest neighbors
+            _neighborCount = 0;
+            for (int i = 0; i < neighbors.Count; i++)
+            {
+                if (neighbors[i].Index == agentEntity.Index)
+                    continue;
+
+                ref var other = ref frame.Get<NavAgentComponent>(neighbors[i]);
+                FP64 distSqr = (other.Position.ToXZ() - agentPosXZ).sqrMagnitude;
+
+                InsertNeighbor(i, distSqr);
+            }
+
+            // Build ORCA lines from selected neighbors
+            for (int n = 0; n < _neighborCount && _orcaLineCount < MAX_ORCA_LINES; n++)
+            {
+                int i = _neighborIndices[n];
+                ref var other = ref frame.Get<NavAgentComponent>(neighbors[i]);
+
+                FP64 combinedRadius = agent.Radius + other.Radius;
+                FPVector2 relPos = other.Position.ToXZ() - agentPosXZ;
+                if (relPos.sqrMagnitude <= EPSILON)
+                {
+                    FP64 fallbackDistance = combinedRadius * COINCIDENT_FACTOR;
+                    relPos = neighbors[i].Index < agentEntity.Index
+                        ? new FPVector2(-fallbackDistance, FP64.Zero)
+                        : new FPVector2(fallbackDistance, FP64.Zero);
+                }
+
+                FPVector2 relVel = agent.Velocity - other.Velocity;
+
+                if (ComputeAgentOrcaLine(agent.Velocity, relPos, relVel, combinedRadius, TimeHorizon, dt,
+                    out FPOrcaLine line))
+                {
+                    _orcaLines[_orcaLineCount++] = line;
+                }
+            }
+
+            FPVector2 gridResult = FPVector2.Zero;
+            int gridLineFail = LinearProgram2D(_orcaLines, _orcaLineCount, agent.Speed,
+                agent.DesiredVelocity, false, EPSILON, ref gridResult);
+            if (gridLineFail < _orcaLineCount)
+            {
+                _infeasibleCount++;
+                LinearProgram3(gridLineFail, agent.Speed, ref gridResult);
+            }
+            return gridResult;
         }
 
         /// <summary>
