@@ -195,7 +195,7 @@ namespace xpTURN.Samples.P2pSample
 		}
 
 		private static IKLogger CreateLogger()
-			=> GodotKlothoLogger.CreateDefault(filePrefix: "P2p", categoryName: "P2p");
+			=> GodotKlothoLogger.CreateDefault(filePrefix: "P2p", categoryName: "P2p", timestampFormat: "HH:mm:ss.fff");
 
 		// Configure the 3D view in code (LookAt avoids hand-written, easy-to-mistake basis matrices in .tscn).
 		private void SetupView3D()

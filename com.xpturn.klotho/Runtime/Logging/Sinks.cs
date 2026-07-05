@@ -10,7 +10,23 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Console sink. Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class ConsoleSink : IKLogSink
     {
+        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+
         private readonly object _gate = new object();
+        private readonly string _tsFormat;
+
+        public ConsoleSink(string timestampFormat = DefaultTimestampFormat)
+            => _tsFormat = ResolveFormat(timestampFormat);
+
+        // A malformed custom format would otherwise throw FormatException on every write. Validate it
+        // once here and fall back to the default so a bad config can never make logging throw.
+        private static string ResolveFormat(string timestampFormat)
+        {
+            string fmt = string.IsNullOrEmpty(timestampFormat) ? DefaultTimestampFormat : timestampFormat;
+            try { _ = default(DateTime).ToString(fmt, CultureInfo.InvariantCulture); }
+            catch (FormatException) { fmt = DefaultTimestampFormat; }
+            return fmt;
+        }
 
         // Per-thread line buffer so the whole line is written in a single atomic call (no allocation,
         // no inter-line interleaving even with concurrent writers).
@@ -22,7 +38,7 @@ namespace xpTURN.Klotho.Logging
             int pos = 0;
 
             int tn;
-            while (!DateTime.Now.TryFormat(buf.AsSpan(pos), out tn, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))
+            while (!DateTime.Now.TryFormat(buf.AsSpan(pos), out tn, _tsFormat, CultureInfo.InvariantCulture))
                 buf = Grow(buf, pos + 32);
             pos += tn;
 
@@ -75,10 +91,13 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Rolling file sink (by day and by size). Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class RollingFileSink : IKLogSink
     {
+        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+
         private readonly object _gate = new object();
         private readonly string _dir;
         private readonly string _prefix;
         private readonly long _rollingSizeBytes;
+        private readonly string _tsFormat;
 
         private StreamWriter _writer;
         private DateTime _curDate;
@@ -98,12 +117,13 @@ namespace xpTURN.Klotho.Logging
         public RollingFileSink(string filePrefix = "Client", int rollingSizeKB = 1024 * 1024, string dir = "Logs")
             : this(filePrefix, rollingSizeKB, dir, KFlushMode.PerLine) { }
 
-        public RollingFileSink(string filePrefix, int rollingSizeKB, string dir, KFlushMode flushMode)
+        public RollingFileSink(string filePrefix, int rollingSizeKB, string dir, KFlushMode flushMode, string timestampFormat = null)
         {
             _prefix = filePrefix;
             _rollingSizeBytes = (long)rollingSizeKB * 1024;
             _dir = dir;
             _flushMode = flushMode;
+            _tsFormat = ResolveFormat(timestampFormat);
             _processExitHandler = OnProcessExit;
             try { AppDomain.CurrentDomain.ProcessExit += _processExitHandler; } catch { }
             try { AppDomain.CurrentDomain.DomainUnload += _processExitHandler; } catch { }
@@ -118,6 +138,16 @@ namespace xpTURN.Klotho.Logging
             }
         }
 
+        // A malformed custom format would otherwise throw FormatException on every write. Validate it
+        // once here and fall back to the default so a bad config can never make logging throw.
+        private static string ResolveFormat(string timestampFormat)
+        {
+            string fmt = string.IsNullOrEmpty(timestampFormat) ? DefaultTimestampFormat : timestampFormat;
+            try { _ = default(DateTime).ToString(fmt, CultureInfo.InvariantCulture); }
+            catch (FormatException) { fmt = DefaultTimestampFormat; }
+            return fmt;
+        }
+
         private void OnProcessExit(object sender, EventArgs e)
         {
             try { TerminateAndClose(); } catch { }
@@ -125,8 +155,7 @@ namespace xpTURN.Klotho.Logging
 
         public void Write(KLogLevel level, string message, Exception exception)
         {
-            Span<char> ts = stackalloc char[24];
-            int n = 0;
+            Span<char> ts = stackalloc char[32];
             lock (_gate)
             {
                 // Once termination has begun, drop the line instead of reopening a writer that would
@@ -135,10 +164,20 @@ namespace xpTURN.Klotho.Logging
 
                 var now = DateTime.Now;
                 EnsureWriter(now);
-                now.TryFormat(ts, out n, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture);
+
+                // Fast path formats into the stack buffer; a custom format longer than the buffer
+                // falls back to a heap string so the timestamp is never silently truncated.
+                int n;
+                string tsFallback = null;
+                if (!now.TryFormat(ts, out n, _tsFormat, CultureInfo.InvariantCulture))
+                {
+                    tsFallback = now.ToString(_tsFormat, CultureInfo.InvariantCulture);
+                    n = tsFallback.Length;
+                }
 
                 string shortLevel = KLogLevelShort.Of(level);
-                _writer.Write(ts.Slice(0, n)); _writer.Write('|'); _writer.Write(shortLevel); _writer.Write('|'); _writer.Write(message);
+                if (tsFallback != null) _writer.Write(tsFallback); else _writer.Write(ts.Slice(0, n));
+                _writer.Write('|'); _writer.Write(shortLevel); _writer.Write('|'); _writer.Write(message);
                 long len = n + 2 + shortLevel.Length + (message?.Length ?? 0);
                 if (exception != null)
                 {

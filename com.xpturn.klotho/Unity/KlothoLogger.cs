@@ -10,7 +10,8 @@ namespace xpTURN.Klotho.Unity
             KLogLevel level = KLogLevel.Information,
             string filePrefix = "Client",
             string categoryName = "Client",
-            int rollingSizeKB = 1024 * 1024)
+            int rollingSizeKB = 1024 * 1024,
+            string timestampFormat = null)
         {
             var loggerFactory = KLoggerFactory.Create(builder =>
             {
@@ -20,6 +21,7 @@ namespace xpTURN.Klotho.Unity
                 {
                     options.FilePrefix = filePrefix;
                     options.RollingSizeKB = rollingSizeKB;
+                    options.TimestampFormat = timestampFormat;
                 });
             });
 

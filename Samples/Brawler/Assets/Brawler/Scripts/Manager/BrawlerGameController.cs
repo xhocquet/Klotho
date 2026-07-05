@@ -150,7 +150,8 @@ namespace Brawler
             _logger = KlothoLogger.CreateDefault(
                 level: _logLevel,
                 filePrefix: "Client",
-                categoryName: "Client");
+                categoryName: "Client",
+                timestampFormat: "HH:mm:ss.fff"); // date dropped (it's in the filename); hour kept
 
 #if DEBUG || DEVELOPMENT_BUILD || UNITY_EDITOR
             CommandPool.SetDiagnosticLogger(_logger);

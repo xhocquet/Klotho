@@ -33,6 +33,7 @@ const int maxRooms = 2;   // multi-room; MUST match the lobby's SdDevIdentity.Ma
 using var loggerFactory = KLoggerFactory.Create(builder =>
 {
     builder.SetMinimumLevel(logLevel);
+    builder.SetTimestampFormat("HH:mm:ss.fff"); // date dropped; hour kept. Applies to both console and file.
     builder.AddConsole();
     builder.AddRollingFile(options =>
     {

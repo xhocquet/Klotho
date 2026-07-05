@@ -328,6 +328,7 @@ static IKLoggerFactory CreateLoggerFactory(KLogLevel logLevel)
     return KLoggerFactory.Create(builder =>
     {
         builder.SetMinimumLevel(logLevel);
+        builder.SetTimestampFormat("HH:mm:ss.fff"); // date dropped; hour kept. Applies to both console and file.
         builder.AddConsole();
         builder.AddRollingFile(options =>
         {

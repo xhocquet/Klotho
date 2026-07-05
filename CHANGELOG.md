@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.2] - 2026-07-05
+
+### Logging — configurable timestamp format
+
+- **The log timestamp format is now yours to set instead of being fixed.** A single `SetTimestampFormat` on the builder applies one format to every sink added afterwards (console and rolling file alike), and each sink can still override it — `AddConsole(format)` or the rolling-file options' `TimestampFormat`. The Unity (`KlothoLogger.CreateDefault`) and Godot (`GodotKlothoLogger.CreateDefault`) entry points each gained a matching `timestampFormat` parameter. Optional: the default is unchanged (`yyyy-MM-dd HH:mm:ss.fff`), so nothing changes unless a format is supplied.
+- **A malformed format can no longer make logging throw.** A custom format is validated once when the sink is built and quietly falls back to the default if it is invalid, so a bad config degrades the timestamp rather than tearing down every write. The rolling-file sink also spills to a heap string for a format longer than its stack buffer, so an unusually long timestamp is never silently truncated.
+
+### Navigation — deterministic corridor fix
+
+- **Fixed a long path being truncated from the wrong end.** When a computed corridor exceeded the fixed capacity (`MAX_CORRIDOR`), `FPNavMeshPathfinder` kept the segment nearest the destination and dropped the part nearest the agent — so the corridor never contained the agent's current triangle, and corridor-advance tracking in `FPNavAgentSystem` lost the agent on any sufficiently long path. Truncation is now anchored at the start, keeping the triangles the agent actually walks through first. A length bound on the reconstruction guards against a malformed (cyclic) predecessor chain.
+
+### Samples
+
+- **A baked NavMesh sample was added to Brawler** — the `Field` scene plus its exported deterministic NavMesh data, so the navigation path can be exercised end to end.
+- **The samples now log with a compact `HH:mm:ss.fff` timestamp** — the Brawler client and dedicated server, the Godot peer-to-peer and dedicated-server samples, and the Godot dedicated-server host all drop the date (it already lives in the log filename) while keeping the wall clock, using the new format hook.
+
 ## [0.5.1] - 2026-07-03
 
 ### Trusted player data (entitlements)

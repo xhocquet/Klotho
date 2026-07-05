@@ -17,13 +17,17 @@ namespace xpTURN.Klotho.Logging
     public sealed class KLogBuilder
     {
         private KLogLevel _min = KLogLevel.Information;
+        private string _timestampFormat; // null => each sink applies its own default
         private readonly List<IKLogSink> _sinks = new List<IKLogSink>();
 
         public KLogBuilder SetMinimumLevel(KLogLevel level) { _min = level; return this; }
 
-        public KLogBuilder AddConsole()
+        // Common timestamp format applied to sinks added afterwards, unless overridden per sink.
+        public KLogBuilder SetTimestampFormat(string format) { _timestampFormat = format; return this; }
+
+        public KLogBuilder AddConsole(string timestampFormat = null)
         {
-            _sinks.Add(new ConsoleSink());
+            _sinks.Add(new ConsoleSink(timestampFormat ?? _timestampFormat));
             return this;
         }
 
@@ -31,7 +35,7 @@ namespace xpTURN.Klotho.Logging
         {
             var o = new KRollingFileOptions();
             configure?.Invoke(o);
-            _sinks.Add(new RollingFileSink(o.FilePrefix, o.RollingSizeKB, o.Directory, o.FlushMode));
+            _sinks.Add(new RollingFileSink(o.FilePrefix, o.RollingSizeKB, o.Directory, o.FlushMode, o.TimestampFormat ?? _timestampFormat));
             return this;
         }
 
@@ -48,5 +52,6 @@ namespace xpTURN.Klotho.Logging
         public int RollingSizeKB = 1024 * 1024;
         public string Directory = "Logs";
         public KFlushMode FlushMode = KFlushMode.PerLine;
+        public string TimestampFormat = null; // null => builder common / sink default
     }
 }

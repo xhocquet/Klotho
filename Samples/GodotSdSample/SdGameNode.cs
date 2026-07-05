@@ -264,7 +264,7 @@ namespace xpTURN.Samples.SdSample
 #endif
 
 		private static IKLogger CreateLogger()
-			=> GodotKlothoLogger.CreateDefault(filePrefix: "Sd", categoryName: "Sd");
+			=> GodotKlothoLogger.CreateDefault(filePrefix: "Sd", categoryName: "Sd", timestampFormat: "HH:mm:ss.fff");
 
 		// Configure the 3D view in code (LookAt avoids hand-written, easy-to-mistake basis matrices in .tscn).
 		private void SetupView3D()

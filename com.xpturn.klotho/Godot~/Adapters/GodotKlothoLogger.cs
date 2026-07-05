@@ -14,7 +14,8 @@ namespace xpTURN.Klotho.Godot
             string filePrefix = "Client",
             string categoryName = "Client",
             int rollingSizeKB = 1024 * 1024,
-            string directory = null)  // null → ProjectSettings.GlobalizePath("user://logs")
+            string directory = null,  // null → ProjectSettings.GlobalizePath("user://logs")
+            string timestampFormat = null)  // null → sink default (yyyy-MM-dd HH:mm:ss.fff)
         {
             var logDir = directory
                 ?? global::Godot.ProjectSettings.GlobalizePath("user://logs");
@@ -29,6 +30,7 @@ namespace xpTURN.Klotho.Godot
                     options.FilePrefix = filePrefix;
                     options.RollingSizeKB = rollingSizeKB;
                     options.Directory = logDir;
+                    options.TimestampFormat = timestampFormat;
                 });
             });
 
