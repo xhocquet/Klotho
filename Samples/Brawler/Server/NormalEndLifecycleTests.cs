@@ -237,12 +237,12 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer.Tests
         {
             if (_sharedNavMesh == null)
             {
-                var p = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.NavMeshData.bytes");
+                var p = Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.NavMeshData.bytes");
                 if (File.Exists(p)) _sharedNavMesh = FPNavMeshSerializer.Deserialize(p);
             }
             if (_sharedStaticColliders == null)
             {
-                var p = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.StaticColliders.bytes");
+                var p = Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.StaticColliders.bytes");
                 if (File.Exists(p)) _sharedStaticColliders = xpTURN.Klotho.Deterministic.Physics.FPStaticColliderSerializer.Load(p);
             }
             if (_sharedAssetRegistry == null)

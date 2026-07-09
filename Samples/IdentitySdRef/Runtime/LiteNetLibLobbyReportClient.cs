@@ -23,6 +23,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         private readonly string _serverId;
         private readonly byte[] _serverRegister; // immutable — built once (serverId/host/port/maxRooms/maxPlayers fixed)
         private readonly Action _onConnected;    // reporter hook: mark dirty → fresh report next tick
+        private readonly LobbyMatchConfigSource _reservations; // lobby-driven match config (null = lobbyless / no reserve channel)
 
         /// <param name="lobbyHost">/<paramref name="lobbyPort"/> — the dev lobby to connect to.</param>
         /// <param name="serverId">This dedicated server's id (carried in both messages).</param>
@@ -32,13 +33,18 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         /// authority): the dedi's own config, not the lobby seed constants.</param>
         /// <param name="onConnected">Invoked after serverRegister is (re)sent on connect — the reporter marks
         /// dirty so a fresh roomReport follows.</param>
+        /// <param name="reservations">Optional lobby-driven match config source — when set, the client
+        /// receives <c>ReservePush</c> on this connection, applies it, and replies <c>ReserveAck</c>. Null =
+        /// lobbyless / no reserve channel (a stray push is refused).</param>
         public LiteNetLibLobbyReportClient(IKLogger logger, string lobbyHost, int lobbyPort,
                                            string serverId, string advertiseHost, int advertisePort,
                                            int maxRooms, int maxPlayersPerRoom,
-                                           Action onConnected, string connectionKey = "xpTURN.DevLobby")
+                                           Action onConnected, string connectionKey = "xpTURN.DevLobby",
+                                           LobbyMatchConfigSource reservations = null)
         {
             _serverId = serverId;
             _onConnected = onConnected;
+            _reservations = reservations;
             _serverRegister = LobbyWire.EncodeServerRegister(0, serverId, advertiseHost, advertisePort,
                                                              maxRooms, maxPlayersPerRoom);
             _conn = new LiteNetLibLobbyConnection(logger, lobbyHost, lobbyPort, connectionKey,
@@ -59,8 +65,24 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             _onConnected?.Invoke();         // reporter marks dirty → fresh roomReport next tick
         }
 
-        // One-way channel: the lobby never replies to register/report, so nothing to decode here.
-        private void OnData(int peerId, byte[] data, int length) { }
+        // Inbound from the lobby. register/report are one-way (no reply); ReservePush is the exception — the
+        // lobby pushes a room's match config and awaits a ReserveAck (gates its deferred IssueResponse).
+        // Runs on the connection's poll thread; ApplyReservePush is lock-guarded, TrySend is same-thread-safe.
+        private void OnData(int peerId, byte[] data, int length)
+        {
+            if (LobbyWire.PeekKind(data, length) != LobbyWire.ReservePush) return;
+            if (!LobbyWire.TryDecodeReservePush(data, length, out var m)) return;
+
+            // No reserve source wired → ack OK as a no-op: the lobby commits and the dedi resolves the room
+            // from its OWN IMatchConfigSource — a local StaticMatchConfigSource (e.g. GodotSdSampleServer's
+            // room→stage table), or none = default stageId 0. The lobby's pushed stage/config is NOT applied
+            // here, so lobby-driven config selection is silently ignored unless the dedi passes a
+            // LobbyMatchConfigSource (reservations). A wired source applies the push and returns its real ok/nak.
+            (bool ok, byte nak) = _reservations != null
+                ? _reservations.ApplyReservePush(m.RoomId, m.MatchId, m.StageId, m.MatchConfigData, m.ReservationExpiresAt)
+                : (true, LobbyWire.ReserveNakNone);
+            _conn.TrySend(LobbyWire.EncodeReserveAck(m.RequestId, ok, nak));
+        }
 
         public void Dispose() => _conn.Dispose();
     }

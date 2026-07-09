@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 
@@ -41,6 +42,7 @@ if (isTest)
     failures += SafeRunSuite("MultiRoomTests", MultiRoomTests.RunAll);
     failures += SafeRunSuite("SingleRoomLifecycleTests", SingleRoomLifecycleTests.RunAll);
     failures += SafeRunSuite("NormalEndLifecycleTests", NormalEndLifecycleTests.RunAll);
+    failures += SafeRunSuite("BrawlerMatchConfigTests", BrawlerMatchConfigTests.RunAll);
     return failures;
 }
 else if (multiRoom)
@@ -68,8 +70,8 @@ static void RunSingleRoom(string[] args, bool rttMetricsEnabled)
     int botCount = args.Length > 1 ? int.Parse(args[1]) : 0;
     const int maxRooms = 1;
 
-    var staticColliderPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.StaticColliders.bytes");
-    var navMeshPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.NavMeshData.bytes");
+    var staticColliderPath = Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.StaticColliders.bytes");
+    var navMeshPath = Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.NavMeshData.bytes");
     var assetPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerAssets.bytes");
 
     var logLevel = args.Length > 2 ? Enum.Parse<KLogLevel>(args[2]) : KLogLevel.Warning;
@@ -182,8 +184,6 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     int maxRooms = args.Length > 2 ? int.Parse(args[2]) : 4;
     int botCount = args.Length > 3 ? int.Parse(args[3]) : 0;
 
-    var staticColliderPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.StaticColliders.bytes");
-    var navMeshPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerScene.NavMeshData.bytes");
     var assetPath = Path.Combine(AppContext.BaseDirectory, "Data", "BrawlerAssets.bytes");
 
     var logLevel = args.Length > 4 ? Enum.Parse<KLogLevel>(args[4]) : KLogLevel.Warning;
@@ -208,9 +208,21 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     // RTT metrics (match identification)
     ServerNetworkService.RttMetricsEnabled = rttMetricsEnabled;
 
-    // Pre-load data — shared across rooms (read-only)
-    var staticColliders = FPStaticColliderSerializer.Load(staticColliderPath);
-    var navMeshBytes = File.ReadAllBytes(navMeshPath);
+    // Pre-load data — shared across rooms (read-only). Per-stage baked geometry: stage 1 = Stage01.*,
+    // stage 2 = Stage02.* (an unmapped/0 stageId falls back to stage 1 = the default stage).
+    var stageColliders = new Dictionary<int, List<FPStaticCollider>>
+    {
+        [1] = FPStaticColliderSerializer.Load(Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.StaticColliders.bytes")),
+        [2] = FPStaticColliderSerializer.Load(Path.Combine(AppContext.BaseDirectory, "Data", "Stage02.StaticColliders.bytes")),
+    };
+    var stageNavBytes = new Dictionary<int, byte[]>
+    {
+        [1] = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Data", "Stage01.NavMeshData.bytes")),
+        [2] = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Data", "Stage02.NavMeshData.bytes")),
+    };
+    List<FPStaticCollider> CollidersFor(int stageId) => stageColliders.TryGetValue(stageId, out var c) ? c : stageColliders[1];
+    byte[] NavBytesFor(int stageId) => stageNavBytes.TryGetValue(stageId, out var b) ? b : stageNavBytes[1];
+
     var dataAssets = DataAssetReader.LoadMixedCollectionFromBytes(assetPath);
 
     IDataAssetRegistryBuilder registryBuilder = new DataAssetRegistry();
@@ -229,17 +241,45 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
         Environment.Exit(1);
     }
 
-    // RoomRouter + RoomManager
+    // Match config source. With --lobby: the lobby pushes each room's stage (ReservePush) into a
+    // LobbyMatchConfigSource (populated as clients are assigned). Lobbyless: a static room→stage table
+    // (room r → stage 1+(r%2), alternating Stage01/Stage02). Both refuse unmapped/unreserved rooms →
+    // CreateRoomAt returns null → RoomNotFound.
+    var (lobbyEnabled, lobbyHost, lobbyPort) = ParseLobbyEndpoint(args);
+    LobbyMatchConfigSource lobbyReservations = null;
+    IMatchConfigSource matchConfigSource;
+    if (lobbyEnabled)
+    {
+        lobbyReservations = new LobbyMatchConfigSource(maxRooms,
+            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), logger);
+        matchConfigSource = lobbyReservations;
+    }
+    else
+    {
+        // Lobbyless: the CLI botCount is this authority's per-match dynamic config — serialized into each
+        // room's opaque MatchConfigData so it propagates like stageId (rather than injected straight into
+        // the callback). (In --lobby mode the lobby is the authority for match config; CLI botCount is ignored.)
+        var matchConfigData = BrawlerMatchConfig.Encode(new BrawlerMatchConfigData { BotCount = botCount });
+        var staticSource = new StaticMatchConfigSource();
+        for (int r = 0; r < maxRooms; r++) staticSource.Add(r, 1 + (r % 2), matchConfigData);
+        matchConfigSource = staticSource;
+    }
+
+    // RoomRouter + RoomManager — context callbacks factory: each room's stage (from the resolved
+    // MatchConfigContext) selects the baked colliders/navmesh, its MatchConfigData carries the dynamic
+    // knobs (botCount), and CreateRoomAt stamps both onto the room's SimulationConfig so they propagate.
     var router = new RoomRouter(transport, logger);
-    var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new BrawlerServerCallbacks(roomLogger,
-            staticColliders,
-            FPNavMeshSerializer.Deserialize(navMeshBytes),
+    var roomManagerConfig = new RoomManagerConfigBuilder((matchCtx, roomLogger) => new BrawlerServerCallbacks(roomLogger,
+            CollidersFor(matchCtx.StageId),
+            FPNavMeshSerializer.Deserialize(NavBytesFor(matchCtx.StageId)),
             maxPlayersPerRoom,
-            botCount))
+            BrawlerMatchConfig.Decode(matchCtx.MatchConfigData).BotCount,
+            stageId: matchCtx.StageId))
         .WithRoomLimits(maxRooms, maxPlayersPerRoom, maxSpectatorsPerRoom)
         .WithSimulationConfig(simConfig)
         .WithSessionConfig(sessionConfig)
         .WithDerivedSimulation(sharedRegistry)
+        .WithMatchConfigSource(matchConfigSource)
         .Build();
     // Entitlement guard — server-side cross-check of each client's BrawlerPlayerConfig against
     // the account's owned set, clamping unowned picks. Inert until a lobby/validator populates the per-player
@@ -253,7 +293,6 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
     // Dev lobby identity validator (SD): enabled at RUNTIME by the --lobby host:port flag (no compile
     // define). Absent → no validator (lobby off; clients join ticketless). Run DevLobbyServer first. The
     // redeem response also carries the account entitlement, which flows into the entitlement guard above.
-    var (lobbyEnabled, lobbyHost, lobbyPort) = ParseLobbyEndpoint(args);
     LiteNetLibLobbyRedeemClient redeemClient = null;
     if (lobbyEnabled)
     {
@@ -269,13 +308,15 @@ static void RunMultiRoom(string[] args, bool rttMetricsEnabled)
         $"[BrawlerDedicatedServer] Server listening on port {port}, maxRooms={maxRooms}, maxPlayersPerRoom={maxPlayersPerRoom}, botCount={botCount}, tickInterval={tickIntervalMs}ms");
 
     // Dedi → lobby room reporting (P1): advertise capacity (serverRegister) + push room occupancy (roomReport).
+    // The reporter's report client also receives ReservePush → populates lobbyReservations → replies ReserveAck.
     SdRoomReporter roomReporter = null;
     if (lobbyEnabled)
     {
         string advertiseHost = ParseAdvertiseHost(args);
         roomReporter = new SdRoomReporter(roomManager, logger, lobbyHost, lobbyPort,
             SdDevIdentity.DevServerId, advertiseHost, port,
-            maxRooms, maxPlayersPerRoom, SdDevIdentity.RoomReportIntervalMs);
+            maxRooms, maxPlayersPerRoom, SdDevIdentity.RoomReportIntervalMs,
+            reservations: lobbyReservations);
         roomReporter.Start();
         logger.KInformation($"[BrawlerDedicatedServer] room reporter active — advertising {advertiseHost}:{port} {maxRooms}x{maxPlayersPerRoom} to lobby {lobbyHost}:{lobbyPort}");
     }

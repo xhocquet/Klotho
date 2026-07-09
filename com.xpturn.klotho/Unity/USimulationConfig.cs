@@ -58,5 +58,11 @@ namespace xpTURN.Klotho
         [field: Header("Diagnostics")]
         [field: SerializeField] public int EventDispatchWarnMs { get; set; } = 5;
         [field: SerializeField] public int TickDriftWarnMultiplier { get; set; } = 2;
+
+        // Multi-stage. StageId authorable (default single stage);
+        // MatchConfigData is runtime-only (set by lobby/host at match start), not inspector-authored.
+        [field: Header("Multi-stage")]
+        [field: SerializeField] public int StageId { get; set; } = 0;
+        public byte[] MatchConfigData { get; set; } = null;
     }
 }

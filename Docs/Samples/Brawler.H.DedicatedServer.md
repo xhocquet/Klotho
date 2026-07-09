@@ -376,8 +376,17 @@ loop.Run();
 Key points:
 - **One Transport, N rooms** — a single port handles every room. `RoomRouter` reads the roomId from incoming packets and routes them to the corresponding room queue inside `RoomManager`.
 - **Factory injection** — `CallbacksFactory` is passed as a delegate to construct per-room `BrawlerServerCallbacks` instances; `EcsSimulation` is derived from the simulation config via `RoomManagerConfigBuilder.WithDerivedSimulation` rather than an explicit `SimulationFactory`.
-- **DataAsset / StaticCollider shared, NavMesh deserialized per room** — NavMesh has internal state that mutates during queries, so it cannot be shared.
+- **DataAsset shared, NavMesh deserialized per room** — NavMesh has internal state that mutates during queries, so it cannot be shared. Static colliders are now selected per stage (below), not shared.
 - `ThreadPool.SetMinThreads` — secures workers proportional to the room count (avoids warmup latency).
+
+### H-6-3. Per-Room Stage & Match Config
+
+The multi-room server assigns each room a **stage** and a **per-match config**, showing how one server hosts rooms on different maps:
+
+- **`StaticMatchConfigSource` maps room → stage** (`.WithMatchConfigSource(...)`) — the sample alternates rooms across `Stage01` / `Stage02` (`stageId = 1 + roomId % 2`). The callbacks factory takes the *match-aware* form `(MatchConfigContext matchCtx, IKLogger) => …` and selects that stage's baked colliders + navmesh from `matchCtx.StageId`; `CreateRoomAt` stamps the stage onto the room's `SimulationConfig`, which carries it to the clients (each client builds the same stage — verified by matching `[Physics][StaticGeometry]` fingerprints). A room the source declines is refused (room-not-found).
+- **Per-match bot count rides `MatchConfigData`** — the CLI `botCount` is encoded into each room's `MatchConfigData` (via `BrawlerMatchConfig`, a `[KlothoSerializableStruct]` payload) instead of injected straight into the callback, so it propagates like the stage. The context factory decodes it back with `BrawlerMatchConfig.Decode(matchCtx.MatchConfigData)`.
+- **Single-room mode is unchanged** — no `IMatchConfigSource`, so it runs the default stage with the CLI bot count as before.
+- **Lobby-driven** — with `--lobby`, the lobby (not the CLI) picks each room's stage and match config and reserves it on the server before the client connects; see [LobbyIntegrationGuide §4-E](../LobbyIntegrationGuide.md#4-e-per-room-match-config--reservation-sd-multi-room). Framework-level API: [GameDevAPI §3.6](../GameDevAPI.md#36-per-match-config--stageid--matchconfigdata).
 
 ---
 

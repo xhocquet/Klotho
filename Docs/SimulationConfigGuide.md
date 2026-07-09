@@ -33,6 +33,8 @@ Effective input latency (perceived) ≈ InputDelayTicks × TickIntervalMs
 Remote input arrival slack          ≈ InputDelayTicks × TickIntervalMs (RTT/2 must be < this for hiccup-free play)
 ```
 
+> **Not tuning knobs:** `SimulationConfig` also carries `StageId` (which stage/map the match runs) and `MatchConfigData` (an opaque per-match payload — game mode, rules, difficulty). These are **content/match selectors set per-match by the authority**, not per-genre performance values, so they are not tuned here — leave them at their defaults (`StageId` 0, empty) for a single-stage game. See [GameDevAPI §3.6](./GameDevAPI.md#36-per-match-config--stageid--matchconfigdata) and [LobbyIntegrationGuide §4-E](./LobbyIntegrationGuide.md#4-e-per-room-match-config--reservation-sd-multi-room).
+
 ---
 
 ## 2. Mode Selection Guide

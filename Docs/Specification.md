@@ -280,6 +280,8 @@ Configuration is split into two layers.
 | MinStallAbortTicks | 600 | ticks | (P2P) Chain-stall watchdog threshold (peer-local). Aborts the match via `AbortMatch(AbortReason.ChainStallTimeout)` when `CurrentTick - LastVerifiedTick` exceeds `max(SessionConfig.ReconnectTimeoutMs / TickIntervalMs + 100, MinStallAbortTicks)`. Default 600 = 30s @ 50ms TickInterval. Guards against `ReconnectTimeoutMs` misconfiguration shorter than recovery floor |
 | EventDispatchWarnMs | 5 | ms | Warning threshold for OnEvent* handler execution time (dev-diagnostic — see note below). 0 or less = disabled |
 | TickDriftWarnMultiplier | 2 | × | Tick-loop drift warning multiplier (warns if actual interval > TickIntervalMs × multiplier). 0 or less = disabled |
+| StageId | 0 | int | Match stage/content selector, set per-match by the authority and propagated to all peers. 0 = default single stage. The game maps it to stage assets; the engine only carries it |
+| MatchConfigData | null | byte[] | Opaque, game-defined per-match config (game mode / rules / difficulty), set per-match by the authority and propagated. null/empty = none. The engine carries only the bytes — the game owns the codec |
 
 > **Dev-diagnostic build symbols (cross-engine note)**: the core gates many diagnostics — including the `EventDispatchWarnMs` warning — behind `#if DEVELOPMENT_BUILD || UNITY_EDITOR`. Both are **Unity-defined** symbols. On Unity they are active in the Editor / development builds automatically. On **Godot (.NET) and the .NET dedicated server** neither symbol is defined by default, so these diagnostics are **compiled out** — define `DEVELOPMENT_BUILD` in your game `.csproj` (`<DefineConstants>`) to enable them.
 

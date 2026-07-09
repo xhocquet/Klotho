@@ -15,7 +15,9 @@
 
   <ItemGroup>
     <!-- Core runtime compiled from SOURCE (not the prebuilt KlothoServer.dll) so this exercises the
-         current ServerNetworkService, including the pending-peer timeout + the nowProvider seam. -->
-    <ProjectReference Include="../Brawler/xpTURN.Klotho.Runtime.csproj" />
+         current ServerNetworkService, including the pending-peer timeout + the nowProvider seam.
+         Uses the Server~ mirror, NOT the Unity-generated Samples/Brawler csproj: the generated one
+         drags Polyfill → UnityEditor.UI → UnityEngine.TestRunner into the build closure. -->
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.Runtime/xpTURN.Klotho.Runtime.csproj" />
   </ItemGroup>
 </Project>

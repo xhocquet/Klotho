@@ -11,7 +11,7 @@ namespace xpTURN.Samples.SdSample
     // Both sides must build an identical initial world, so this lives in the engine-free Sim assembly.
     public static class SdSimSetup
     {
-        public static void RegisterSystems(EcsSimulation simulation)
+        public static void RegisterSystems(EcsSimulation simulation, int stageId = 0)
         {
             var events = new EventSystem();
             simulation.AddSystem(new CommandSystem(),    SystemPhase.PreUpdate);
@@ -20,9 +20,10 @@ namespace xpTURN.Samples.SdSample
             // Engine gravity + static ground collider. The ground is registered HERE (not in
             // OnInitializeWorld, which the ServerDriven client skips) so the server and the client
             // build the identical static BVH — engine gravity + ground resting-contact is then
-            // deterministic across the .NET server and the Unity client.
+            // deterministic across the .NET server and the Unity client. The ground geometry is
+            // stage-selected, so the static BVH (and its fingerprint) differs per stage.
             var physics = new PhysicsSystem(64);
-            physics.LoadStaticColliders("", new List<FPStaticCollider> { CreateGroundCollider() });
+            physics.LoadStaticColliders("", new List<FPStaticCollider> { CreateGroundCollider(stageId) });
             simulation.AddSystem(physics, SystemPhase.Update);
 
             simulation.AddSystem(new RespawnSystem(),    SystemPhase.LateUpdate);
@@ -30,19 +31,25 @@ namespace xpTURN.Samples.SdSample
             simulation.AddSystem(events,                 SystemPhase.LateUpdate);
         }
 
-        // Ground static collider — 10×0.2×10 box at Y=-0.1 (top face at Y=0). Fixed stage geometry.
-        static FPStaticCollider CreateGroundCollider() => new FPStaticCollider
+        // Ground static collider — box at Y=-0.1 (top face at Y=0). Per-stage geometry: stage 0 keeps the
+        // original 10×0.2×10; other stages vary the half-extent so the static BVH fingerprint differs per
+        // stage (the multi-stage marker). A real game maps stageId → a baked stage definition (DataAsset).
+        static FPStaticCollider CreateGroundCollider(int stageId)
         {
-            id = 1,
-            isTrigger = false,
-            restitution = FP64.Zero,
-            friction = FP64.FromFloat(0.5f),
-            collider = FPCollider.FromBox(new FPBoxShape(
-                halfExtents: new FPVector3(FP64.FromInt(5), FP64.FromFloat(0.1f), FP64.FromInt(5)),
-                position: new FPVector3(FP64.Zero, FP64.FromFloat(-0.1f), FP64.Zero))),
-        };
+            FP64 halfXZ = stageId == 1 ? FP64.FromInt(3) : FP64.FromInt(5);
+            return new FPStaticCollider
+            {
+                id = 1,
+                isTrigger = false,
+                restitution = FP64.Zero,
+                friction = FP64.FromFloat(0.5f),
+                collider = FPCollider.FromBox(new FPBoxShape(
+                    halfExtents: new FPVector3(halfXZ, FP64.FromFloat(0.1f), halfXZ),
+                    position: new FPVector3(FP64.Zero, FP64.FromFloat(-0.1f), FP64.Zero))),
+            };
+        }
 
-        public static void InitializeWorld(IKlothoEngine engine, int maxPlayers)
+        public static void InitializeWorld(IKlothoEngine engine, int maxPlayers, int stageId = 0)
         {
             var frame = engine.InitFrame;
             var stats = frame.AssetRegistry.Get<PlayerStatsAsset>();

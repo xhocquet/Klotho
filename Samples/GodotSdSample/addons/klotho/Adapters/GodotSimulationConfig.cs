@@ -57,5 +57,10 @@ namespace xpTURN.Klotho.Godot
         // Diagnostics
         [Export] public int EventDispatchWarnMs { get; set; } = 5;
         [Export] public int TickDriftWarnMultiplier { get; set; } = 2;
+
+        // Multi-stage. StageId authorable (default single stage);
+        // MatchConfigData is runtime-only (set by lobby/host at match start), not [Export]-authored.
+        [Export] public int StageId { get; set; } = 0;
+        public byte[] MatchConfigData { get; set; } = null;
     }
 }

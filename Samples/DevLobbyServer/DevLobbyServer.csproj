@@ -26,6 +26,14 @@
     <Analyzer Include="../../com.xpturn.klotho/Plugins/Analyzers/KlothoGenerator.dll" />
   </ItemGroup>
 
+  <!-- Brawler's per-match config codec: the lobby produces MatchConfigData via the SAME codec the dedi/client
+       read (BrawlerMatchConfig.Encode), so there is no hand-rolled wire layout to keep in sync. This one file
+       is self-contained ([KlothoSerializableStruct] + facade, no other Brawler deps); the generator above
+       emits its Serialize/GetSerializedSize. Couples this dev lobby to the Brawler sample's config type. -->
+  <ItemGroup>
+    <Compile Include="../Brawler/Assets/Brawler/Scripts/ECS/BrawlerMatchConfig.cs" Link="Game\BrawlerMatchConfig.cs" />
+  </ItemGroup>
+
   <!-- Reuse the identity reference sources (codec / issuer / Ed25519 backend) + the SD lobby core via their
        Server~ mirror projects instead of globbing the raw Runtime sources. The lobby holds the private key
        and the redeem/match authority via DevLobbyCore. BouncyCastle (BcEd25519Backend) flows transitively

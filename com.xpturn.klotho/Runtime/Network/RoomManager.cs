@@ -44,6 +44,25 @@ namespace xpTURN.Klotho.Network
         public Func<IKLogger, ISimulationCallbacks> CallbacksFactory { get; set; }
 
         /// <summary>
+        /// Optional per-room match config source. null = no per-room resolution: every room uses the
+        /// default context (StageId 0, no payload) and room creation stays open (current behaviour).
+        /// When set, CreateRoom resolves each room's context and refuses (returns null → RoomNotFound)
+        /// rooms the source declines. Called synchronously on the room-creation thread (non-blocking).
+        /// </summary>
+        public IMatchConfigSource MatchConfigSource { get; set; }
+
+        /// <summary>
+        /// Optional context-aware factories — take precedence over the plain ones when set. Let a game
+        /// build a fully stage-specific SimulationConfig / SessionConfig / callbacks from the resolved
+        /// <see cref="MatchConfigContext"/>. When null, the plain factory is used; the resolved
+        /// StageId/MatchConfigData are stamped onto the SimulationConfig regardless so they propagate to
+        /// joiners via SimulationConfigMessage.
+        /// </summary>
+        public Func<MatchConfigContext, SimulationConfig> SimulationConfigFactoryForMatch { get; set; }
+        public Func<MatchConfigContext, SessionConfig> SessionConfigFactoryForMatch { get; set; }
+        public Func<MatchConfigContext, IKLogger, ISimulationCallbacks> CallbacksFactoryForMatch { get; set; }
+
+        /// <summary>
         /// Authority-side ticket validator, shared across all rooms (server-global; lobby redeem is a
         /// server-wide concern). null = no validation (behaviour unchanged). Each BeginValidate call
         /// is independent (carries its own SessionMagic/peer context). Injected into every room's
@@ -166,16 +185,43 @@ namespace xpTURN.Klotho.Network
         {
             var roomLogger = _loggerFactory?.CreateLogger($"Room-{roomId}");
 
-            // Create each component via its factory
-            var simConfig = _config.SimulationConfigFactory();
-            var sessionConfig = _config.SessionConfigFactory();
+            // Resolve the per-room match config (stage selector + opaque payload). Synchronous, non-blocking.
+            // Source unset → default context (StageId 0), open creation. Source set + declines → refuse
+            // creation (return null) so RoomRouter rejects the peer with RoomNotFound.
+            var matchCtx = MatchConfigContext.Default(roomId);
+            if (_config.MatchConfigSource != null && !_config.MatchConfigSource.TryResolve(roomId, out matchCtx))
+            {
+                _logger?.KWarning($"[RoomManager] Room {roomId} declined by match config source — creation refused");
+                return null;
+            }
+
+            // Create each component via its factory (context-aware overload preferred when set).
+            var simConfig = _config.SimulationConfigFactoryForMatch != null
+                ? _config.SimulationConfigFactoryForMatch(matchCtx)
+                : _config.SimulationConfigFactory();
+            // Stamp the resolved stage/payload so they reach joiners via SimulationConfigMessage even when
+            // the game factory doesn't set them — the core guarantees propagation (not the game code).
+            // Only when a source is active (multi-stage); stamp onto a per-room copy so a shared config
+            // instance (WithSimulationConfig(value)) is not clobbered across rooms with different stages.
+            if (_config.MatchConfigSource != null)
+            {
+                simConfig = simConfig.Clone();
+                simConfig.StageId = matchCtx.StageId;
+                simConfig.MatchConfigData = matchCtx.MatchConfigData;
+            }
+
+            var sessionConfig = _config.SessionConfigFactoryForMatch != null
+                ? _config.SessionConfigFactoryForMatch(matchCtx)
+                : _config.SessionConfigFactory();
             var sim = new EcsSimulation(
                 maxEntities: simConfig.MaxEntities,
                 maxRollbackTicks: _config.SimulationMaxRollbackTicks,
                 deltaTimeMs: simConfig.TickIntervalMs,
                 logger: roomLogger,
                 assetRegistry: _config.AssetRegistry);
-            var callbacks = _config.CallbacksFactory(roomLogger);
+            var callbacks = _config.CallbacksFactoryForMatch != null
+                ? _config.CallbacksFactoryForMatch(matchCtx, roomLogger)
+                : _config.CallbacksFactory(roomLogger);
             callbacks.RegisterSystems(sim);
             sim.LockAssetRegistry();
 

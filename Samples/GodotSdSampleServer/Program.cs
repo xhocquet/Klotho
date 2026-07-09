@@ -67,11 +67,22 @@ if (!transport.Listen("0.0.0.0", port, maxRooms * maxPlayers))
 // RoomRouter consumes the RoomHandshakeMessage and routes peers to the room; RoomManager
 // wires EcsSimulation / ServerNetworkService / KlothoEngine / CommandFactory per room internally.
 var router = new RoomRouter(transport, logger);
-var roomManagerConfig = new RoomManagerConfigBuilder((roomLogger) => new SdServerCallbacks(roomLogger, maxPlayers))
+
+// Multi-stage demo: map each room to a stage (even rooms → stage 0, odd rooms → stage 1). The context
+// callbacks factory captures the resolved StageId so each room builds its stage's world; the core stamps
+// StageId onto the room's SimulationConfig, which propagates to the client (which builds the same stage).
+// Unmapped rooms would be refused — here every room in [0, maxRooms) is mapped.
+var stageSource = new StaticMatchConfigSource();
+for (int r = 0; r < maxRooms; r++)
+    stageSource.Add(r, stageId: r % 2);
+
+var roomManagerConfig = new RoomManagerConfigBuilder(
+        (matchCtx, roomLogger) => new SdServerCallbacks(roomLogger, maxPlayers, matchCtx.StageId))
     .WithRoomLimits(maxRooms, maxPlayers, maxSpectatorsPerRoom: 0)
     .WithSimulationConfig(simConfig)
     .WithSessionConfig(sessionConfig)
     .WithDerivedSimulation(sharedRegistry)
+    .WithMatchConfigSource(stageSource)
     .Build();
 
 // Identity validator — set on the config after Build() (the IdentityValidator property is the supported

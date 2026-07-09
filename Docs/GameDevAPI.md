@@ -422,6 +422,38 @@ public class MyCallbacks : ISimulationCallbacks
 
 ---
 
+### 3.6 Per-match config — `StageId` / `MatchConfigData`
+
+A match's **stage** (which map/level to build) and an opaque **per-match payload** (game mode, rules, difficulty) ride on the `SimulationConfig` and reach every peer through the same channel that already carries the seed and session settings. The authority (dedicated server, lobby, or P2P host) sets them; joiners read them.
+
+**Reading them in the game.** The callbacks factory (`KlothoFlowSetupBuilder(...)` / `CallbacksFactory`) runs after the resolved config has arrived and receives the `ISimulationConfig`, so the game selects its stage assets and decodes its match knobs there:
+
+```csharp
+new KlothoFlowSetupBuilder((simCfg, sessionCfg) =>
+{
+    int stage = simCfg.StageId;                       // 0 = default single stage
+    var knobs = MyMatchConfig.Decode(simCfg.MatchConfigData); // byte[] → game struct (empty → defaults)
+    var (colliders, navMesh) = MyStages.Resolve(stage);
+    return new SessionCallbacks(new MySimulationCallbacks(colliders, navMesh, knobs), viewCallbacks);
+})
+```
+
+- `ISimulationConfig.StageId` (scalar) selects content; `ISimulationConfig.MatchConfigData` (`byte[]`) is opaque — the game owns its codec (e.g. a `[KlothoSerializableStruct]` payload). Both default to "unset" (`StageId` 0, empty payload), so a single-stage game reads nothing new.
+- The value is authoritative and propagated, so an SD guest / P2P guest gets exactly what the server / host chose — no client-side lookup or divergence.
+
+**Setting them (authority).** On a **dedicated server**, supply an `IMatchConfigSource` so each room resolves its own config at creation:
+
+```csharp
+new RoomManagerConfigBuilder((matchCtx, roomLogger) =>            // match-aware callbacks ctor
+        new MyServerCallbacks(roomLogger, MyStages.Resolve(matchCtx.StageId), matchCtx.MatchConfigData))
+    .WithMatchConfigSource(new StaticMatchConfigSource().Add(roomId: 0, stageId: 1).Add(1, 2))
+    // ... other Build steps
+```
+
+`CreateRoomAt` stamps the resolved `StageId`/`MatchConfigData` onto the room's `SimulationConfig` (so the game factory never has to remember to), and a source that **declines** a room refuses creation (client turned away with room-not-found). A **P2P host** sets `SimulationConfig.StageId` / `MatchConfigData` on the config it hosts with. See [LobbyIntegrationGuide §4-E](./LobbyIntegrationGuide.md#4-e-per-room-match-config--reservation-sd-multi-room) for the lobby-driven path.
+
+---
+
 ## 4. Entity Prototype API
 
 Implement `IEntityPrototype` to encapsulate entity-creation logic. Two creation paths:

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 using Cysharp.Threading.Tasks;
 
@@ -38,6 +39,20 @@ namespace Brawler
 
         [field: Header("PlayerSettings")]
         [SerializeField] public int _characterClass = 0; // 0=Warrior, 1=Mage, 2=Rogue, 3=Knight
+    }
+
+    /// <summary>
+    /// One multi-stage entry: the baked deterministic geometry (colliders + navmesh, shared by server and
+    /// client) plus the additive view scene loaded on the client. The stage is selected by the received
+    /// SimulationConfig.StageId (server-stamped for SD rooms, host-authored for P2P).
+    /// </summary>
+    [Serializable]
+    public class StageResource
+    {
+        [SerializeField] public int _stageId;
+        [SerializeField] public TextAsset _colliders;
+        [SerializeField] public TextAsset _navMesh;
+        [SerializeField] public string _sceneName; // additive view scene (Build Settings name); empty = no view
     }
 
     /// <summary>
@@ -98,6 +113,12 @@ namespace Brawler
         [field: Header("NavMesh")]
         [SerializeField] private TextAsset _navMeshAsset;
 
+        // Multi-stage: stageId → baked geometry + additive view scene. When populated the received
+        // StageId selects the entry; when empty the single _staticCollidersAsset/_navMeshAsset above
+        // are used (default/back-compat, = the default stage).
+        [field: Header("Stages (stageId → geometry + additive view scene)")]
+        [SerializeField] private StageResource[] _stageResources;
+
         [field: Header("DataAssets")]
         [SerializeField] private TextAsset _dataAsset;
 
@@ -105,6 +126,14 @@ namespace Brawler
         List<FPStaticCollider> _staticColliders;
         FPNavMesh _navMesh;
         List<IDataAsset> _dataAssets;
+
+        // Stage resolved from the received SimulationConfig.StageId at BuildCallbacks. The additive view
+        // scene (visual only) is driven toward a desired target and reconciled through SceneManager async
+        // ops so a stop/start straddling an in-flight load/unload can't leak a scene or drop the view.
+        private int _resolvedStageId;
+        private string _desiredStageScene;   // scene we want loaded (null = none)
+        private string _currentStageScene;   // scene actually loaded (set on load-complete, cleared on unload-complete)
+        private bool _stageSceneBusy;         // an async load/unload is in flight
         private IDataAssetRegistry _assetRegistry;
 
         private IKlothoSession _session;
@@ -461,6 +490,10 @@ namespace Brawler
             // setting up front rather than silently mutating the USimulationConfig ScriptableObject
             // (Editor play mode persists such mutations back to the .asset file, corrupting the
             // user's saved setting).
+            // P2P host authors the per-match dynamic config (botCount) into MatchConfigData so it propagates
+            // to the guest. MatchConfigData is runtime-only (not a serialized field), so this in-memory set
+            // does NOT persist to the .asset — unlike StageId (SerializeField), no clone is needed.
+            byte[] matchConfigData = BrawlerMatchConfig.Encode(new BrawlerMatchConfigData { BotCount = _brawlerSettings._botCount });
             ISimulationConfig simulationConfig;
             if (_simulationConfig != null)
             {
@@ -472,12 +505,14 @@ namespace Brawler
                     _gameMenu.SetActionType(GameMenu.ActionType.CreateRoom);
                     return;
                 }
+                _simulationConfig.MatchConfigData = matchConfigData;
                 simulationConfig = _simulationConfig;
             }
             else
             {
                 var sc = new SimulationConfig();
                 sc.Mode = NetworkMode.P2P;
+                sc.MatchConfigData = matchConfigData;
                 simulationConfig = sc;
             }
 
@@ -702,11 +737,92 @@ namespace Brawler
         private SessionCallbacks BuildCallbacks(ISimulationConfig simCfg, ISessionConfig sessionCfg)
         {
             int maxPlayers = sessionCfg?.MaxPlayers ?? InitialMaxPlayersGuess();
+            // The framework invokes this factory with the resolved SimulationConfig — server-stamped for
+            // an SD guest, host-authored for P2P — so StageId selects the same stage geometry the server
+            // built (fp match). StageId 0 / an empty table falls back to the default stage.
+            _resolvedStageId = simCfg?.StageId ?? 0;
+            var (colliders, navMesh) = ResolveStageGeometry(_resolvedStageId);
+            // botCount is a per-match dynamic knob carried in MatchConfigData (authority-set, propagated).
+            // No propagated config (null) → fall back to the Inspector value (lobbyless/pure-client, no-regression).
+            // Effective consumer is the authority (P2P host / SD server); SD guests get bots via FullState.
+            byte[] matchCfg = simCfg?.MatchConfigData;
+            int botCount = matchCfg != null ? BrawlerMatchConfig.Decode(matchCfg).BotCount : _brawlerSettings._botCount;
             _simCallbacks = new BrawlerSimulationCallbacks(
-                _input, _staticColliders, _navMesh,
-                maxPlayers, _brawlerSettings._botCount);
+                _input, colliders, navMesh,
+                maxPlayers, botCount, stageId: _resolvedStageId);
             _viewCallbacks = new BrawlerViewCallbacks(_simCallbacks);
             return new SessionCallbacks(_simCallbacks, _viewCallbacks);
+        }
+
+        // Finds the configured stage entry for stageId; stageId 0 (core default / no source) maps to the
+        // default stage (stageId 1). Returns null when no table entry matches.
+        private StageResource ResolveStage(int stageId)
+        {
+            if (_stageResources == null) return null;
+            foreach (var s in _stageResources)
+                if (s != null && s._stageId == stageId) return s;
+            if (stageId == 0)
+                foreach (var s in _stageResources)
+                    if (s != null && s._stageId == 1) return s;
+            return null;
+        }
+
+        // Baked deterministic geometry for the stage. Uses the stage table when populated; otherwise the
+        // single default assets loaded in Start (= the default stage, back-compat).
+        private (List<FPStaticCollider> colliders, FPNavMesh navMesh) ResolveStageGeometry(int stageId)
+        {
+            var s = ResolveStage(stageId);
+            if (s != null && s._colliders != null && s._navMesh != null)
+                return (FPStaticColliderSerializer.Load(s._colliders.bytes),
+                        FPNavMeshSerializer.Deserialize(s._navMesh.bytes));
+            return (_staticColliders, _navMesh);
+        }
+
+        // Requests the stage's additive view scene (visual only — no sim state; determinism lives in the
+        // baked geometry). Sets the desired target and reconciles; the target is null when the stage has no
+        // view scene configured (e.g. headless).
+        private void LoadStageView(int stageId)
+        {
+            var s = ResolveStage(stageId);
+            _desiredStageScene = (s != null && !string.IsNullOrEmpty(s._sceneName)) ? s._sceneName : null;
+            ReconcileStageView();
+        }
+
+        private void UnloadStageView()
+        {
+            _desiredStageScene = null;
+            ReconcileStageView();
+        }
+
+        // Drives _currentStageScene toward _desiredStageScene one SceneManager async op at a time, gating on
+        // our own state rather than Scene.isLoaded — that flag is false mid-load and true mid-unload, so
+        // reading it races the in-flight op (stop-during-load leaks the scene; rejoin-during-unload drops the
+        // view). Re-invoked from each op's completed callback so a target change during a load/unload settles
+        // correctly. Main-thread only (session observer callbacks + AsyncOperation.completed), so no locking.
+        private void ReconcileStageView()
+        {
+            if (_stageSceneBusy) return;                          // in flight — the completed callback re-invokes
+            if (_desiredStageScene == _currentStageScene) return; // settled
+
+            if (_currentStageScene != null)
+            {
+                // Unload the current scene first (target is a different scene or none).
+                _stageSceneBusy = true;
+                var op = SceneManager.UnloadSceneAsync(_currentStageScene);
+                if (op != null)
+                    op.completed += _ => { _currentStageScene = null; _stageSceneBusy = false; ReconcileStageView(); };
+                else { _currentStageScene = null; _stageSceneBusy = false; ReconcileStageView(); } // not loaded → settled
+            }
+            else
+            {
+                // Nothing loaded — load the desired scene additively.
+                _stageSceneBusy = true;
+                string toLoad = _desiredStageScene;
+                var op = SceneManager.LoadSceneAsync(toLoad, LoadSceneMode.Additive);
+                if (op != null)
+                    op.completed += _ => { _currentStageScene = toLoad; _stageSceneBusy = false; ReconcileStageView(); };
+                else { _stageSceneBusy = false; _desiredStageScene = null; _logger?.KError($"[Brawler] Stage view scene '{toLoad}' failed to load (in Build Settings?)"); } // don't retry-loop
+            }
         }
 
         // Single role-bearing creation callback — was OnAnyFlowSessionCreated (common) +
@@ -736,6 +852,11 @@ namespace Brawler
                 _faultInjectionHotkey?.Attach(session, _logger);
             }
             // Replay/Spectator skip FaultInjection (main _transport is idle for those modes).
+
+            // Load the stage's additive view scene (visual only) for the resolved stage. All entry kinds
+            // resolve a stage in BuildCallbacks (host/guest/spectator/replay), so this is NOT gated by kind —
+            // otherwise a stage-2 spectator/replay would render the default environment over stage-2 geometry.
+            LoadStageView(_resolvedStageId);
 
             InitializeViewSync(session.Engine, session.Simulation);
         }
@@ -888,6 +1009,7 @@ namespace Brawler
 
             _logger?.KInformation($"[Brawler] Game stopped");
             _session = null;
+            UnloadStageView();
             ResetToInitialUi();
         }
 

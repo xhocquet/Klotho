@@ -256,5 +256,22 @@ namespace xpTURN.Klotho.Core
         /// 0 or less disables instrumentation.
         /// </summary>
         int TickDriftWarnMultiplier { get; }
+
+        // --- Multi-stage ---
+
+        /// <summary>
+        /// Stage selector for a single dedicated server hosting multiple stages. Opaque to the core
+        /// (never interpreted here) — the game looks it up against its baked stage definitions in
+        /// RegisterSystems/OnInitializeWorld. 0 = the default single stage (no-regression default).
+        /// Authoritative value set by the server/host and propagated to joiners via SimulationConfigMessage.
+        /// </summary>
+        int StageId { get; }
+
+        /// <summary>
+        /// Opaque game-defined match-config payload (game mode / ruleset / difficulty / etc.), serialized
+        /// by the game. The core only carries the bytes — meaning is owned by the game (cf.
+        /// PlayerConfigMessage.ConfigData, at match scope). null/empty = none (no-regression default).
+        /// </summary>
+        byte[] MatchConfigData { get; }
     }
 }

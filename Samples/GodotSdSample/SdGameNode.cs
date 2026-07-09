@@ -20,7 +20,9 @@ namespace xpTURN.Samples.SdSample
 	public partial class SdGameNode : Node
 	{
 		private const string ConnectionKey = "xpTURN.SdSample";
-		private const int    RoomId        = 0;
+		// Non-lobby room id (CLI: -- room=N). Multi-stage demo: the server maps room→stage, so room=1
+		// lands on a different stage than room=0. (Lobby mode assigns the room via the ticket instead.)
+		private int          _roomId       = 0;
 
 		private IKLogger            _logger;
 		private IDataAssetRegistry  _registry;
@@ -76,8 +78,10 @@ namespace xpTURN.Samples.SdSample
 			_hud  = GetNode<GodotSdHud>("UILayer/Hud");
 			_viewCallbacks = new GodotSdViewCallbacks(_hud);
 
+			// s = server-authoritative SimulationConfig received on connect; s.StageId selects the stage
+			// the client builds (same as the server's room), so client/server static BVH match.
 			var fsb = new KlothoFlowSetupBuilder((s, ss) =>
-						new SessionCallbacks(new SdSimulationCallbacks(_input), _viewCallbacks))
+						new SessionCallbacks(new SdSimulationCallbacks(_input, s.StageId), _viewCallbacks))
 					.WithLogger(_logger)
 					.WithTransport(_transport)
 					.WithAssetRegistry(_registry)
@@ -118,6 +122,11 @@ namespace xpTURN.Samples.SdSample
 			}
 			foreach (var a in OS.GetCmdlineUserArgs())
 			{
+				if (a.StartsWith("room=", StringComparison.Ordinal) && int.TryParse(a.Substring("room=".Length), out int r))
+					_roomId = r;
+			}
+			foreach (var a in OS.GetCmdlineUserArgs())
+			{
 				if (a == "join") { _autoJoin = true; OnJoin(); }
 			}
 		}
@@ -139,7 +148,7 @@ namespace xpTURN.Samples.SdSample
 			_issueTask = _issueClient.IssueAsync(_devAccount, _devAccount, matchId, _issueCts.Token);
 #else
 			_joining = true;
-			_joinTask = _flow.JoinServerDrivenAsync(_transport, _menu.Host, _menu.Port, RoomId, _sesCfg);
+			_joinTask = _flow.JoinServerDrivenAsync(_transport, _menu.Host, _menu.Port, _roomId, _sesCfg);
 #endif
 		}
 

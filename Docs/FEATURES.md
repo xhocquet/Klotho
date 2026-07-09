@@ -156,6 +156,8 @@ Supports client-side prediction, rollback, and frame synchronization.
 - **Multi-room server** — Room, RoomManager, RoomManagerConfig, RoomManagerConfigBuilder, RoomRouter, RoomScopedTransport
   - ServerLoop — server main loop coordinating multiple rooms
   - ServerInputCollector — server-side input collector
+- **Per-room match config** — `IMatchConfigSource` resolves each room's stage (`StageId`) and an opaque per-match payload (`MatchConfigData`) at creation time; `StaticMatchConfigSource` (a lobbyless room→stage table) or a lobby-backed source. Declining a room refuses creation (client turned away with room-not-found). `RoomManagerConfigBuilder` gained a match-aware callbacks constructor + `WithMatchConfigSource` + per-match `WithSimulationConfig`/`WithSessionConfig`/`WithCallbacks` overloads
+  - Carried to every peer on the existing config channel, so **one dedicated server can host rooms on different stages**; the game selects its stage assets from the received `StageId` and decodes `MatchConfigData` for per-match knobs (game mode / rules / difficulty). Empty by default (single stage, no-op)
 - **ITimeSyncService** — RTT measurement, clock-offset sync
 - **SharedTimeClock** — shared game time
 

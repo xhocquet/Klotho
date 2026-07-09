@@ -8,6 +8,12 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Brawler/Scenes/BrawlerScene.unity
     guid: d91547965f1a340b390c0df16ed1af2b
+  - enabled: 1
+    path: Assets/Brawler/Scenes/Stage01.unity
+    guid: 90d1908bf79f3414387811a8237d1d18
+  - enabled: 1
+    path: Assets/Brawler/Scenes/Stage02.unity
+    guid: d17edef1932a44864bdf73693d612520
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0

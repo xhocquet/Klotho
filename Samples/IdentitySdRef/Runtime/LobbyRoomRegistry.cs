@@ -34,6 +34,8 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             public int Occupied;   // redeemed (entered) — reconciled to the dedi's reported PlayerCount (P1)
             public string SessionId; // = matchId; null when Empty/unbound (one room serves one match)
             public long LastReportMs; // last roomReport touching this slot (P1)
+            public bool AckPending;   // reserved-but-not-yet-ack-confirmed by the dedi (tentative). Cleared on
+                                      // CommitReservation (ReserveAck ok). Lobbyless assigns never set it (stays false).
 
             public int EffectiveFree => Capacity - Reserved - Occupied;
         }

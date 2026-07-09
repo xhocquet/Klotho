@@ -53,6 +53,9 @@ namespace xpTURN.Klotho.Network
         // --- Diagnostics ---
         [KlothoOrder] public int EventDispatchWarnMs;
         [KlothoOrder] public int TickDriftWarnMultiplier;
+        // --- Multi-stage — appended for append-only wire compat ---
+        [KlothoOrder] public int StageId;
+        [KlothoOrder] public byte[] MatchConfigData;
 
         /// <summary>
         /// Populates message fields from an ISimulationConfig.
@@ -89,6 +92,8 @@ namespace xpTURN.Klotho.Network
             RollbackWindowTicks = config.RollbackWindowTicks;
             EventDispatchWarnMs = config.EventDispatchWarnMs;
             TickDriftWarnMultiplier = config.TickDriftWarnMultiplier;
+            StageId = config.StageId;
+            MatchConfigData = config.MatchConfigData;
         }
 
         /// <summary>
@@ -128,6 +133,8 @@ namespace xpTURN.Klotho.Network
                 RollbackWindowTicks = RollbackWindowTicks,
                 EventDispatchWarnMs = EventDispatchWarnMs,
                 TickDriftWarnMultiplier = TickDriftWarnMultiplier,
+                StageId = StageId,
+                MatchConfigData = MatchConfigData,
             };
         }
     }

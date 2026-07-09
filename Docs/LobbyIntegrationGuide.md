@@ -381,6 +381,33 @@ On a multi-room dedicated server (one server hosting several independent matches
 
 ---
 
+## 4-E. Per-Room Match Config & Reservation (SD Multi-Room)
+
+A multi-room server can host each room on a **different stage** (map / level) with its own **per-match config** (game mode, rules, difficulty). The room's config is resolved at creation time by an `IMatchConfigSource` the server supplies, then carried to every peer on the existing config channel — so a joiner builds the same stage without any client-side lookup.
+
+**Config source**
+
+- `MatchConfigContext` = `{ RoomId, StageId, MatchConfigData }` — the stage selector (`StageId`, a scalar) plus an opaque, game-defined per-match payload (`MatchConfigData`, a `byte[]`).
+- `IMatchConfigSource.TryResolve(roomId, out cfg)` runs synchronously on the room-creation thread (no blocking I/O); returning `false` **refuses the room** — the client is turned away with room-not-found instead of a room being created blind.
+- Lobbyless: `StaticMatchConfigSource` maps room ids → (stage, payload) from a fixed table. Lobby-backed: a source populated by reservations (below).
+
+**Lobby reservation — reserve before connect**
+
+```
+(1) lobby assigns the match → picks (serverId, roomId) AND the room's match config (stage + payload)
+(2) lobby pushes the reservation to the assigned server, and WAITS for the server to confirm
+(3) only on confirm does the lobby mint the ticket + return the endpoint/roomId to the client
+(4) client connects → server creates the room from the reserved config → propagates to all peers
+```
+
+**Why reserve first**: the client only ever receives an endpoint for a room the server has already set up, and a room the lobby never reserved is refused — this stops an unauthenticated peer from claiming a room ahead of the players the lobby placed there (narrower companion to the `sessionId → (server, room)` binding in §4-D). Only the assigned server can confirm its own reservation; a reconnecting server has its active reservations re-pushed; and because the ticket is minted only after the reservation commits, a reservation that is rolled back leaves no usable ticket behind.
+
+**No lobby**: the server's own `StaticMatchConfigSource` decides the room→stage mapping (or none is wired). With no source at all, rooms are created open exactly as before — see §7.
+
+> **Mockup note**: the reserve-push channel lives in the reference SD lobby sample, not the core. `StageId` 0 with empty `MatchConfigData` is the single-stage default, so a game that does not use stages is unaffected.
+
+---
+
 ## 5. SD vs P2P at a Glance
 
 | Aspect | SD (dedicated) | P2P (host) |

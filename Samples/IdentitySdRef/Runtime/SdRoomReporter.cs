@@ -28,6 +28,8 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         private readonly int _maxRooms;
         private readonly IKLogger _logger;
         private readonly RoomStateReport[] _snapshot; // reused (always _maxRooms entries)
+        private readonly LobbyMatchConfigSource _reservations; // null = lobbyless (no reserve table to release)
+        private readonly byte[] _prevState; // last-reported per-room wire state (RoomStateEmpty=0 default = init Empty)
 
         private volatile bool _running;
         private volatile bool _dirty;
@@ -36,19 +38,24 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         /// <param name="advertiseHost">/<paramref name="advertisePort"/> — client-reachable address advertised
         /// in serverRegister (dedi's listen port; host is the dev advertised address, not 0.0.0.0).</param>
         /// <param name="maxRooms">/<paramref name="maxPlayersPerRoom"/> — this dedi's actual capacity (D4).</param>
+        /// <param name="reservations">Optional lobby-driven match config source — forwarded to the report
+        /// client so it receives <c>ReservePush</c> and replies <c>ReserveAck</c>. Null = lobbyless.</param>
         public SdRoomReporter(RoomManager roomManager, IKLogger logger,
                               string lobbyHost, int lobbyPort,
                               string serverId, string advertiseHost, int advertisePort,
-                              int maxRooms, int maxPlayersPerRoom, long intervalMs)
+                              int maxRooms, int maxPlayersPerRoom, long intervalMs,
+                              LobbyMatchConfigSource reservations = null)
         {
             _roomManager = roomManager ?? throw new ArgumentNullException(nameof(roomManager));
             _logger = logger;
             _intervalMs = intervalMs;
             _maxRooms = maxRooms;
             _snapshot = new RoomStateReport[maxRooms];
+            _reservations = reservations;
+            _prevState = new byte[maxRooms];
             _client = new LiteNetLibLobbyReportClient(logger, lobbyHost, lobbyPort,
                 serverId, advertiseHost, advertisePort, maxRooms, maxPlayersPerRoom,
-                onConnected: MarkDirty);
+                onConnected: MarkDirty, reservations: reservations);
         }
 
         public void Start()
@@ -98,6 +105,19 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                     }
                 }
                 catch { state = LobbyWire.RoomStateEmpty; count = 0; }
+
+                // Room-ended → release its dedi-side reservation entry. A live→gone transition
+                // (non-Empty prev → Empty now) is the room-dispose signal the reserve table needs:
+                // a materialized entry left behind NAKs the next match assigned to this reused room
+                // until the reservation TTL expires (5 min). Gate on the down-transition (not "== Empty")
+                // so the reserve-before-join window (Empty→Empty, room not yet created) is not touched —
+                // releasing then would drop a valid pending reservation. Release is lock-guarded.
+                if (_reservations != null
+                    && _prevState[roomId] != LobbyWire.RoomStateEmpty
+                    && state == LobbyWire.RoomStateEmpty)
+                    _reservations.Release(roomId);
+                _prevState[roomId] = state;
+
                 _snapshot[roomId].RoomId = roomId;
                 _snapshot[roomId].State = state;
                 _snapshot[roomId].PlayerCount = count;

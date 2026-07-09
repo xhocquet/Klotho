@@ -23,6 +23,7 @@ namespace Brawler
         private readonly List<IDataAsset> _dataAssets;
         private readonly int _maxPlayers;
         private readonly int _botCount;
+        private readonly int _stageId;
 
         private IKlothoEngine _engine;
         private EcsSimulation _simulation;
@@ -67,7 +68,8 @@ namespace Brawler
                                           FPNavMesh navMesh,
                                           int maxPlayers,
                                           int botCount,
-                                          List<IDataAsset> dataAssets = null)
+                                          List<IDataAsset> dataAssets = null,
+                                          int stageId = 0)
         {
             _input = input;
             _staticColliders = colliders;
@@ -76,6 +78,7 @@ namespace Brawler
 
             _maxPlayers = maxPlayers;
             _botCount = botCount;
+            _stageId = stageId;
 
             // Cache bound delegates once — retry path reuses these instances, no per-call closure alloc.
             _spawnBuilder = BuildSpawnCommand;
@@ -105,7 +108,8 @@ namespace Brawler
                 simulation.Frame.Logger,
                 _dataAssets,
                 _staticColliders,
-                botFSMSystem
+                botFSMSystem,
+                _stageId
             );
         }
 

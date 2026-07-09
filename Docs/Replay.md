@@ -130,11 +130,11 @@ When playback reaches the end, the engine fires its finish path (`OnPlaybackFini
 
 A replay only reproduces correctly if playback is deterministically identical to recording:
 
-1. **Same binaries & content** — the same simulation code, component registration, and DataAssets ([DataAsset.md](DataAsset.md)) on the playback build as the recording build. Replays are not guaranteed compatible across versions that change simulation behavior or component layout.
+1. **Same binaries & determinism-affecting content** — a replay stores only inputs and re-derives state by re-simulating (rule 2), so playback must feed the simulation exactly what recording did. That means the same **simulation / game logic code** and component registration, and the same **content the deterministic simulation consumes**: DataAssets ([DataAsset.md](DataAsset.md)), the **static colliders** and **NavMesh** the stage builds (a stage's baked geometry is part of the simulation, not just visuals), and the RNG seed. Change any of these — a rebalanced DataAsset value, a re-baked collider set or NavMesh, or a logic edit — and the simulation diverges, so the recorded inputs no longer reproduce the original match. A replay is therefore bound to the exact code + content build (and stage) it was recorded on, and is not guaranteed compatible across versions or content revisions that alter simulation behavior or component layout.
 2. **The engine re-derives state from inputs** — never trust positions/HP from "the replay"; they don't exist in the file. They come out of re-simulating. So any non-determinism that would desync a live match also corrupts a replay (see [DeterministicMath.md §11](DeterministicMath.md) and [ECS.md §10](ECS.md)).
 3. **The initial snapshot is mandatory** — recording without `SetInitialStateSnapshot` produces a file that can't play back. (The engine injects it automatically; only relevant if you build a custom recorder.)
 4. **Gate live-only behavior on `IsReplayMode`** — view/audio/input code that should not run during playback must check `engine.IsReplayMode`, exactly as it would for spectator mode.
-5. **Config & seed come from metadata** — playback restores `SimulationConfig` and the RNG seed from the file; don't override them.
+5. **Config & seed come from metadata** — playback restores `SimulationConfig` (including the match's `StageId` and opaque `MatchConfigData`) and the RNG seed from the file, so a multi-stage match replays on the stage it was recorded on; don't override them. (Because these fields are now part of the recorded metadata, replay files written by earlier versions may not load — re-record them.)
 
 ---
 

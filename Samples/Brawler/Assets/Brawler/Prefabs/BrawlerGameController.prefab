@@ -81,7 +81,7 @@ MonoBehaviour:
   _brawlerLobby:
     _lobbyEnabled: 0
     _account: 
-    _matchId: sdsample-dev-match
+    _matchId: brawl-1
     _lobbyAddress: localhost
     _lobbyPort: 9999
   _simulationConfig: {fileID: 11400000, guid: a8bcc9ab45c7e4c14b07725c3b103952, type: 2}
@@ -91,6 +91,15 @@ MonoBehaviour:
   _entityViewUpdater: {fileID: 0}
   _sessionDriver: {fileID: 5274836192847365127}
   _faultInjectionHotkey: {fileID: 6663622970439613816}
-  _staticCollidersAsset: {fileID: 4900000, guid: 72ea74227aa3941cf919e2133f2a464f, type: 3}
-  _navMeshAsset: {fileID: 4900000, guid: 59ad7066f79384cc7b2e78e14c57ff50, type: 3}
+  _staticCollidersAsset: {fileID: 4900000, guid: f7c7d1879bab94e7fb4688988c25dbce, type: 3}
+  _navMeshAsset: {fileID: 4900000, guid: bba9e17c1f0c644dab21cf2a52f9dc32, type: 3}
+  _stageResources:
+  - _stageId: 1
+    _colliders: {fileID: 4900000, guid: f7c7d1879bab94e7fb4688988c25dbce, type: 3}
+    _navMesh: {fileID: 4900000, guid: bba9e17c1f0c644dab21cf2a52f9dc32, type: 3}
+    _sceneName: Stage01
+  - _stageId: 2
+    _colliders: {fileID: 4900000, guid: 0ae7f38992e1a4d7e96a7a8190f75023, type: 3}
+    _navMesh: {fileID: 4900000, guid: ce8bd64e232e449dc8d368a75c9dee81, type: 3}
+    _sceneName: Stage02
   _dataAsset: {fileID: 4900000, guid: 11a37c05526bf4fed87326fb25f7100f, type: 3}

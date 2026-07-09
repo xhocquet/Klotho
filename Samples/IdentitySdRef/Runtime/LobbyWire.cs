@@ -24,6 +24,13 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public const byte RedeemResponse = 4;
         public const byte ServerRegister = 5; // dedi → lobby: startup/reconnect endpoint + capacity advertise (one-way)
         public const byte RoomReport     = 6; // dedi → lobby: periodic heartbeat + on-change room occupancy/state (one-way)
+        public const byte ReservePush    = 7; // lobby → dedi: reserve a room's match config (stageId + payload) before the client connects
+        public const byte ReserveAck     = 8; // dedi → lobby: confirm/refuse a ReservePush (gates the deferred IssueResponse)
+
+        // ReserveAck nak reason (ok=false). ok=true → None.
+        public const byte ReserveNakNone          = 0;
+        public const byte ReserveNakRoomRange     = 1; // roomId outside the server's room range
+        public const byte ReserveNakMatchConflict = 2; // room already materialized (active) for a different match
 
         // RoomReport room-state byte = CORE RoomState integer values (NOT the lobby's own RoomState, which
         // differs: lobby Reserved=1 vs core Active=1). The lobby MUST MAP these to its reconcile logic, never
@@ -223,6 +230,70 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                     rooms[i].PlayerCount = r.ReadInt32();
                 }
                 m.RequestId = requestId; m.ServerId = serverId; m.Rooms = rooms; m.RoomCount = roomCount;
+                return true;
+            }
+            catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)
+        }
+
+        // ── ReservePush (lobby → dedi) ──────────────────────────────────────────
+        // Reserves a room's match config so the dedi's IMatchConfigSource can resolve it at CreateRoomAt,
+        // before the client (holding the lobby ticket) connects. matchConfigData is opaque (game-owned),
+        // length-prefixed like RedeemResponse.entitlement.
+        public static byte[] EncodeReservePush(int requestId, int roomId, string matchId, int stageId,
+                                               byte[] matchConfigData, long reservationExpiresAt)
+        {
+            int mcdLen = matchConfigData?.Length ?? 0;
+            var buf = new byte[1 + 4 + 4 + Str(matchId) + 4 + (4 + mcdLen) + 8];
+            var w = new SpanWriter(buf);
+            w.WriteByte(ReservePush); w.WriteInt32(requestId);
+            w.WriteInt32(roomId); w.WriteString(matchId); w.WriteInt32(stageId);
+            w.WriteBytes(matchConfigData); // null → length 0
+            w.WriteInt64(reservationExpiresAt);
+            return buf;
+        }
+
+        public struct ReservePushMsg
+        {
+            public int RequestId; public int RoomId; public string MatchId; public int StageId;
+            public byte[] MatchConfigData; public long ReservationExpiresAt;
+        }
+        public static bool TryDecodeReservePush(byte[] data, int length, out ReservePushMsg m)
+        {
+            m = default;
+            try
+            {
+                var r = new SpanReader(data, 0, length);
+                if (r.ReadByte() != ReservePush) return false;
+                m.RequestId = r.ReadInt32();
+                m.RoomId = r.ReadInt32(); m.MatchId = r.ReadString(); m.StageId = r.ReadInt32();
+                var span = r.ReadBytes();
+                if (span.Length > 0) m.MatchConfigData = span.ToArray();
+                m.ReservationExpiresAt = r.ReadInt64();
+                return true;
+            }
+            catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)
+        }
+
+        // ── ReserveAck (dedi → lobby) ───────────────────────────────────────────
+        public static byte[] EncodeReserveAck(int requestId, bool ok, byte nakReason)
+        {
+            var buf = new byte[1 + 4 + 1 + 1];
+            var w = new SpanWriter(buf);
+            w.WriteByte(ReserveAck); w.WriteInt32(requestId);
+            w.WriteBool(ok); w.WriteByte(nakReason);
+            return buf;
+        }
+
+        public struct ReserveAckMsg { public int RequestId; public bool Ok; public byte NakReason; }
+        public static bool TryDecodeReserveAck(byte[] data, int length, out ReserveAckMsg m)
+        {
+            m = default;
+            try
+            {
+                var r = new SpanReader(data, 0, length);
+                if (r.ReadByte() != ReserveAck) return false;
+                m.RequestId = r.ReadInt32();
+                m.Ok = r.ReadBool(); m.NakReason = r.ReadByte();
                 return true;
             }
             catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)

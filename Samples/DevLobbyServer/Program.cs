@@ -6,6 +6,7 @@ using xpTURN.Klotho.Network;              // DeliveryMethod
 using xpTURN.Klotho.LiteNetLib;           // LiteNetLibTransport
 using xpTURN.Klotho.Samples.Identity;     // BcEd25519Backend, LobbyTicket
 using xpTURN.Klotho.Samples.Identity.Sd;  // DevLobbyCore, SdDevIdentity, LobbyWire, RedeemResult
+using Brawler;                            // BrawlerMatchConfig / BrawlerMatchConfigData (MatchConfigData codec)
 
 // Dev lobby stand-in — a plain net8.0 console process, NOT a game server. Holds the Ed25519 private key
 // (issuance) and the redeem authority (nonce consume / idempotency / match↔server binding) via
@@ -47,31 +48,59 @@ if (!transport.Listen("0.0.0.0", port, maxConnections: 64))
 // Anti-overflow sanity bound for roomReport decode (not a capacity policy — see use site below).
 const int RoomReportRoomCap = 1024;
 
+// Two-phase issue coordinator — reserves a room, pushes its match config to the dedi (ReservePush),
+// and defers the IssueResponse until the dedi confirms (ReserveAck).
+const long AckTimeoutMs = 2000; // ReserveAck wait before rollback → IssueFull
+var coordinator = new DevLobbyReserveCoordinator(
+    lobby, now, () => Guid.NewGuid().ToString("N"),
+    send: (peerId, wire) => transport.Send(peerId, wire, DeliveryMethod.ReliableOrdered),
+    configPolicy: MatchStagePolicy, // matchId → stage: the lobby owns each match's config (dev policy below)
+    ticketValidityMs: SdDevIdentity.TicketValidityMs, ackTimeoutMs: AckTimeoutMs, logger: logger);
+
+// Dev stage policy: the matchId's trailing ASCII digit selects the stage (…-1 → stage 1, …-2 → stage 2), so a
+// distinct matchId picks a distinct stage regardless of which room the lobby assigns — a single 2-player
+// match can demo any stage. No/'0' trailing digit → stage 1 (the default). The digit is ASCII-only and clamped
+// to [1, MaxDevStage] (below) so a crafted matchId (e.g. a non-ASCII digit, or a huge digit) can't drive a
+// huge stage/botCount — botCount = stage feeds the dedi's bot spawn, which is otherwise unbounded.
+static (int stageId, byte[] payload) MatchStagePolicy(string matchId, int roomId)
+{
+    const int MaxDevStage = 2; // Brawler demo bakes Stage01/Stage02 — clamp so a crafted matchId can't over-spawn
+    int stage = 1;
+    if (!string.IsNullOrEmpty(matchId))
+    {
+        char last = matchId[matchId.Length - 1];
+        // ASCII digits only — char.IsDigit accepts ANY Unicode decimal digit (e.g. fullwidth '３' U+FF13),
+        // and 'fullwidth - ascii0' yields a huge value → huge stage/botCount → unbounded bot spawn on the dedi.
+        if (last >= '0' && last <= '9')
+        {
+            int d = last - '0';
+            if (d >= 1) stage = Math.Min(d, MaxDevStage); // clamp: a digit past the demo's stage count caps at MaxDevStage
+        }
+    }
+    // Dev policy: botCount = stage (a stage-2 match gets 2 bots), so the lobby exercises the MatchConfigData
+    // channel too, not just stageId. MatchConfigData is produced via Brawler's own codec (BrawlerMatchConfig
+    // .Encode) — the dedi/client read it with the same codec, so there is no hand-rolled wire layout to keep
+    // in sync. (This couples the dev lobby to the Brawler sample's config type; see the csproj Compile note.)
+    int botCount = stage;
+    byte[] payload = BrawlerMatchConfig.Encode(new BrawlerMatchConfigData { BotCount = botCount });
+    return (stage, payload);
+}
+
 transport.OnDataReceived += (peerId, data, len) =>
 {
     byte kind = LobbyWire.PeekKind(data, len);
     if (kind == LobbyWire.IssueRequest && LobbyWire.TryDecodeIssueRequest(data, len, out var ir))
     {
-        // Dev policy: account == authToken (no real auth). The nonce is generated (it is the reservation
-        // key) BEFORE assignment; the ticket is minted with that nonce only on a successful assign.
-        long t = now();
-        long expiresAt = t + SdDevIdentity.TicketValidityMs;
-        string nonce = Guid.NewGuid().ToString("N");
-        var assign = lobby.TryAssign(ir.MatchId, nonce, expiresAt);
-        if (!assign.Ok)
-        {
-            transport.Send(peerId, LobbyWire.EncodeIssueResponse(ir.RequestId, LobbyWire.IssueFull,
-                string.Empty, string.Empty, 0, -1, LobbyWire.ModeSd), DeliveryMethod.ReliableOrdered);
-            logger.KInformation($"[DevLobby] issue FULL account={ir.AuthToken} match={ir.MatchId}");
-        }
-        else
-        {
-            var ticket = new LobbyTicket(ir.AuthToken, ir.DisplayName, ir.MatchId, t, expiresAt, nonce);
-            string wire = lobby.Issue(ticket);
-            transport.Send(peerId, LobbyWire.EncodeIssueResponse(ir.RequestId, LobbyWire.IssueOk,
-                wire, assign.Host, assign.Port, assign.RoomId, LobbyWire.ModeSd), DeliveryMethod.ReliableOrdered);
-            logger.KInformation($"[DevLobby] issue account={ir.AuthToken} match={ir.MatchId} → {assign.Host}:{assign.Port} room={assign.RoomId}");
-        }
+        // Dev policy: account == authToken (no real auth). The coordinator reserves a room, pushes its match
+        // config to the dedi, and defers the response until ReserveAck (two-phase); the ticket is minted only
+        // on commit (a rolled-back reserve never issues one → no orphan-nonce redeem).
+        coordinator.HandleIssue(ir.RequestId, peerId, ir.AuthToken, ir.DisplayName, ir.MatchId);
+    }
+    else if (kind == LobbyWire.ReserveAck && LobbyWire.TryDecodeReserveAck(data, len, out var ack))
+    {
+        // dedi → lobby: confirm/refuse a ReservePush → commit + issue, or rollback + Full (all participants).
+        // peerId is verified against the pending's target dedi so a client can't forge acks for another's reserve.
+        coordinator.HandleReserveAck(peerId, ack.RequestId, ack.Ok, ack.NakReason);
     }
     else if (kind == LobbyWire.RedeemRequest && LobbyWire.TryDecodeRedeemRequest(data, len, out var rr))
     {
@@ -83,6 +112,7 @@ transport.OnDataReceived += (peerId, data, len) =>
     {
         // dedi → lobby: capacity/endpoint advertise + reconnect-restore (one-way, no reply). Logs in core.
         lobby.HandleServerRegister(sr.ServerId, sr.Host, sr.Port, sr.MaxRooms, sr.MaxPlayersPerRoom, peerId);
+        coordinator.RePushReservations(sr.ServerId, peerId); // reconnect-restore: re-push active reservations (fire-and-forget)
     }
     // Decode cap is an anti-overflow sanity bound (not a capacity policy) — generous so a dedi reporting many
     // rooms (e.g. Brawler's multi-room) isn't silently dropped; the authoritative per-server capacity is
@@ -100,6 +130,7 @@ transport.OnDataReceived += (peerId, data, len) =>
 transport.OnPeerDisconnected += disconnectedPeerId =>
 {
     lobby.HandleServerDisconnect(disconnectedPeerId);
+    coordinator.HandleClientDisconnect(disconnectedPeerId); // roll back any deferred issue for this client
 };
 
 logger.KInformation($"[DevLobby] listening on {port} — match '{SdDevIdentity.DevMatchId}' → server '{SdDevIdentity.DevServerId}'");
@@ -109,7 +140,9 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; running = false; };
 while (running)
 {
     transport.PollEvents();
-    lobby.Sweep(now()); // reclaim expired reservations / consumed nonces, restore drained Empty rooms
+    long tick = now();
+    lobby.Sweep(tick);              // reclaim expired reservations / consumed nonces, restore drained Empty rooms
+    coordinator.SweepTimeouts(tick); // roll back deferred issues whose ReserveAck never arrived → IssueFull
     Thread.Sleep(15);
 }
 transport.Disconnect();

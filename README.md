@@ -21,6 +21,7 @@ A deterministic-simulation framework supporting Client-Side Prediction (CSP), Ro
 | Area | Contents |
 | ---- | ---- |
 | **Network Models** | P2P Lockstep · Rollback + Client Prediction · Server-Driven (Authoritative) · Dedicated Server · Spectator · Late Join · Reconnect |
+| **Rooms & Match Config** | Multi-room dedicated server · per-room stage (`StageId`) + opaque per-match config (`MatchConfigData`) via `IMatchConfigSource` — one server hosts rooms on different stages · lobby room reservation (reserve-before-connect) |
 | **Deterministic Math** | `FP64` (32.32 fixed-point) · `FPVector2/3/4` · `FPQuaternion` · `FPMatrix` · LUT/CORDIC-based trigonometry · `DeterministicRandom` (Xorshift128+) |
 | **Physics** | `FPPhysicsWorld` · Broadphase (SpatialGrid) · Narrowphase · CCD (Sweep) · Constraint Solver · Joints · Triggers · Static BVH |
 | **Navigation** | `FPNavMesh` · A* (triangle graph) · Funnel (SSFA) · ORCA avoidance · ECS-integrated `NavAgentComponent` |

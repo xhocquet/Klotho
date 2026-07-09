@@ -186,7 +186,8 @@ namespace Brawler
         public static void RegisterSystems(EcsSimulation simulation, IKLogger logger,
                                            List<IDataAsset> dataAssets = null,
                                            List<FPStaticCollider> staticColliders = null,
-                                           BotFSMSystem botFSMSystem = null)
+                                           BotFSMSystem botFSMSystem = null,
+                                           int stageId = 0)
         {
             // Register assets
             if (dataAssets != null)
@@ -223,7 +224,7 @@ namespace Brawler
             var physicsSystem = new PhysicsSystem(256, FPVector3.Zero);
             physicsSystem.SetSkipStaticGroundResponse(true);
             if (staticColliders != null)
-                physicsSystem.LoadStaticColliders("BrawlerScene", staticColliders);
+                physicsSystem.LoadStaticColliders($"Stage{stageId}", staticColliders);
             simulation.AddSystem(physicsSystem, SystemPhase.Update);
             platformerCommandSystem.SetRayCaster(physicsSystem);
             if (botFSMSystem != null)

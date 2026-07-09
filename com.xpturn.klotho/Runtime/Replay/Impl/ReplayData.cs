@@ -38,6 +38,11 @@ namespace xpTURN.Klotho.Replay
         public int EventDispatchWarnMs { get; set; }
         public int TickDriftWarnMultiplier { get; set; }
 
+        // --- Multi-stage ---
+
+        public int StageId { get; set; }
+        public byte[] MatchConfigData { get; set; }
+
         // --- Game-specific custom data ---
 
         public byte[] GameCustomData { get; set; }
@@ -70,6 +75,8 @@ namespace xpTURN.Klotho.Replay
             ServerSnapshotRetentionTicks = config.ServerSnapshotRetentionTicks;
             EventDispatchWarnMs = config.EventDispatchWarnMs;
             TickDriftWarnMultiplier = config.TickDriftWarnMultiplier;
+            StageId = config.StageId;
+            MatchConfigData = config.MatchConfigData;
         }
 
         /// <summary>
@@ -92,6 +99,8 @@ namespace xpTURN.Klotho.Replay
                 ServerSnapshotRetentionTicks = ServerSnapshotRetentionTicks,
                 EventDispatchWarnMs = EventDispatchWarnMs,
                 TickDriftWarnMultiplier = TickDriftWarnMultiplier,
+                StageId = StageId,
+                MatchConfigData = MatchConfigData,
             };
         }
 
@@ -106,6 +115,8 @@ namespace xpTURN.Klotho.Replay
             size += 4 + (GameCustomData?.Length ?? 0);
             // InitialStateSnapshot length prefix (4) + data
             size += 4 + (InitialStateSnapshot?.Length ?? 0);
+            // V2: StageId(4) + MatchConfigData length prefix(4) + data
+            size += 4 + 4 + (MatchConfigData?.Length ?? 0);
             return size;
         }
 
@@ -133,6 +144,13 @@ namespace xpTURN.Klotho.Replay
             writer.WriteInt32(ServerSnapshotRetentionTicks);
             writer.WriteInt32(EventDispatchWarnMs);
             writer.WriteInt32(TickDriftWarnMultiplier);
+
+            // Multi-stage
+            writer.WriteInt32(StageId);
+            int matchCfgLen = MatchConfigData?.Length ?? 0;
+            writer.WriteInt32(matchCfgLen);
+            if (matchCfgLen > 0)
+                writer.WriteRawBytes(MatchConfigData);
 
             // Game-specific custom data (length prefix + data)
             int customLen = GameCustomData?.Length ?? 0;
@@ -171,6 +189,12 @@ namespace xpTURN.Klotho.Replay
             ServerSnapshotRetentionTicks = reader.ReadInt32();
             EventDispatchWarnMs = reader.ReadInt32();
             TickDriftWarnMultiplier = reader.ReadInt32();
+
+            // Multi-stage
+            StageId = reader.ReadInt32();
+            int matchCfgLen = reader.ReadInt32();
+            if (matchCfgLen > 0 && reader.Remaining >= matchCfgLen)
+                MatchConfigData = reader.ReadRawBytes(matchCfgLen).ToArray();
 
             // Game-specific custom data
             int customLen = reader.ReadInt32();

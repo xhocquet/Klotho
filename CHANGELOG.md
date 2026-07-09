@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.4] - 2026-07-08
+
+### Multiple stages per dedicated server
+
+- **One dedicated server can now run its rooms on different stages.** Each match's stage is chosen by the authority — the dedicated server, or the lobby when one is wired, or the host in peer-to-peer — and travels to every peer on the same config channel that already carries the random seed and session settings, so a joiner builds the exact stage the authority picked without any client-side lookup. A game selects its stage assets (geometry, navmesh, layout) from the received `StageId`. `StageId` 0 is the default single stage, so a single-stage game is unaffected.
+- **Per-room match config is resolved through a new `IMatchConfigSource` seam.** At room-creation time the server's source returns that room's stage plus an opaque per-match payload, or declines the room — in which case creation is refused and the client is turned away with room-not-found rather than a room being created blind. A lobbyless `StaticMatchConfigSource` maps room ids to stages from a fixed table; a lobby-backed source is filled from reservations (below). With no source wired, every room is created open exactly as before.
+- **A match can carry opaque, game-defined dynamic config.** Alongside the stage selector, `MatchConfigData` (a raw `byte[]`) lets the authority set per-match knobs — game mode, rules, difficulty, bot count — which the game decodes and applies deterministically while seeding the world. The engine carries only the bytes; their shape and meaning belong to the game. Empty by default, so it stays a no-op until a game uses it.
+
+### Lobby room reservation
+
+- **The reference dedicated-server lobby now reserves a room's match config before the player connects.** When the lobby assigns a room it pushes that room's stage and match config to the server and waits for the server to confirm before handing the player a ticket, so a player only ever receives an endpoint for a room the server has already set up. A room the lobby never reserved is refused, which stops an unauthenticated peer from claiming a room ahead of the players the lobby placed there. Only the assigned server can confirm its own reservation; a reconnecting server has its active reservations re-pushed; and a ticket is minted only once the reservation commits, so a reservation that rolls back never leaves a usable ticket behind.
+
+### Replays
+
+- **A replay now records the match's stage and dynamic config**, so a recorded multi-stage match plays back on the stage it was actually played on. Replay files written by earlier versions may not load and should be re-recorded.
+
+### API additions
+
+- **`IMatchConfigSource`, `MatchConfigContext`, and `StaticMatchConfigSource` are new** for resolving a room's stage and match config at creation time.
+- **`RoomManagerConfigBuilder` gained a match-aware callbacks constructor, `WithMatchConfigSource`, and per-match `WithSimulationConfig` / `WithSessionConfig` / `WithCallbacks` overloads**, so a server can build each room from its resolved match config. The existing plain constructor and the value/factory overloads are unchanged.
+
+### Breaking changes
+
+- **`ISimulationConfig` gained `StageId` and `MatchConfigData` (both get-only).** A custom implementation must add them; the built-in `SimulationConfig` and the Unity and Godot config assets already carry them, so only hand-rolled implementers are affected.
+
+### Samples
+
+- **Brawler demonstrates multiple stages across both dedicated-server and peer-to-peer.** Each stage's baked colliders and navmesh drive the deterministic simulation while an additive scene supplies its visuals; the dedicated server assigns a stage per room, the host chooses one in peer-to-peer, and the client builds whichever stage it receives. Static-geometry fingerprints confirm the stages differ and every peer in a match agrees. Brawler also carries a per-match bot count over the dynamic-config channel as a worked example.
+- **The Godot dedicated-server and peer-to-peer samples parameterize their stage as well**, with runtime fingerprint and hash checks confirming per-stage divergence and cross-peer agreement.
+- **The dev lobby derives a demo stage and bot count per match** from the requested match id, exercising both the stage selector and the dynamic-config channel end to end.
+
 ## [0.5.3] - 2026-07-05
 
 ### Sample identity — dependency-free Ed25519

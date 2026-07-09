@@ -130,6 +130,21 @@ namespace xpTURN.Klotho.Core
         /// <inheritdoc />
         public int TickDriftWarnMultiplier { get; set; } = 2;
 
+        // --- Multi-stage ---
+
+        /// <inheritdoc />
+        public int StageId { get; set; } = 0;
+
+        /// <inheritdoc />
+        public byte[] MatchConfigData { get; set; } = null;
+
+        /// <summary>
+        /// Per-room shallow copy. Used when a per-room match config is stamped (StageId/MatchConfigData)
+        /// so a shared config instance is not mutated across rooms with different stages. MatchConfigData
+        /// is treated as immutable (opaque), so a reference copy is safe.
+        /// </summary>
+        public SimulationConfig Clone() => (SimulationConfig)MemberwiseClone();
+
         /// <summary>
         /// Enforces config invariants. Currently: ReactiveMax ≤ MaxRollbackTicks/2
         /// — the reactive escalation ceiling must not exceed the rollback-budget clamp, else the client

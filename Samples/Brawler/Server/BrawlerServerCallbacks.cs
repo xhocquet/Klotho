@@ -22,13 +22,15 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
 
         private readonly int _maxPlayers;
         private readonly int _botCount;
+        private readonly int _stageId;
 
         public BrawlerServerCallbacks(IKLogger logger,
                                         List<FPStaticCollider> staticColliders,
                                         FPNavMesh navMesh,
                                         int maxPlayers,
                                         int botCount,
-                                        List<IDataAsset> dataAssets = null)
+                                        List<IDataAsset> dataAssets = null,
+                                        int stageId = 0)
         {
             _logger = logger;
             _staticColliders = staticColliders;
@@ -37,6 +39,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
 
             _maxPlayers = maxPlayers;
             _botCount = botCount;
+            _stageId = stageId;
         }
 
         public void RegisterSystems(EcsSimulation simulation)
@@ -52,7 +55,7 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
             botFSMSystem = new BotFSMSystem(agentSystem);
             botFSMSystem.SetQuery(query);
 
-            BrawlerSimSetup.RegisterSystems(simulation, _logger, _dataAssets, _staticColliders, botFSMSystem);
+            BrawlerSimSetup.RegisterSystems(simulation, _logger, _dataAssets, _staticColliders, botFSMSystem, _stageId);
         }
 
         public void OnInitializeWorld(IKlothoEngine engine)

@@ -71,6 +71,8 @@ namespace xpTURN.Klotho.Network
         [KlothoOrder] public int RollbackWindowTicks;
         [KlothoOrder] public int EventDispatchWarnMs;
         [KlothoOrder] public int TickDriftWarnMultiplier;
+        [KlothoOrder] public int StageId;
+        [KlothoOrder] public byte[] MatchConfigData;
 
         // --- SessionConfig (RandomSeed is excluded since it overlaps with the top-level field, and is back-synced in ToSessionConfig()) ---
 
@@ -125,6 +127,8 @@ namespace xpTURN.Klotho.Network
             RollbackWindowTicks = config.RollbackWindowTicks;
             EventDispatchWarnMs = config.EventDispatchWarnMs;
             TickDriftWarnMultiplier = config.TickDriftWarnMultiplier;
+            StageId = config.StageId;
+            MatchConfigData = config.MatchConfigData;
         }
 
         /// <summary>
@@ -164,6 +168,8 @@ namespace xpTURN.Klotho.Network
                 RollbackWindowTicks = RollbackWindowTicks,
                 EventDispatchWarnMs = EventDispatchWarnMs,
                 TickDriftWarnMultiplier = TickDriftWarnMultiplier,
+                StageId = StageId,
+                MatchConfigData = MatchConfigData,
             };
         }
 

@@ -45,6 +45,14 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             registry.AddServer(SdDevIdentity.DevServerId,
                                SdDevIdentity.DedicatedServerHost, SdDevIdentity.DedicatedServerPort,
                                SdDevIdentity.MaxRooms, SdDevIdentity.MaxPlayersPerRoom);
+            // The real dedi connects and registers (serverRegister → HandleServerRegister sets PeerId +
+            // Available=true). Until then keep the seed unavailable so TryAssign does not hand out a room on a
+            // server with no live peer (PeerId=-1): the two-phase ReservePush would go to peer -1, be dropped,
+            // and the client would get IssueFull only after the ack timeout. Unavailable → immediate Full
+            // (no phantom reservation), self-healing once the dedi registers. UnavailableSinceMs stays 0 so
+            // SweepServers' reconnect-grace reclaim never fires on the never-yet-available seed. (AddServer
+            // keeps Available=true because P0 tests / the in-proc fake seed via it and never register.)
+            registry.Servers[SdDevIdentity.DevServerId].Available = false;
             return new DevLobbyCore(CreateIssuer(backend), backend, verifyKey, nowUnixMs,
                                     SdDevIdentity.IdempotencyWindowMs, registry,
                                     logger: logger); // optional report-channel observability

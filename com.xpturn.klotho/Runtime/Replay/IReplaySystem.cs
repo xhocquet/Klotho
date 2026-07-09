@@ -69,6 +69,12 @@ namespace xpTURN.Klotho.Replay
         /// <summary>Random seed used by the game</summary>
         int RandomSeed { get; }
 
+        /// <summary>Multi-stage stage identifier. 0 for V1 replays. Also recoverable via <see cref="ToSimulationConfig"/>.</summary>
+        int StageId { get; }
+
+        /// <summary>Multi-stage match config payload. Null for V1 replays. Also recoverable via <see cref="ToSimulationConfig"/>.</summary>
+        byte[] MatchConfigData { get; }
+
         /// <summary>Game-specific custom metadata. Sample serializes it in the desired format and injects it.</summary>
         byte[] GameCustomData { get; }
 

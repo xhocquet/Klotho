@@ -37,6 +37,10 @@ namespace xpTURN.Samples.P2pSample
 		private Task<KlothoSession>   _joinTask;
 		private bool _joining;
 
+		// Host-chosen stage (CLI: -- stage=N). The host authors SimulationConfig, so it stamps StageId here;
+		// the guest receives it via SimulationConfig (multi-stage demo: host stage=1 → 6×6 ground).
+		private int  _stageId;
+
 		// Headless self-test hook (CLI: -- host | -- join). 0=interactive (menu-driven).
 		private int  _autoMode;       // 1=host, 2=join
 		private bool _autoReadySent;
@@ -58,8 +62,10 @@ namespace xpTURN.Samples.P2pSample
 			_hud  = GetNode<GodotP2pHud>("UILayer/Hud");
 			_viewCallbacks = new GodotP2pViewCallbacks(_hud);
 
+			// s = SimulationConfig for this session: the host's own config (host authors it, see OnHost) or
+			// the config received from the host (guest). s.StageId selects the stage both sides build.
 			var flowBuilder = new KlothoFlowSetupBuilder((s, ss) =>
-						new SessionCallbacks(new P2pSimulationCallbacks(_input), _viewCallbacks))
+						new SessionCallbacks(new P2pSimulationCallbacks(_input, s.StageId), _viewCallbacks))
 					.WithLogger(_logger)
 					.WithTransport(_transport)
 					.WithAssetRegistry(_registry)
@@ -97,6 +103,11 @@ namespace xpTURN.Samples.P2pSample
 
 			foreach (var a in OS.GetCmdlineUserArgs())
 			{
+				if (a.StartsWith("stage=", StringComparison.Ordinal) && int.TryParse(a.Substring("stage=".Length), out int st))
+					_stageId = st;
+			}
+			foreach (var a in OS.GetCmdlineUserArgs())
+			{
 				if (a == "host") { _autoMode = 1; OnHost(); }
 				else if (a == "join") { _autoMode = 2; OnJoin(); }
 			}
@@ -105,6 +116,8 @@ namespace xpTURN.Samples.P2pSample
 		private void OnHost()
 		{
 			if (_session != null) return;
+			// Host authors the SimulationConfig — stamp the chosen stage so it propagates to guests.
+			if (_simCfg is SimulationConfig sc) sc.StageId = _stageId;
 			_session = _flow.StartHostAndListen(_simCfg, _sesCfg, "Game", _menu.Host, _menu.Port);
 			if (_session == null) return; // listen failure — framework already tore down
 			OnSessionReady();

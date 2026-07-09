@@ -104,7 +104,9 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                     {
                         slot0.Reserved++;
                         _registry.ReservationLedger[nonce] = new LobbyRoomRegistry.Reservation(matchId, loc.ServerId, loc.RoomId, ticketExpiresAt);
-                        return AssignResult.Assigned(srv0, loc.RoomId);
+                        // step-1: reuse. AckPending mirrors the room's current state — false = committed (step-1a,
+                        // respond immediately), true = still awaiting the room's first ReserveAck (step-1b, join as waiter).
+                        return AssignResult.Assigned(srv0, loc.RoomId, freshReserve: false, ackPending: slot0.AckPending);
                     }
                     return AssignResult.Full; // same match, room full → cannot spill (one room serves one match)
                 }
@@ -121,12 +123,78 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                         slot.SessionId = matchId;
                         slot.Reserved = 1;
                         slot.Occupied = 0;
+                        slot.AckPending = true; // step-2: tentative until the dedi's ReserveAck confirms it
                         _registry.MatchLedger[matchId] = (srv.ServerId, roomId);
                         _registry.ReservationLedger[nonce] = new LobbyRoomRegistry.Reservation(matchId, srv.ServerId, roomId, ticketExpiresAt);
-                        return AssignResult.Assigned(srv, roomId);
+                        return AssignResult.Assigned(srv, roomId, freshReserve: true, ackPending: true);
                     }
                 }
                 return AssignResult.Full; // all rooms occupied
+            }
+        }
+
+        // ── two-phase reservation commit/rollback (paired with the deferred issue coordinator) ──
+
+        /// <summary>Commits a tentative reservation: clears the room's AckPending (ReserveAck ok). After this,
+        /// same-match joins (step-1a) respond immediately. No-op if the room is gone. Returns true if cleared.</summary>
+        public bool CommitReservation(string serverId, int roomId)
+        {
+            lock (_lock)
+            {
+                if (_registry.Servers.TryGetValue(serverId, out var srv)
+                    && roomId >= 0 && roomId < srv.Rooms.Length)
+                {
+                    srv.Rooms[roomId].AckPending = false;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        /// <summary>Active (Reserved-but-not-materialized) room reservations for a server — the set the dedi
+        /// must re-learn on reconnect (re-push). One entry per room: (roomId, matchId, latest ticket expiry).</summary>
+        public List<(int roomId, string matchId, long expiresAt)> ActiveRoomReservations(string serverId)
+        {
+            var result = new List<(int, string, long)>();
+            lock (_lock)
+            {
+                if (!_registry.Servers.TryGetValue(serverId, out var srv)) return result;
+                for (int roomId = 0; roomId < srv.Rooms.Length; roomId++)
+                {
+                    var slot = srv.Rooms[roomId];
+                    if (slot.State != LobbyRoomRegistry.RoomState.Reserved || slot.SessionId == null) continue;
+                    long exp = 0;
+                    foreach (var kv in _registry.ReservationLedger)
+                        if (string.Equals(kv.Value.ServerId, serverId, StringComparison.Ordinal)
+                            && kv.Value.RoomId == roomId && kv.Value.ExpiresAt > exp)
+                            exp = kv.Value.ExpiresAt;
+                    result.Add((roomId, slot.SessionId, exp));
+                }
+            }
+            return result;
+        }
+
+        /// <summary>Rolls back a single tentative reservation by nonce (ReserveAck nak / timeout / client dc):
+        /// removes the ledger entry, decrements Reserved, and restores the room to Empty when it holds no
+        /// reservations/occupants left (clearing MatchLedger + AckPending). Mirrors SweepReservations' per-entry
+        /// reclaim. No-op if the nonce is unknown (already committed/redeemed/swept).</summary>
+        public void ReleaseReservation(string nonce)
+        {
+            lock (_lock)
+            {
+                if (!_registry.ReservationLedger.TryGetValue(nonce, out var resv)) return;
+                _registry.ReservationLedger.Remove(nonce);
+                if (!_registry.Servers.TryGetValue(resv.ServerId, out var srv)
+                    || resv.RoomId < 0 || resv.RoomId >= srv.Rooms.Length) return;
+                var slot = srv.Rooms[resv.RoomId];
+                if (slot.Reserved > 0) slot.Reserved--;
+                if (slot.State == LobbyRoomRegistry.RoomState.Reserved && slot.Reserved == 0 && slot.Occupied == 0)
+                {
+                    if (slot.SessionId != null) _registry.MatchLedger.Remove(slot.SessionId);
+                    slot.SessionId = null;
+                    slot.AckPending = false;
+                    slot.State = LobbyRoomRegistry.RoomState.Empty;
+                }
             }
         }
 
@@ -175,11 +243,17 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             public readonly int RoomId;
             public readonly string Host;
             public readonly int Port;
-            private AssignResult(bool ok, string serverId, int roomId, string host, int port)
-            { Ok = ok; ServerId = serverId; RoomId = roomId; Host = host; Port = port; }
-            public static readonly AssignResult Full = new AssignResult(false, null, -1, string.Empty, 0);
-            public static AssignResult Assigned(LobbyRoomRegistry.ServerEntry srv, int roomId)
-                => new AssignResult(true, srv.ServerId, roomId, srv.Host, srv.Port);
+            public readonly int ServerPeerId;  // dedi transport peerId (target for ReservePush); -1 = none
+            public readonly bool FreshReserve;  // true = step-2 (new Empty room reserved) → needs ReservePush;
+                                                // false = step-1 (reused an existing room for this match)
+            public readonly bool AckPending;    // the assigned room is reserved-but-unconfirmed (awaiting ReserveAck)
+            private AssignResult(bool ok, string serverId, int roomId, string host, int port,
+                                 int serverPeerId, bool freshReserve, bool ackPending)
+            { Ok = ok; ServerId = serverId; RoomId = roomId; Host = host; Port = port;
+              ServerPeerId = serverPeerId; FreshReserve = freshReserve; AckPending = ackPending; }
+            public static readonly AssignResult Full = new AssignResult(false, null, -1, string.Empty, 0, -1, false, false);
+            public static AssignResult Assigned(LobbyRoomRegistry.ServerEntry srv, int roomId, bool freshReserve, bool ackPending)
+                => new AssignResult(true, srv.ServerId, roomId, srv.Host, srv.Port, srv.PeerId, freshReserve, ackPending);
         }
 
         // ── Redeem (game server → lobby). Authoritative: nonce consume, expiry, match↔server binding. ──
