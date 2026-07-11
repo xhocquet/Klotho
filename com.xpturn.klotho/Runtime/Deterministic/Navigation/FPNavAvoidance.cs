@@ -60,7 +60,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
         /// <summary>
         /// Computes the ORCA half-plane between agents using FP64 fixed-point arithmetic.
         /// </summary>
-        private static bool ComputeAgentOrcaLine(FPVector2 relPos, FPVector2 relVel,
+        private static bool ComputeAgentOrcaLine(FPVector2 agentVelocity, FPVector2 relPos, FPVector2 relVel,
             FP64 combinedRadius, FP64 timeHorizon, FP64 dt, out FPOrcaLine line)
         {
             line = default;
@@ -141,7 +141,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             }
 
             // ORCA: shared responsibility (1/2 each)
-            line.point = u * FP64.Half;
+            line.point = agentVelocity + u * FP64.Half;
             return true;
         }
 
@@ -163,16 +163,24 @@ namespace xpTURN.Klotho.Deterministic.Navigation
 
                 ref var other = ref frame.Get<NavAgentComponent>(entities[i]);
 
+                FP64 combinedRadius = agent.Radius + other.Radius;
                 FPVector2 relPos = other.Position.ToXZ() - agentPosXZ;
+                if (relPos.sqrMagnitude <= EPSILON)
+                {
+                    FP64 fallbackDistance = combinedRadius * FP64.FromDouble(0.9);
+                    relPos = i < agentIdx
+                        ? new FPVector2(-fallbackDistance, FP64.Zero)
+                        : new FPVector2(fallbackDistance, FP64.Zero);
+                }
+
                 FP64 distSqr = relPos.sqrMagnitude;
 
                 if (distSqr > neighborDistSqr)
                     continue;
 
                 FPVector2 relVel = agent.Velocity - other.Velocity;
-                FP64 combinedRadius = agent.Radius + other.Radius;
 
-                if (ComputeAgentOrcaLine(relPos, relVel, combinedRadius, TimeHorizon, dt,
+                if (ComputeAgentOrcaLine(agent.Velocity, relPos, relVel, combinedRadius, TimeHorizon, dt,
                     out FPOrcaLine line))
                 {
                     _orcaLines[_orcaLineCount++] = line;
