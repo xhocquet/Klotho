@@ -1,11 +1,18 @@
 # Changelog
 
-## [0.5.5] - 2026-07-10
+## [0.5.5] - 2026-07-11
 
 ### Navigation — ORCA avoidance fixes
 
 - **Fixed the ORCA half-plane missing the agent's own velocity offset.** `ComputeAgentOrcaLine` anchored each half-plane at `u * 0.5` instead of `agentVelocity + u * 0.5`, so every constraint was shifted toward the origin and the linear program could accept velocities that don't actually satisfy reciprocal avoidance with the neighbor. Coincident agents (near-zero relative position) now get a small, deterministic separation nudge instead of an undefined direction.
 - **`MAX_NEIGHBORS` is now enforced when building ORCA lines.** The constant existed but nothing bounded the neighbor loop, so on a crowded scene the ORCA lines came from whichever in-range neighbors were iterated first rather than the closest ones. A bounded closest-N selection now feeds the ORCA line pass.
+- **The velocity solver now recovers from an infeasible constraint set instead of giving up.** When the ORCA half-planes can't all be satisfied at once — a deeply overlapping or heavily crowded cluster — the 2D linear program had no fallback and could leave an agent without a proper separating velocity. A three-dimensional program now takes over that case, relaxing to the velocity that minimizes the largest constraint violation, so a crowded agent keeps a sane avoidance velocity and overlapping agents still push apart.
+
+> The half-plane velocity-offset fix and `MAX_NEIGHBORS` enforcement were contributed by xhocquet.
+
+### Navigation — settling a crowd at its destination
+
+- **Agents that stop on top of each other now spread into a non-overlapping cluster.** Velocity-space avoidance only steers agents that are still moving, so a group converging on the same destination — or otherwise stopped in a pile — could stay overlapped indefinitely. A position-space correction pass now runs after avoidance each step, nudging any remaining overlaps apart over a few deterministic iterations, including agents that have already arrived and stopped. It adjusts position only, never velocity or desired velocity, and runs only when avoidance is configured, so a game that doesn't use avoidance is bit-identical to before.
 
 ## [0.5.4] - 2026-07-08
 

@@ -48,10 +48,21 @@ namespace xpTURN.Klotho.Deterministic.Navigation
         private readonly int[] _neighborIndices = new int[MAX_NEIGHBORS];
         private int _neighborCount;
 
+        // Projected constraint buffer for LinearProgram3 (RVO2 projLines) — zero-GC
+        private readonly FPOrcaLine[] _projLines = new FPOrcaLine[MAX_ORCA_LINES];
+        private int _infeasibleCount;
+
         private static readonly FP64 EPSILON = FP64.FromRaw(100);
+        private static readonly FP64 COINCIDENT_FACTOR = FP64.FromDouble(0.9);
+
+        // Parallel threshold for the projLines path (LP3 bisector gate + inner LP narrowing).
+        // Wider than EPSILON by design: keeps bisector intersection quotients in the exact
+        // FP64 Q31.32 range (overflow bound: P·(1 + 2/eps) < ~46,340, worst project P = 36.25).
+        private static readonly FP64 LP3_PARALLEL_EPSILON = FP64.FromDouble(0.01);
 
         public FPOrcaLine[] DebugOrcaLines => _orcaLines;
         public int DebugOrcaLineCount => _orcaLineCount;
+        public int DebugInfeasibleCount => _infeasibleCount;
 
         public FPNavAvoidance()
         {
@@ -62,7 +73,9 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             _orcaLineCount = 0;
         }
 
+        /// <summary>
         /// Maintains a sorted buffer of the MAX_NEIGHBORS closest candidates.
+        /// </summary>
         private void InsertNeighbor(int index, FP64 distSqr)
         {
             if (_neighborCount < MAX_NEIGHBORS)
@@ -219,7 +232,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 FPVector2 relPos = other.Position.ToXZ() - agentPosXZ;
                 if (relPos.sqrMagnitude <= EPSILON)
                 {
-                    FP64 fallbackDistance = combinedRadius * FP64.FromDouble(0.9);
+                    FP64 fallbackDistance = combinedRadius * COINCIDENT_FACTOR;
                     relPos = i < agentIdx
                         ? new FPVector2(-fallbackDistance, FP64.Zero)
                         : new FPVector2(fallbackDistance, FP64.Zero);
@@ -234,48 +247,73 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 }
             }
 
-            return LinearProgram2D(agent.DesiredVelocity, agent.Speed);
+            FPVector2 result = FPVector2.Zero;
+            int lineFail = LinearProgram2D(_orcaLines, _orcaLineCount, agent.Speed,
+                agent.DesiredVelocity, false, EPSILON, ref result);
+            if (lineFail < _orcaLineCount)
+            {
+                _infeasibleCount++;
+                LinearProgram3(lineFail, agent.Speed, ref result);
+            }
+            return result;
         }
 
         /// <summary>
-        /// 2D linear program: finds the velocity closest to desiredVelocity that satisfies all ORCA half-planes.
-        /// Uses incremental constraint addition.
+        /// 2D linear program (RVO2 linearProgram2): finds the velocity closest to optVelocity
+        /// that satisfies all half-planes, using incremental constraint addition.
+        /// Returns the index of the first failing line, or count when all constraints hold.
         /// </summary>
-        private FPVector2 LinearProgram2D(FPVector2 preferredVelocity, FP64 maxSpeed)
+        private static int LinearProgram2D(FPOrcaLine[] lines, int count, FP64 maxSpeed,
+            FPVector2 optVelocity, bool directionOpt, FP64 parallelEpsilon, ref FPVector2 result)
         {
-            FPVector2 result = preferredVelocity;
-
-            // Max speed constraint (circular)
-            FP64 maxSpeedSqr = maxSpeed * maxSpeed;
-            if (result.sqrMagnitude > maxSpeedSqr)
+            if (directionOpt)
             {
-                result = result.normalized * maxSpeed;
+                // optVelocity is a unit direction — maximize along it
+                result = optVelocity * maxSpeed;
             }
-
-            // Add half-plane constraints one by one
-            for (int i = 0; i < _orcaLineCount; i++)
+            else
             {
-                // Left normal of direction = Perpendicular
-                // det < 0 → result violates the half-plane
-                FP64 det = FPVector2.Cross(_orcaLines[i].direction, result - _orcaLines[i].point);
+                result = optVelocity;
 
-                if (det < FP64.Zero)
+                // Max speed constraint (circular)
+                FP64 maxSpeedSqr = maxSpeed * maxSpeed;
+                if (result.sqrMagnitude > maxSpeedSqr)
                 {
-                    FPVector2 newResult = ProjectOntoOrcaLine(i, result, maxSpeed);
-                    result = newResult;
+                    result = result.normalized * maxSpeed;
                 }
             }
 
-            return result;
+            // Add half-plane constraints one by one
+            for (int i = 0; i < count; i++)
+            {
+                // Left normal of direction = Perpendicular
+                // det < 0 → result violates the half-plane
+                FP64 det = FPVector2.Cross(lines[i].direction, result - lines[i].point);
+
+                if (det < FP64.Zero)
+                {
+                    FPVector2 tempResult = result;
+                    if (!ProjectOntoOrcaLine(lines, i, maxSpeed, optVelocity, directionOpt,
+                        parallelEpsilon, ref result))
+                    {
+                        result = tempResult;
+                        return i;
+                    }
+                }
+            }
+
+            return count;
         }
 
         /// <summary>
         /// Projects onto an ORCA line while satisfying all previous constraints and max speed.
         /// RVO2 linearProgram1 approach: clamps to [tLeft, tRight] range.
+        /// Returns false when the constraint is infeasible (result left unchanged).
         /// </summary>
-        private FPVector2 ProjectOntoOrcaLine(int lineIdx, FPVector2 result, FP64 maxSpeed)
+        private static bool ProjectOntoOrcaLine(FPOrcaLine[] lines, int lineIdx, FP64 maxSpeed,
+            FPVector2 optVelocity, bool directionOpt, FP64 parallelEpsilon, ref FPVector2 result)
         {
-            ref FPOrcaLine line = ref _orcaLines[lineIdx];
+            ref FPOrcaLine line = ref lines[lineIdx];
 
             // Intersection range [tLeft, tRight] of the line with the max-speed circle
             FP64 dotProduct = FPVector2.Dot(line.point, line.direction);
@@ -285,7 +323,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             if (discriminant < FP64.Zero)
             {
                 // Line does not intersect the speed circle → no valid projection
-                return result;
+                return false;
             }
 
             FP64 sqrtDisc = FP64.Sqrt(discriminant);
@@ -295,15 +333,15 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             // Narrow [tLeft, tRight] using previous constraints (0..lineIdx-1)
             for (int j = 0; j < lineIdx; j++)
             {
-                FP64 denom = FPVector2.Cross(line.direction, _orcaLines[j].direction);
-                FP64 numer = FPVector2.Cross(_orcaLines[j].direction,
-                    line.point - _orcaLines[j].point);
+                FP64 denom = FPVector2.Cross(line.direction, lines[j].direction);
+                FP64 numer = FPVector2.Cross(lines[j].direction,
+                    line.point - lines[j].point);
 
-                if (FP64.Abs(denom) <= EPSILON)
+                if (FP64.Abs(denom) <= parallelEpsilon)
                 {
                     // Parallel constraints — ignore if same direction, infeasible if opposite
                     if (numer < FP64.Zero)
-                        return result;
+                        return false;
                     continue;
                 }
 
@@ -323,18 +361,83 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 }
 
                 if (tLeft > tRight)
-                    return result;
+                    return false;
             }
 
-            // Clamp the projection of result onto line to [tLeft, tRight]
-            FP64 t = FPVector2.Dot(line.direction, result - line.point);
+            if (directionOpt)
+            {
+                // Maximize along the optVelocity direction (RVO2 linearProgram1 directionOpt)
+                result = FPVector2.Dot(optVelocity, line.direction) > FP64.Zero
+                    ? line.point + line.direction * tRight
+                    : line.point + line.direction * tLeft;
+            }
+            else
+            {
+                // Clamp the projection of result onto line to [tLeft, tRight]
+                FP64 t = FPVector2.Dot(line.direction, result - line.point);
 
-            if (t < tLeft)
-                t = tLeft;
-            else if (t > tRight)
-                t = tRight;
+                if (t < tLeft)
+                    t = tLeft;
+                else if (t > tRight)
+                    t = tRight;
 
-            return line.point + line.direction * t;
+                result = line.point + line.direction * t;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// RVO2 linearProgram3: when the 2D program is infeasible, relaxes to the velocity
+        /// that minimizes the maximum constraint violation (progressive bisector projection).
+        /// </summary>
+        private void LinearProgram3(int beginLine, FP64 maxSpeed, ref FPVector2 result)
+        {
+            FP64 distance = FP64.Zero;
+
+            for (int i = beginLine; i < _orcaLineCount; i++)
+            {
+                // Skip lines whose violation is within the current maximum
+                if (FPVector2.Cross(_orcaLines[i].direction, _orcaLines[i].point - result) <= distance)
+                    continue;
+
+                int projCount = 0;
+                for (int j = 0; j < i; j++)
+                {
+                    FP64 determinant = FPVector2.Cross(_orcaLines[i].direction, _orcaLines[j].direction);
+                    FPOrcaLine line;
+
+                    if (FP64.Abs(determinant) <= LP3_PARALLEL_EPSILON)
+                    {
+                        // Parallel lines — skip if same direction, midpoint if opposing
+                        if (FPVector2.Dot(_orcaLines[i].direction, _orcaLines[j].direction) > FP64.Zero)
+                            continue;
+
+                        line.point = (_orcaLines[i].point + _orcaLines[j].point) * FP64.Half;
+                    }
+                    else
+                    {
+                        line.point = _orcaLines[i].point + _orcaLines[i].direction *
+                            (FPVector2.Cross(_orcaLines[j].direction,
+                                _orcaLines[i].point - _orcaLines[j].point) / determinant);
+                    }
+
+                    // Bisector: boundary where violation(j) <= violation(i)
+                    line.direction = (_orcaLines[j].direction - _orcaLines[i].direction).normalized;
+                    _projLines[projCount++] = line;
+                }
+
+                FPVector2 tempResult = result;
+                FPVector2 optDir = new FPVector2(-_orcaLines[i].direction.y, _orcaLines[i].direction.x);
+                if (LinearProgram2D(_projLines, projCount, maxSpeed, optDir, true,
+                    LP3_PARALLEL_EPSILON, ref result) < projCount)
+                {
+                    // Numerical corner: keep the previous best result (RVO2 verbatim)
+                    result = tempResult;
+                }
+
+                distance = FPVector2.Cross(_orcaLines[i].direction, _orcaLines[i].point - result);
+            }
         }
 
     }

@@ -24,8 +24,31 @@ namespace xpTURN.Klotho.Deterministic.Navigation
         private readonly int[] _corridorBuffer = new int[NavAgentComponent.MAX_CORRIDOR];
 
         /// <summary>
+        /// Upper bound for the position-correction pass buffers. entityCount beyond this is still
+        /// moved by ProcessMovement but not collision-resolved (guarded, no overflow). Callers should
+        /// keep nav agent count within this bound.
+        /// </summary>
+        public const int MAX_AGENTS = 64;
+
+        // Position-correction pass (DetourCrowd-style). Zero-GC pre-allocated buffers.
+        private const int COLLISION_RESOLVE_ITERATIONS = 4;
+        private static readonly FP64 COLLISION_RESOLVE_FACTOR = FP64.FromDouble(0.7);
+        private static readonly FP64 COINCIDENT_PEN = FP64.FromDouble(0.01);
+        private static readonly FP64 POS_EPSILON = FP64.FromRaw(100);
+        private readonly FPVector2[] _disp = new FPVector2[MAX_AGENTS];
+        private readonly int[] _dispWeight = new int[MAX_AGENTS];
+
+        /// <summary>
         /// Distance threshold for waypoint arrival detection.
         /// </summary>
+        /// <remarks>
+        /// Group-convergence guidance: when N agents share one destination and the
+        /// position-correction pass is active, they settle into a non-overlapping cluster whose
+        /// outermost members sit up to ~radius/(2·sin(π/N)) from the shared point (single-ring
+        /// bound; 2D packing is tighter). The pass converges regardless of this value, but to let
+        /// every converging agent register arrival inside the ball, set WaypointThreshold at least
+        /// that large for big same-destination groups (or give agents slightly offset destinations).
+        /// </remarks>
         public FP64 WaypointThreshold;
 
         /// <summary>
@@ -103,6 +126,13 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 ref var nav = ref frame.Get<NavAgentComponent>(entities[i]);
                 ProcessMovement(ref nav, dt);
             }
+
+            // Pass 4: position-based collision resolution.
+            // Complements velocity-space ORCA/LP3 by pushing residual overlaps apart in position
+            // space (incl. Arrived/stopped agents that ORCA does not steer). Gated on avoidance so
+            // non-avoidance configs stay bit-identical to before.
+            if (_avoidance != null)
+                ResolveCollisions(ref frame, entities, entityCount);
         }
 
         private unsafe void ProcessPathRequest(ref NavAgentComponent nav, int currentTick)
@@ -324,6 +354,94 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                     nav.Status = (byte)FPNavAgentStatus.Arrived;
                     nav.Velocity = FPVector2.Zero;
                     nav.DesiredVelocity = FPVector2.Zero;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Position-based collision resolution (RVO2/DetourCrowd style). Iteratively pushes
+        /// overlapping agent pairs apart in position space, compute-then-apply per iteration for
+        /// order-independence. Pushes all states (incl. Arrived) but never writes Velocity, and
+        /// does not re-trigger Arrived agents to Moving. Mesh-clamped per agent.
+        /// </summary>
+        /// <remarks>
+        /// Consumer model: this pass writes only <c>NavAgentComponent.Position</c>. It is effective
+        /// only for POSITION-AUTHORITATIVE consumers that treat Position as the entity's canonical
+        /// location. VELOCITY-AUTHORITATIVE integrations (which drive the character from
+        /// <c>Velocity</c> and re-sync Position from an external transform each tick — e.g. the
+        /// Brawler sample) do not observe this correction; there the velocity-space fixes
+        /// (coincident guard, LinearProgram3) apply but overlapping STOPPED agents are separated at
+        /// the transform/physics layer instead (out of nav scope).
+        /// </remarks>
+        private void ResolveCollisions(ref Frame frame, EntityRef[] entities, int entityCount)
+        {
+            int n = entityCount < MAX_AGENTS ? entityCount : MAX_AGENTS;
+
+            for (int iter = 0; iter < COLLISION_RESOLVE_ITERATIONS; iter++)
+            {
+                // Sub-pass 1: accumulate displacement from current positions (barrier → order-independent)
+                for (int a = 0; a < n; a++)
+                {
+                    _disp[a] = FPVector2.Zero;
+                    _dispWeight[a] = 0;
+                }
+
+                for (int a = 0; a < n; a++)
+                {
+                    ref readonly var na = ref frame.GetReadOnly<NavAgentComponent>(entities[a]);
+                    FPVector2 pa = na.Position.ToXZ();
+
+                    for (int b = a + 1; b < n; b++)
+                    {
+                        ref readonly var nb = ref frame.GetReadOnly<NavAgentComponent>(entities[b]);
+
+                        FP64 combinedRadius = na.Radius + nb.Radius;
+                        FPVector2 diff = pa - nb.Position.ToXZ();
+                        FP64 distSqr = diff.sqrMagnitude;
+
+                        if (distSqr >= combinedRadius * combinedRadius)
+                            continue; // no overlap
+
+                        if (distSqr <= POS_EPSILON)
+                        {
+                            // Coincident: idx fixed axis (matches the coincident guard — lower idx → -x).
+                            // a < b → a pushed -x, b pushed +x. Small fixed nudge; radial resolve follows.
+                            _disp[a] = _disp[a] + new FPVector2(-COINCIDENT_PEN, FP64.Zero);
+                            _disp[b] = _disp[b] + new FPVector2(COINCIDENT_PEN, FP64.Zero);
+                        }
+                        else
+                        {
+                            FP64 dist = FP64.Sqrt(distSqr);
+                            // scaled = (1/dist) * ((r₁+r₂ − dist) * 0.5) * factor ; diff (len=dist) → unit push
+                            FP64 scaled = (FP64.One / dist)
+                                * ((combinedRadius - dist) * FP64.Half)
+                                * COLLISION_RESOLVE_FACTOR;
+                            FPVector2 push = diff * scaled;
+                            _disp[a] = _disp[a] + push; // a away from b
+                            _disp[b] = _disp[b] - push; // b away from a
+                        }
+
+                        _dispWeight[a]++;
+                        _dispWeight[b]++;
+                    }
+                }
+
+                // Sub-pass 2: apply averaged displacement (mesh-clamped). Position only — Velocity untouched.
+                for (int a = 0; a < n; a++)
+                {
+                    if (_dispWeight[a] == 0)
+                        continue; // no overlap → no-op (bit-identical when no collisions)
+
+                    ref var na = ref frame.Get<NavAgentComponent>(entities[a]);
+                    FP64 iw = FP64.One / FP64.FromInt(_dispWeight[a]);
+                    FPVector2 d = _disp[a] * iw;
+
+                    FPVector3 newPos = na.Position + new FPVector3(d.x, FP64.Zero, d.y);
+                    var (resultPos, resultTri) = _query.MoveAlongSurface(
+                        na.Position, newPos, na.CurrentTriangleIndex, MultiFloorYThreshold);
+
+                    na.CurrentTriangleIndex = resultTri;
+                    na.Position = resultPos;
                 }
             }
         }

@@ -73,9 +73,9 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var t0 = new FPNavMeshTriangle
             {
                 v0 = 0, v1 = 1, v2 = 3,
-                neighbor0 = -1, neighbor1 = 2, neighbor2 = 1,
+                neighbor0 = -1, neighbor1 = 3, neighbor2 = 1,
                 portal0Left = -1, portal0Right = -1,
-                portal1Left = 1, portal1Right = 3,   // T0→T2 shared: v1-v3
+                portal1Left = 1, portal1Right = 3,   // T0→T3 shared: v1-v3
                 portal2Left = 3, portal2Right = 0,   // T0→T1 shared: v3-v0
                 centerXZ = new FPVector2(FP64.FromFloat(8f / 3f), FP64.FromFloat(4f / 3f)),
                 area = FP64.FromInt(8),
@@ -103,11 +103,11 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var t2 = new FPNavMeshTriangle
             {
                 v0 = 1, v1 = 4, v2 = 5,
-                neighbor0 = -1, neighbor1 = 3, neighbor2 = 0,
+                neighbor0 = -1, neighbor1 = -1, neighbor2 = 3,
                 portal0Left = -1, portal0Right = -1,
-                portal1Left = 4, portal1Right = 5,   // T2→T3 shared: v4-v5
-                portal2Left = 3, portal2Right = 1,   // T2→T0 shared: v3-v1
-                centerXZ = new FPVector2(FP64.FromFloat(16f / 3f), FP64.FromFloat(4f / 3f)),
+                portal1Left = -1, portal1Right = -1,   // boundary (x=8): v4-v5
+                portal2Left = 5, portal2Right = 1,   // T2→T3 shared: v1-v5
+                centerXZ = new FPVector2(FP64.FromFloat(20f / 3f), FP64.FromFloat(4f / 3f)),
                 area = FP64.FromInt(8),
                 areaMask = 1,
                 costMultiplier = FP64.One,
@@ -118,10 +118,10 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var t3 = new FPNavMeshTriangle
             {
                 v0 = 1, v1 = 5, v2 = 3,
-                neighbor0 = 2, neighbor1 = -1, neighbor2 = -1,
-                portal0Left = 5, portal0Right = 1,   // T3→T2 shared: v5-v1
+                neighbor0 = 2, neighbor1 = -1, neighbor2 = 0,
+                portal0Left = 1, portal0Right = 5,   // T3→T2 shared: v1-v5
                 portal1Left = -1, portal1Right = -1,
-                portal2Left = -1, portal2Right = -1,
+                portal2Left = 3, portal2Right = 1,
                 centerXZ = new FPVector2(FP64.FromFloat(16f / 3f), FP64.FromFloat(8f / 3f)),
                 area = FP64.FromInt(8),
                 areaMask = 1,
@@ -154,12 +154,12 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
         }
 
         /// <summary>
-        /// For areaMask testing: set T2's areaMask to 2 to enable filtering.
+        /// For areaMask testing: set T3's areaMask to 2 to enable filtering.
         /// </summary>
         private static FPNavMesh Create4TriNavMesh_WithAreaMask()
         {
             var mesh = Create4TriNavMesh();
-            mesh.Triangles[2].areaMask = 2; // only T2 is area 2
+            mesh.Triangles[3].areaMask = 2; // only T3 is area 2
             return mesh;
         }
 
@@ -209,9 +209,9 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var query = new FPNavMeshQuery(mesh, _logger);
             var pf = new FPNavMeshPathfinder(mesh, query, _logger);
 
-            // T0 (1,1) → T2 (5,1) — T0→T2 directly adjacent
+            // T0 (1,1) → T2 (6,1) — T0→T3→T2 (linear chain after fixture fix)
             bool found = pf.FindPath(
-                new FPVector3(1, 0, 1), new FPVector3(5, 0, 1), 0xFF,
+                new FPVector3(1, 0, 1), new FPVector3(6, 0, 1), 0xFF,
                 out int[] corridor, out int length);
 
             Assert.IsTrue(found);
@@ -227,7 +227,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var query = new FPNavMeshQuery(mesh, _logger);
             var pf = new FPNavMeshPathfinder(mesh, query, _logger);
 
-            // T1 (1,3) → T3 (5,3) — T1→T0→T2→T3
+            // T1 (1,3) → T3 (5,3) — T1→T0→T3
             bool found = pf.FindPath(
                 new FPVector3(1, 0, 3), new FPVector3(5, 0, 3), 0xFF,
                 out int[] corridor, out int length);
@@ -301,10 +301,10 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             var query = new FPNavMeshQuery(mesh, _logger);
             var pf = new FPNavMeshPathfinder(mesh, query, _logger);
 
-            // areaMask=1 → cannot pass through T2(areaMask=2)
-            // T0 (1,1) → T3 (5,3): T0→T2(filtered)→T3 blocked, T0→T1(dead end)
+            // areaMask=1 → cannot pass through T3(areaMask=2)
+            // T0 (1,1) → T2 (6,1): T0→T3(filtered) blocked, T0→T1(dead end)
             bool found = pf.FindPath(
-                new FPVector3(1, 0, 1), new FPVector3(5, 0, 3), 1,
+                new FPVector3(1, 0, 1), new FPVector3(6, 0, 1), 1,
                 out _, out _);
 
             Assert.IsFalse(found);
@@ -398,7 +398,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
 
             // T2 target triangle blocked
             bool found = pf.FindPath(
-                new FPVector3(1, 0, 1), new FPVector3(5, 0, 1), 0xFF,
+                new FPVector3(1, 0, 1), new FPVector3(6, 0, 1), 0xFF,
                 out _, out _);
 
             Assert.IsFalse(found);
@@ -486,6 +486,14 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
 
             Assert.IsFalse(found);
         }
+
+        #endregion
+
+        #region Fixture validation
+
+        [Test]
+        public void Validate_4TriFixture_MatchesBakerInvariants()
+            => NavMeshFixtureValidator.Validate(Create4TriNavMesh(), "pathfinder-4-tri");
 
         #endregion
     }

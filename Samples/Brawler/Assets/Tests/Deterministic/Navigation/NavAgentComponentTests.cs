@@ -171,6 +171,35 @@ namespace xpTURN.Klotho.Deterministic.Navigation.Tests
             Assert.AreEqual((byte)FPNavAgentStatus.Arrived, result.Status);
         }
 
+        [Test]
+        public void Update_WestboundCrossTriangle_Arrives()
+        {
+            var mesh = NavAgentTestHelper.Create4TriNavMesh();
+            var system = NavAgentTestHelper.CreateSystem(mesh, _logger);
+
+            // Minimal repro of the westbound cross-triangle regression: a single agent at
+            // (5,1) in T2 heading to (1,1). With the corrupted 4-tri fixture this drifted to
+            // corner (8,4) and never arrived; the corrected fixture arrives in ~63 ticks.
+            var frame = NavAgentTestHelper.CreateFrameWithAgent(
+                new FPVector3(FP64.FromInt(5), FP64.Zero, FP64.FromInt(1)),
+                2, out var entity, out var entities);
+            ref var nav = ref frame.Get<NavAgentComponent>(entity);
+            NavAgentComponent.SetDestination(ref nav,
+                new FPVector3(FP64.FromInt(1), FP64.Zero, FP64.FromInt(1)));
+
+            for (int t = 1; t <= 600; t++)
+            {
+                system.Update(ref frame, entities, 1, t, NavAgentTestHelper.DT);
+                ref readonly var snap = ref frame.GetReadOnly<NavAgentComponent>(entity);
+                if (snap.Status == (byte)FPNavAgentStatus.Arrived)
+                    break;
+            }
+
+            ref readonly var result = ref frame.GetReadOnly<NavAgentComponent>(entity);
+            Assert.AreEqual((byte)FPNavAgentStatus.Arrived, result.Status,
+                $"westbound agent must arrive; final pos=({result.Position.x.ToFloat()},{result.Position.z.ToFloat()})");
+        }
+
         #endregion
 
         #region Idle / NavMesh constraint
