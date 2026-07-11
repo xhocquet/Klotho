@@ -43,6 +43,11 @@ namespace xpTURN.Klotho.Deterministic.Navigation
         private readonly FPOrcaLine[] _orcaLines;
         private int _orcaLineCount;
 
+        // Neighbor selection buffers (avoid per-frame allocation)
+        private readonly FP64[] _neighborDistSqr = new FP64[MAX_NEIGHBORS];
+        private readonly int[] _neighborIndices = new int[MAX_NEIGHBORS];
+        private int _neighborCount;
+
         private static readonly FP64 EPSILON = FP64.FromRaw(100);
 
         public FPOrcaLine[] DebugOrcaLines => _orcaLines;
@@ -55,6 +60,38 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             TimeHorizonObst = FP64.FromInt(1);
             _orcaLines = new FPOrcaLine[MAX_ORCA_LINES];
             _orcaLineCount = 0;
+        }
+
+        /// Maintains a sorted buffer of the MAX_NEIGHBORS closest candidates.
+        private void InsertNeighbor(int index, FP64 distSqr)
+        {
+            if (_neighborCount < MAX_NEIGHBORS)
+            {
+                // Buffer not full — insert in sorted position
+                int pos = _neighborCount;
+                while (pos > 0 && distSqr < _neighborDistSqr[pos - 1])
+                {
+                    _neighborDistSqr[pos] = _neighborDistSqr[pos - 1];
+                    _neighborIndices[pos] = _neighborIndices[pos - 1];
+                    pos--;
+                }
+                _neighborDistSqr[pos] = distSqr;
+                _neighborIndices[pos] = index;
+                _neighborCount++;
+            }
+            else if (distSqr < _neighborDistSqr[_neighborCount - 1])
+            {
+                // Closer than the farthest kept neighbor — replace and shift down
+                int pos = _neighborCount - 1;
+                while (pos > 0 && distSqr < _neighborDistSqr[pos - 1])
+                {
+                    _neighborDistSqr[pos] = _neighborDistSqr[pos - 1];
+                    _neighborIndices[pos] = _neighborIndices[pos - 1];
+                    pos--;
+                }
+                _neighborDistSqr[pos] = distSqr;
+                _neighborIndices[pos] = index;
+            }
         }
 
         /// <summary>
@@ -153,14 +190,29 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             ref var agent = ref frame.Get<NavAgentComponent>(entities[agentIdx]);
             _orcaLineCount = 0;
 
-            FP64 neighborDistSqr = NeighborDist * NeighborDist;
+            FP64 neighborDistSqrMax = NeighborDist * NeighborDist;
             FPVector2 agentPosXZ = agent.Position.ToXZ();
 
-            for (int i = 0; i < entityCount && _orcaLineCount < MAX_ORCA_LINES; i++)
+            // Select up to MAX_NEIGHBORS closest neighbors
+            _neighborCount = 0;
+            for (int i = 0; i < entityCount; i++)
             {
                 if (i == agentIdx)
                     continue;
 
+                ref var other = ref frame.Get<NavAgentComponent>(entities[i]);
+                FP64 distSqr = (other.Position.ToXZ() - agentPosXZ).sqrMagnitude;
+
+                if (distSqr > neighborDistSqrMax)
+                    continue;
+
+                InsertNeighbor(i, distSqr);
+            }
+
+            // Build ORCA lines from selected neighbors
+            for (int n = 0; n < _neighborCount && _orcaLineCount < MAX_ORCA_LINES; n++)
+            {
+                int i = _neighborIndices[n];
                 ref var other = ref frame.Get<NavAgentComponent>(entities[i]);
 
                 FP64 combinedRadius = agent.Radius + other.Radius;
@@ -172,11 +224,6 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                         ? new FPVector2(-fallbackDistance, FP64.Zero)
                         : new FPVector2(fallbackDistance, FP64.Zero);
                 }
-
-                FP64 distSqr = relPos.sqrMagnitude;
-
-                if (distSqr > neighborDistSqr)
-                    continue;
 
                 FPVector2 relVel = agent.Velocity - other.Velocity;
 
