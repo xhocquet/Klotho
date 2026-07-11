@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5] - 2026-07-10
+
+### Navigation — ORCA avoidance fixes
+
+- **Fixed the ORCA half-plane missing the agent's own velocity offset.** `ComputeAgentOrcaLine` anchored each half-plane at `u * 0.5` instead of `agentVelocity + u * 0.5`, so every constraint was shifted toward the origin and the linear program could accept velocities that don't actually satisfy reciprocal avoidance with the neighbor. Coincident agents (near-zero relative position) now get a small, deterministic separation nudge instead of an undefined direction.
+- **`MAX_NEIGHBORS` is now enforced when building ORCA lines.** The constant existed but nothing bounded the neighbor loop, so on a crowded scene the ORCA lines came from whichever in-range neighbors were iterated first rather than the closest ones. A bounded closest-N selection now feeds the ORCA line pass.
+
 ## [0.5.4] - 2026-07-08
 
 ### Multiple stages per dedicated server
