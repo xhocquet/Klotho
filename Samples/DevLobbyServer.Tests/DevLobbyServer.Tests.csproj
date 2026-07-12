@@ -7,8 +7,17 @@
     <RootNamespace>xpTURN.Samples.DevLobby.Tests</RootNamespace>
   </PropertyGroup>
 
-  <!-- Core DLL (SpanWriter / LiteNetLib referenced by the linked IdentitySdRef sources). -->
-  <Import Project="../GodotSdSample/addons/klotho/Klotho.Server.props" />
+  <!-- Core runtime compiled from SOURCE via the Server~ mirrors (not the prebuilt Klotho.Server.props DLL),
+       so the tests exercise the CURRENT core — same model as Klotho.Core.Tests and the DevLobbyServer exe.
+       The prebuilt addon DLL lags source (e.g. IMP88 Phase A: IMatchResultProvider / RoomManagerConfig
+       .OnRoomCreated), which the globbed IdentitySdRef sources below now reference. Mirror set, NOT the
+       Unity-generated csproj (which drags Polyfill → UnityEngine.TestRunner into the build closure). -->
+  <ItemGroup>
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.Runtime/xpTURN.Klotho.Runtime.csproj" />
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.Logging/xpTURN.Klotho.Logging.csproj" />
+    <ProjectReference Include="../../com.xpturn.klotho/Server~/xpTURN.Klotho.LiteNetLib/xpTURN.Klotho.LiteNetLib.csproj" />
+    <Analyzer Include="../../com.xpturn.klotho/Plugins/Analyzers/KlothoGenerator.dll" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="xpTURN.Atropos" Version="0.1.1" />
@@ -25,5 +34,8 @@
     <Compile Include="../IdentityP2pRef/Runtime/*.cs" Link="IdentityP2pRef/%(Filename)%(Extension)" />
     <Compile Include="../IdentitySdRef/Runtime/*.cs" Link="IdentitySdRef/%(Filename)%(Extension)" />
     <Compile Include="../DevLobbyServer/SdDevLobby.cs" Link="SdDevLobby.cs" />
+    <!-- The stage selector, split out of Program.cs's top-level statements so it is reachable from tests. Pure by
+         design: the payload half stays in Program.cs, since pulling it in would drag Brawler's config codec here. -->
+    <Compile Include="../DevLobbyServer/DevMatchStagePolicy.cs" Link="DevMatchStagePolicy.cs" />
   </ItemGroup>
 </Project>

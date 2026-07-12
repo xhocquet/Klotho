@@ -7,6 +7,7 @@ using xpTURN.Klotho.LiteNetLib;           // LiteNetLibTransport
 using xpTURN.Klotho.Samples.Identity;     // BcEd25519Backend, LobbyTicket
 using xpTURN.Klotho.Samples.Identity.Sd;  // DevLobbyCore, SdDevIdentity, LobbyWire, RedeemResult
 using Brawler;                            // BrawlerMatchConfig / BrawlerMatchConfigData (MatchConfigData codec)
+using xpTURN.Samples.DevLobby;            // DevMatchStagePolicy (+ DevFailingMatchResultSink under DEBUG)
 
 // Dev lobby stand-in — a plain net8.0 console process, NOT a game server. Holds the Ed25519 private key
 // (issuance) and the redeem authority (nonce consume / idempotency / match↔server binding) via
@@ -38,6 +39,19 @@ Func<long> now = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 // match→server assignment + the consumed-nonce ledger.
 var lobby = SdDevLobby.CreateDevLobbyCore(backend, SdDevIdentity.PublicKey, now, logger);
 
+// DEV (DEBUG builds only): --dev-sink-fail <N> → the first N matchResult submits throw, so the lobby withholds
+// the ack and the dedi re-sends on its ~3s timer until the (N+1)th accepts (at-least-once retry, sink isolation).
+// Pass AFTER the positional args, e.g.: dotnet run -- 9999 Information --dev-sink-fail 3
+#if DEBUG
+for (int i = 0; i < args.Length - 1; i++)
+    if (args[i] == "--dev-sink-fail" && int.TryParse(args[i + 1], out int failCount) && failCount > 0)
+    {
+        lobby.SetMatchResultSink(new DevFailingMatchResultSink(failCount, new ReferenceLoggingSink(logger), logger));
+        logger.KWarning($"[DevLobby][DEV] --dev-sink-fail={failCount}: first {failCount} matchResult submit(s) will throw (no ack → dedi retries ~3s apart)");
+        break;
+    }
+#endif
+
 var transport = new LiteNetLibTransport(logger, null, "xpTURN.DevLobby");
 if (!transport.Listen("0.0.0.0", port, maxConnections: 64))
 {
@@ -47,6 +61,8 @@ if (!transport.Listen("0.0.0.0", port, maxConnections: 64))
 
 // Anti-overflow sanity bound for roomReport decode (not a capacity policy — see use site below).
 const int RoomReportRoomCap = 1024;
+// Anti-overflow sanity bound for matchResult roster decode — see decoder OOB guard.
+const int MatchResultRosterCap = 1024;
 
 // Two-phase issue coordinator — reserves a room, pushes its match config to the dedi (ReservePush),
 // and defers the IssueResponse until the dedi confirms (ReserveAck).
@@ -57,26 +73,11 @@ var coordinator = new DevLobbyReserveCoordinator(
     configPolicy: MatchStagePolicy, // matchId → stage: the lobby owns each match's config (dev policy below)
     ticketValidityMs: SdDevIdentity.TicketValidityMs, ackTimeoutMs: AckTimeoutMs, logger: logger);
 
-// Dev stage policy: the matchId's trailing ASCII digit selects the stage (…-1 → stage 1, …-2 → stage 2), so a
-// distinct matchId picks a distinct stage regardless of which room the lobby assigns — a single 2-player
-// match can demo any stage. No/'0' trailing digit → stage 1 (the default). The digit is ASCII-only and clamped
-// to [1, MaxDevStage] (below) so a crafted matchId (e.g. a non-ASCII digit, or a huge digit) can't drive a
-// huge stage/botCount — botCount = stage feeds the dedi's bot spawn, which is otherwise unbounded.
+// Dev stage policy. The stage selection itself lives in DevMatchStagePolicy — pure, and therefore unit-tested;
+// only the Brawler-coupled payload assembly stays here.
 static (int stageId, byte[] payload) MatchStagePolicy(string matchId, int roomId)
 {
-    const int MaxDevStage = 2; // Brawler demo bakes Stage01/Stage02 — clamp so a crafted matchId can't over-spawn
-    int stage = 1;
-    if (!string.IsNullOrEmpty(matchId))
-    {
-        char last = matchId[matchId.Length - 1];
-        // ASCII digits only — char.IsDigit accepts ANY Unicode decimal digit (e.g. fullwidth '３' U+FF13),
-        // and 'fullwidth - ascii0' yields a huge value → huge stage/botCount → unbounded bot spawn on the dedi.
-        if (last >= '0' && last <= '9')
-        {
-            int d = last - '0';
-            if (d >= 1) stage = Math.Min(d, MaxDevStage); // clamp: a digit past the demo's stage count caps at MaxDevStage
-        }
-    }
+    int stage = DevMatchStagePolicy.StageFor(matchId);
     // Dev policy: botCount = stage (a stage-2 match gets 2 bots), so the lobby exercises the MatchConfigData
     // channel too, not just stageId. MatchConfigData is produced via Brawler's own codec (BrawlerMatchConfig
     // .Encode) — the dedi/client read it with the same codec, so there is no hand-rolled wire layout to keep
@@ -122,6 +123,16 @@ transport.OnDataReceived += (peerId, data, len) =>
     {
         // dedi → lobby: room occupancy/state reconcile (one-way, no reply). Core logs state changes only.
         lobby.HandleRoomReport(rp.ServerId, rp.Rooms, rp.RoomCount);
+    }
+    else if (kind == LobbyWire.MatchResult && LobbyWire.TryDecodeMatchResult(data, len, MatchResultRosterCap, out var mres))
+    {
+        // dedi → lobby: verified match result / abort notification. Idempotent by match instance; ack
+        // ONLY after the lobby takes responsibility (a sink throw withholds the ack → dedi retries).
+        bool ackOk = lobby.HandleMatchResult(peerId, mres.ServerId, mres.MatchInstanceId, mres.RoomId, mres.StageId,
+                                             mres.TerminationKind, mres.Roster, mres.Payload);
+        if (ackOk)
+            transport.Send(peerId, LobbyWire.EncodeMatchResultAck(mres.RequestId, true), DeliveryMethod.ReliableOrdered);
+        // else: withhold ack → dedi retries via its resend timer
     }
 };
 

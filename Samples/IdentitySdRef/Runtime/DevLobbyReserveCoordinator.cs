@@ -45,7 +45,11 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         private readonly Func<long> _nowMs;
         private readonly Func<string> _newNonce;
         private readonly Action<int, byte[]> _send;                       // (peerId, wire) → transport.Send
-        private readonly Func<string, int, (int stageId, byte[] payload)> _configPolicy; // (matchId, roomId) → match config
+        // (RENDEZVOUS matchId, roomId) → match config. Never pass the instance id here: the dev policy reads the
+        // id's trailing ASCII digit to pick a stage, and an instance id ends in a hex token char, so a leak flips
+        // the stage for half of all matches — silently. Both call sites are covered by a recording-policy test
+        // (StagePolicy_ReceivesRendezvousMatchId_*); ADD ONE ALONGSIDE ANY NEW PUSH PATH.
+        private readonly Func<string, int, (int stageId, byte[] payload)> _configPolicy;
         private readonly long _ticketValidityMs;
         private readonly long _ackTimeoutMs;
         private readonly IKLogger _logger;
@@ -103,6 +107,9 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             // step-2 — fresh reserve: push the room's match config and await ack before responding.
             if (assign.FreshReserve)
             {
+                // The stage policy reads the RENDEZVOUS matchId, never the instance id: it selects the stage from
+                // the id's trailing ASCII digit, and an instance id ends in a hex token digit — leaking it here
+                // silently flips the stage for half of all matches. The instance id goes on the wire only.
                 (int stageId, byte[] payload) = _configPolicy(matchId, assign.RoomId);
                 int pushId = ++_pushRequestSeq;
                 var pending = new Pending
@@ -117,8 +124,8 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                 };
                 pending.Participants.Add(participant);
                 _pending[pushId] = pending;
-                _send(assign.ServerPeerId, LobbyWire.EncodeReservePush(pushId, assign.RoomId, matchId, stageId, payload, expiresAt));
-                _logger?.KInformation($"[DevLobby] reserve push id={pushId} match={matchId} → room={assign.RoomId} stage={stageId} (awaiting ack)");
+                _send(assign.ServerPeerId, LobbyWire.EncodeReservePush(pushId, assign.RoomId, assign.InstanceId, stageId, payload, expiresAt));
+                _logger?.KInformation($"[DevLobby] reserve push id={pushId} match={matchId} instance={assign.InstanceId} → room={assign.RoomId} stage={stageId} (awaiting ack)");
                 return;
             }
 
@@ -205,11 +212,13 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         /// client already holds its ticket, so the dedi's ReserveAck lands on no pending and is ignored.</summary>
         public void RePushReservations(string serverId, int serverPeerId)
         {
-            foreach (var (roomId, matchId, expiresAt) in _core.ActiveRoomReservations(serverId))
+            foreach (var (roomId, matchId, instanceId, expiresAt) in _core.ActiveRoomReservations(serverId))
             {
-                (int stageId, byte[] payload) = _configPolicy(matchId, roomId);
-                _send(serverPeerId, LobbyWire.EncodeReservePush(++_pushRequestSeq, roomId, matchId, stageId, payload, expiresAt));
-                _logger?.KInformation($"[DevLobby] reserve re-push room={roomId} match={matchId} stage={stageId} (server reconnect)");
+                (int stageId, byte[] payload) = _configPolicy(matchId, roomId); // rendezvous key → stage (see HandleIssue)
+                // Re-push the SAME instance id: if a client already joined, the dedi's entry is materialized and a
+                // different id would trip its match-conflict check (ReserveNakMatchConflict) against ourselves.
+                _send(serverPeerId, LobbyWire.EncodeReservePush(++_pushRequestSeq, roomId, instanceId, stageId, payload, expiresAt));
+                _logger?.KInformation($"[DevLobby] reserve re-push room={roomId} match={matchId} instance={instanceId} stage={stageId} (server reconnect)");
             }
         }
 

@@ -196,7 +196,7 @@ Inherit from `SimulationEvent` + apply `[KlothoSerializable(N)]`. `EventMode.Reg
 |---|---|---|
 | `ItemPickedUpEvent` | 102 | Item pickup confirmed |
 | `CharacterKilledEvent` | 103 | Stock-decrement confirmed |
-| `GameOverEvent` | 104 | Win/lose confirmed |
+| `GameOverEvent` | 104 | Win/lose confirmed. Also carries the server-local `BrawlerMatchResult` blob via `IMatchResultProvider` (not serialized — read server-side at `OnMatchEnded`) |
 | `RoundTimerEvent` | 105 | Per-second tick (1× per second) |
 | `TrapTriggeredEvent` | 109 | Trap activation confirmed |
 | `ActionCompletedEvent` | 112 | Action lock release (cooldown begins) |
@@ -279,7 +279,7 @@ The other three character prototypes are identical except for `Get<CharacterStat
 | `RespawnSystem` | Update | RespawnTimer → return to spawn position |
 | `TimerSystem` | Update | Time limit based on frame.Tick × DeltaTimeMs |
 | `GroundClampSystem` | PostUpdate | Capsule-geometry-based ground clamp |
-| `GameOverSystem` | PostUpdate | Stocks 0 / timeout → `GameOverEvent` (once) |
+| `GameOverSystem` | PostUpdate | Stocks 0 / timeout → `GameOverEvent` (once) + assembles the `BrawlerMatchResult` blob (per-player placement / stats / acquisitions) from verified state |
 | `EventSystem` | LateUpdate | Bulk event dispatch |
 
 ### 9-2. Registration — `BrawlerSimSetup.RegisterSystems()`

@@ -5,7 +5,7 @@
 > **Reference**: the formal spec is [Specification.md §9.6 Player Identity Handoff](Specification.md). **Trusted player data (entitlements)** — inventory / owned characters / loadout that rides the *same* verified channel — is covered here in §9.
 >
 > **Working reference implementations** (the mockups here map to real, tested code):
-> - Lobby server — [`Samples/DevLobbyServer/`](../Samples/DevLobbyServer) (ticket issue + SD redeem)
+> - Lobby server — [`Samples/DevLobbyServer/`](../Samples/DevLobbyServer) (ticket issue + SD redeem + match-result intake §4-F)
 > - P2P validator — [`Samples/IdentityP2pRef/`](../Samples/IdentityP2pRef) (offline signature + propagated-ticket re-verify §9)
 > - SD validator — [`Samples/IdentitySdRef/`](../Samples/IdentitySdRef) (online redeem)
 > - Entitlement codec / payload — [`DemoEntitlement`](../Samples/IdentitySdRef/Runtime/DemoEntitlement.cs) (shared by SD + [P2P](../Samples/IdentityP2pRef/Runtime/DemoEntitlement.cs)) over a [`DemoEntitlementData`](../Samples/IdentityP2pRef/Runtime/DemoEntitlementData.cs) `[KlothoSerializableStruct]` bitmask (§9)
@@ -408,6 +408,51 @@ A multi-room server can host each room on a **different stage** (map / level) wi
 
 ---
 
+## 4-F. Match Result Reporting (SD Multi-Room)
+
+§4-E carried the match *config* lobby → server. This section is its mirror: at match end the dedicated server reports the **verified result** back to the lobby, so the game backend (persistence / leaderboard / rewards) hears the outcome from the server authority — never from a client.
+
+**What travels**
+
+```
+MatchResult (dedi → lobby)                        MatchResultAck (lobby → dedi)
+├─ matchInstanceId : result idempotency key (lobby-minted — below)
+├─ roomId / stageId
+├─ terminationKind : NormalEnd | Aborted
+├─ roster[]        : per-player { PlayerId, Account, DisplayName } — the verified identities (§2),
+│                    leavers included (a player who left before the end still appears)
+└─ payload         : NormalEnd → game-authored opaque result blob (winner / stats / acquisitions)
+                     Aborted   → abort notification { abortReason, culpritPlayerId }
+```
+
+- **The game authors the result; the pipe stays opaque.** The game's match-end event (an `IMatchEndEvent`) additionally implements `IMatchResultProvider`, exposing `MatchResultData` (`byte[]`) assembled from **verified** simulation state. The core and the wire never parse it — the game defines the schema on both ends (see [GameDevAPI §3.7](./GameDevAPI.md#37-match-result--imatchresultprovider)). An event that does not implement the interface reports nothing (opt-in, no regression).
+- **Identity rides OUTSIDE the game blob.** The blob stays pure deterministic stats keyed by `PlayerId`; the roster side-channel carries the verified `Account` / `DisplayName`, and the backend joins the two by `PlayerId`. This keeps the deterministic payload identity-free.
+- **Abort notifications.** A server-authoritative abort (state divergence) and the **abandoned** case (every peer left mid-match with no end ever requested) are reported as `Aborted` with an `abortReason`. ⚠️ `culpritPlayerId = -1` means *"unknown who"* for a divergence but *"no single culprit — the whole roster is responsible"* for abandoned; gate leaver-penalty / match-void policy on the reason, never on `-1` alone. A match that never started (drain before Playing) is **not** reported — the lobby's reserve TTL reclaims it.
+
+**Match instance key — why `matchId` cannot key the result**
+
+The rendezvous `matchId` is what clients share to meet in a room, so it repeats across matches (re-queue on the same id) — keying results by it would discard a real second match as a duplicate. The result needs a key that is unique per match *instance*: the lobby mints one when it binds the room slot at reservation (`{matchId}#{token}` — the one transition that happens exactly once per match), pushes it with the reservation (§4-E), and the server keys the result by it. To join a backend record on the rendezvous key, take the substring before the last `#`.
+
+**Delivery — at-least-once + idempotent intake**
+
+```
+(1) match ends / aborts → the server captures result + roster snapshot on the room's own thread
+(2) append to a local crash-backstop journal (flush), then send MatchResult
+(3) no ack → resend on a timer until a give-up bound (reference: ~3 s / 120 s);
+    a reconnect re-flushes every un-acked result
+(4) lobby: de-dup by matchInstanceId → hand off to the game backend (IMatchResultSink.Submit)
+(5) ack ONLY after the handoff returns cleanly → the server stops resending
+    (a sink failure withholds the ack → server retries; a duplicate is acked idempotently)
+```
+
+Results are flushed **ahead of** the periodic room report, so the lobby processes a result before the room's reclaim signal. The journal keeps a durable copy for offline re-collection if the lobby stays unreachable past the give-up bound.
+
+**No lobby**: no reservation table → no match key → nothing is emitted (no regression).
+
+> **Mockup note**: like the reserve-push channel (§4-E), the result channel lives in the reference SD lobby sample (`SdRoomReporter` on the server, `IMatchResultSink` on the lobby), not the core. The core's surface is the `IMatchResultProvider` read plus the `RoomManagerConfig.OnRoomCreated` / `OnRoomDraining` per-room subscription hooks the reporter wires into.
+
+---
+
 ## 5. SD vs P2P at a Glance
 
 | Aspect | SD (dedicated) | P2P (host) |
@@ -490,6 +535,11 @@ LAN / prototype / samples keep working as-is; only production turns on the provi
 - [ ] SD: register on `RoomManagerConfig.PlayerConfigEntitlementGuard` / `.ReliableCommandEntitlementGate`. P2P: `WithPlayerConfigEntitlementGuard(...)` (this also turns on original-ticket propagation + per-peer re-verify; the validator must also implement `IPropagatedTicketVerifier`)
 - [ ] P2P only: the guard/seed/no-op logic must be a **deterministic pure function** (same signed bytes → byte-identical verdict on every peer) — no RNG / float / culture / dictionary-order, else tick-0 desync
 - [ ] Leave the hooks unset for identity-only / LAN / prototype → `PlayerConfig` behaves exactly as today (no regression)
+
+**Match results (server → lobby — §4-F, optional)**
+- [ ] Game: implement `IMatchResultProvider` on the match-end event; assemble the blob from verified state at fire time (keyed by `PlayerId`, no identity inside)
+- [ ] Lobby: implement `IMatchResultSink.Submit` — fast / non-blocking, throw = not accepted (ack withheld → server retries); de-dup by `matchInstanceId`
+- [ ] Backend: join the game blob to the roster identities by `PlayerId`; branch abort policy on `abortReason`, never on `culpritPlayerId == -1` alone
 
 ---
 

@@ -33,6 +33,9 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             public int Reserved;   // issued-but-not-redeemed (count of this room's ReservationLedger entries)
             public int Occupied;   // redeemed (entered) — reconciled to the dedi's reported PlayerCount (P1)
             public string SessionId; // = matchId; null when Empty/unbound (one room serves one match)
+            public string InstanceId; // this match INSTANCE's unique key ({matchId}#{token}); lives and dies with
+                                      // SessionId. matchId is a rendezvous key (clients share it, and it repeats
+                                      // across matches), so it cannot serve as the result idempotency key — this can.
             public long LastReportMs; // last roomReport touching this slot (P1)
             public bool AckPending;   // reserved-but-not-yet-ack-confirmed by the dedi (tentative). Cleared on
                                       // CommitReservation (ReserveAck ok). Lobbyless assigns never set it (stays false).

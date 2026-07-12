@@ -239,7 +239,7 @@ namespace Brawler
 
             // PostUpdate — landing clamp, then game-over detection
             simulation.AddSystem(new GroundClampSystem(physicsSystem), SystemPhase.PostUpdate);
-            simulation.AddSystem(new GameOverSystem(events), SystemPhase.PostUpdate);
+            simulation.AddSystem(new GameOverSystem(events, stageId), SystemPhase.PostUpdate);
 
             // LateUpdate — event dispatch
             simulation.AddSystem(events, SystemPhase.LateUpdate);

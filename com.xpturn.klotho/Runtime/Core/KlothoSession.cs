@@ -528,6 +528,16 @@ namespace xpTURN.Klotho.Core
                 }
             }
 
+            // Escape-hatch safety net: the builder's Build() throws on guard-without-validator, but the
+            // object-initializer construction path (a documented escape hatch) bypasses Build(). A guard set
+            // without a validator means the block above never wired it, so entitlement enforcement is silently
+            // OFF. This is an independent check, NOT an else on the block above: the block's compound condition
+            // is also false for SD-client / replay services, where this log would be spurious. Mirrors the
+            // fail-closed + KError idiom of SetOriginalTicketPropagation.
+            if (KlothoFlowSetupBuilder.GuardRequiresValidatorViolated(setup.PlayerConfigEntitlementGuard, setup.IdentityValidator))
+                setup.Logger?.KError(
+                    $"[KlothoSession] PlayerConfigEntitlementGuard set without an IdentityValidator — entitlement enforcement is OFF (the guard needs the validator as the P2P re-verifier).");
+
             // Initialize the service now that identity/entitlement wiring is in place. Deferred from
             // construction so a guest's InitializeFromConnection rebuilds its initial roster with the
             // entitlement gate already enabled — each propagated ticket is re-verified and its entitlement

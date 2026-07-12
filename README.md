@@ -21,7 +21,7 @@ A deterministic-simulation framework supporting Client-Side Prediction (CSP), Ro
 | Area | Contents |
 | ---- | ---- |
 | **Network Models** | P2P Lockstep · Rollback + Client Prediction · Server-Driven (Authoritative) · Dedicated Server · Spectator · Late Join · Reconnect |
-| **Rooms & Match Config** | Multi-room dedicated server · per-room stage (`StageId`) + opaque per-match config (`MatchConfigData`) via `IMatchConfigSource` — one server hosts rooms on different stages · lobby room reservation (reserve-before-connect) |
+| **Rooms & Match Config** | Multi-room dedicated server · per-room stage (`StageId`) + opaque per-match config (`MatchConfigData`) via `IMatchConfigSource` — one server hosts rooms on different stages · lobby room reservation (reserve-before-connect) · verified match-result reporting to the lobby (`IMatchResultProvider`, at-least-once + idempotent) |
 | **Deterministic Math** | `FP64` (32.32 fixed-point) · `FPVector2/3/4` · `FPQuaternion` · `FPMatrix` · LUT/CORDIC-based trigonometry · `DeterministicRandom` (Xorshift128+) |
 | **Physics** | `FPPhysicsWorld` · Broadphase (SpatialGrid) · Narrowphase · CCD (Sweep) · Constraint Solver · Joints · Triggers · Static BVH |
 | **Navigation** | `FPNavMesh` · A* (triangle graph) · Funnel (SSFA) · ORCA avoidance · ECS-integrated `NavAgentComponent` |
@@ -205,7 +205,7 @@ Docs: [Docs/Samples/Brawler.md](Docs/Samples/Brawler.md)
 | [Docs/QuickStart.Unity.md](Docs/QuickStart.Unity.md) · [Docs/QuickStart.Godot.md](Docs/QuickStart.Godot.md) | Engine-specific 5-step quick starts (component → system → callbacks → session → view) |
 | [Docs/FEATURES.md](Docs/FEATURES.md) | Full feature list |
 | [Docs/Specification.md](Docs/Specification.md) | Engine specification (state machines · configuration · events · message protocol · formats) |
-| [Docs/LobbyIntegrationGuide.md](Docs/LobbyIntegrationGuide.md) | Lobby ↔ dedicated server ↔ client integration (mockup) — ticket carriage · validation hooks · identity propagation |
+| [Docs/LobbyIntegrationGuide.md](Docs/LobbyIntegrationGuide.md) | Lobby ↔ dedicated server ↔ client integration (mockup) — ticket carriage · validation hooks · identity propagation · match-result reporting |
 | [Docs/EntitlementLifecycle.md](Docs/EntitlementLifecycle.md) | Trusted player data (entitlements) lifecycle reference — origin · store · preserve · propagate · read · dispose · invariants |
 | [Docs/SynchronizationDesign.md](Docs/SynchronizationDesign.md) | Synchronization design direction (determinism · two-chain model · prediction/rollback · timing · authority models · recovery ladder) |
 | [Docs/GameDevWorkflow.md](Docs/GameDevWorkflow.md) | Game-developer workflow (step-by-step) |

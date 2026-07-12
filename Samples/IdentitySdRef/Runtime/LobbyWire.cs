@@ -26,6 +26,13 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public const byte RoomReport     = 6; // dedi → lobby: periodic heartbeat + on-change room occupancy/state (one-way)
         public const byte ReservePush    = 7; // lobby → dedi: reserve a room's match config (stageId + payload) before the client connects
         public const byte ReserveAck     = 8; // dedi → lobby: confirm/refuse a ReservePush (gates the deferred IssueResponse)
+        public const byte MatchResult    = 9;  // dedi → lobby: verified match result / abort notification
+        public const byte MatchResultAck = 10; // lobby → dedi: result accepted (responsibility handoff → dedi stops retrying)
+
+        // MatchResult terminationKind: NormalEnd → payload is the game-owned result blob; Aborted → payload is
+        // the abort notification blob (no game result). Both carry the identity roster side-channel.
+        public const byte TerminationNormalEnd = 0;
+        public const byte TerminationAborted   = 1;
 
         // ReserveAck nak reason (ok=false). ok=true → None.
         public const byte ReserveNakNone          = 0;
@@ -39,6 +46,21 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public const byte RoomStateActive    = 1;
         public const byte RoomStateDraining  = 2;
         public const byte RoomStateDisposing = 3;
+
+        // Wire abortReason (the abort-notification payload's leading byte; see EncodeAbortNotification). An
+        // INDEPENDENT value space from core AbortReason — LobbyWire does not reference core, and the dedi maps
+        // core→wire in SdRoomReporter.TryMapAbortReason (the side that knows core owns the conversion). Only
+        // StateDivergence(2) is frozen: it is the sole value the CaptureAbort filter lets reach the encoder, so
+        // it is the only value ever written to the persistent journal — reassigning 2 would retroactively
+        // misread existing records. 0/1/3 are never-written (aligned to the current engine ordinals for log
+        // readability only — a recommendation, not a constraint).
+        public const byte AbortReasonUnknown         = 0;   // core Unknown (never written)
+        public const byte AbortReasonChainStall      = 1;   // core ChainStallTimeout (never written)
+        public const byte AbortReasonStateDivergence = 2;   // ← FROZEN (only value hardened into the journal)
+        public const byte AbortReasonReconnectFailed = 3;   // core ReconnectFailed (never written)
+        public const byte AbortReasonAbandoned       = 10;  // all peers left
+        public const byte AbortReasonServerShutdown  = 11;  // reserved for a future shutdown notification (never written today); MUST stay distinct from Abandoned
+        public const byte AbortReasonUnmapped        = 255; // dedicated unmapped-fallback — distinct BY VALUE from Unknown(0) so it is identifiable even in the journal
 
         // IssueResponse status — the issue path's own result code (separate from the disconnect-payload
         // reject codes the join/redeem path uses).
@@ -239,14 +261,20 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         // Reserves a room's match config so the dedi's IMatchConfigSource can resolve it at CreateRoomAt,
         // before the client (holding the lobby ticket) connects. matchConfigData is opaque (game-owned),
         // length-prefixed like RedeemResponse.entitlement.
-        public static byte[] EncodeReservePush(int requestId, int roomId, string matchId, int stageId,
+        //
+        // matchInstanceId identifies this MATCH INSTANCE, not the rendezvous matchId the clients share: the dedi
+        // keeps it as the result's idempotency key, which must be unique per match (a rendezvous key repeats
+        // across matches). Format is `{rendezvousMatchId}#{token}`, or the bare rendezvous key when the lobby's
+        // matchIds are already unique — recover the rendezvous key with LastIndexOf('#'); no '#' means the whole
+        // string is it.
+        public static byte[] EncodeReservePush(int requestId, int roomId, string matchInstanceId, int stageId,
                                                byte[] matchConfigData, long reservationExpiresAt)
         {
             int mcdLen = matchConfigData?.Length ?? 0;
-            var buf = new byte[1 + 4 + 4 + Str(matchId) + 4 + (4 + mcdLen) + 8];
+            var buf = new byte[1 + 4 + 4 + Str(matchInstanceId) + 4 + (4 + mcdLen) + 8];
             var w = new SpanWriter(buf);
             w.WriteByte(ReservePush); w.WriteInt32(requestId);
-            w.WriteInt32(roomId); w.WriteString(matchId); w.WriteInt32(stageId);
+            w.WriteInt32(roomId); w.WriteString(matchInstanceId); w.WriteInt32(stageId);
             w.WriteBytes(matchConfigData); // null → length 0
             w.WriteInt64(reservationExpiresAt);
             return buf;
@@ -254,7 +282,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
 
         public struct ReservePushMsg
         {
-            public int RequestId; public int RoomId; public string MatchId; public int StageId;
+            public int RequestId; public int RoomId; public string MatchInstanceId; public int StageId;
             public byte[] MatchConfigData; public long ReservationExpiresAt;
         }
         public static bool TryDecodeReservePush(byte[] data, int length, out ReservePushMsg m)
@@ -265,7 +293,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                 var r = new SpanReader(data, 0, length);
                 if (r.ReadByte() != ReservePush) return false;
                 m.RequestId = r.ReadInt32();
-                m.RoomId = r.ReadInt32(); m.MatchId = r.ReadString(); m.StageId = r.ReadInt32();
+                m.RoomId = r.ReadInt32(); m.MatchInstanceId = r.ReadString(); m.StageId = r.ReadInt32();
                 var span = r.ReadBytes();
                 if (span.Length > 0) m.MatchConfigData = span.ToArray();
                 m.ReservationExpiresAt = r.ReadInt64();
@@ -297,6 +325,137 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                 return true;
             }
             catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)
+        }
+
+        // ── MatchResult (dedi → lobby) ──────────────────────────────────────────
+        // A verified match result (or abort notification). The identity roster rides OUTSIDE the opaque
+        // game-owned payload (blob = pure deterministic stats keyed by PlayerId; roster = per-player
+        // Account/DisplayName). payload is length-prefixed (null → len 0), like RedeemResponse.entitlement.
+        private const int MatchResultRosterEntryMinBytes = 4 + 4 + 4; // playerId + account(len0) + displayName(len0)
+
+        // matchInstanceId (NOT the rendezvous matchId — see EncodeReservePush) is the result's idempotency key.
+        public static byte[] EncodeMatchResult(int requestId, string serverId, int roomId, string matchInstanceId,
+                                               int stageId, byte terminationKind,
+                                               MatchResultRosterEntry[] roster, int rosterCount, byte[] payload)
+        {
+            int size = 1 + 4                       // kind + requestId
+                     + Str(serverId) + 4           // serverId + roomId
+                     + Str(matchInstanceId) + 4    // matchInstanceId + stageId
+                     + 1                            // terminationKind
+                     + 4;                           // rosterCount
+            for (int i = 0; i < rosterCount; i++)
+                size += 4 + Str(roster[i].Account) + Str(roster[i].DisplayName); // playerId + account + displayName
+            int payLen = payload?.Length ?? 0;
+            size += 4 + payLen;                     // payload (length-prefixed)
+
+            var buf = new byte[size];
+            var w = new SpanWriter(buf);
+            w.WriteByte(MatchResult); w.WriteInt32(requestId);
+            w.WriteString(serverId); w.WriteInt32(roomId);
+            w.WriteString(matchInstanceId); w.WriteInt32(stageId);
+            w.WriteByte(terminationKind);
+            w.WriteInt32(rosterCount);
+            for (int i = 0; i < rosterCount; i++)
+            {
+                w.WriteInt32(roster[i].PlayerId);
+                w.WriteString(roster[i].Account ?? string.Empty);
+                w.WriteString(roster[i].DisplayName ?? string.Empty);
+            }
+            w.WriteBytes(payload); // null → length 0
+            return buf;
+        }
+
+        public struct MatchResultMsg
+        {
+            public int RequestId; public string ServerId; public int RoomId; public string MatchInstanceId; public int StageId;
+            public byte TerminationKind; public MatchResultRosterEntry[] Roster; public int RosterCount; public byte[] Payload;
+        }
+        /// <param name="maxRoster">Sanity cap on the roster count — bounds-checked BEFORE the *entrySize
+        /// multiply (so a forged huge count can't overflow into a bypass). The remaining-buffer check is the
+        /// real OOB guard; ReadString past the buffer throws and is caught → reject.</param>
+        public static bool TryDecodeMatchResult(byte[] data, int length, int maxRoster, out MatchResultMsg m)
+        {
+            m = default;
+            try
+            {
+                var r = new SpanReader(data, 0, length);
+                if (r.ReadByte() != MatchResult) return false;
+                m.RequestId = r.ReadInt32();
+                m.ServerId = r.ReadString(); m.RoomId = r.ReadInt32();
+                m.MatchInstanceId = r.ReadString(); m.StageId = r.ReadInt32();
+                m.TerminationKind = r.ReadByte();
+                int rosterCount = r.ReadInt32();
+                if (rosterCount < 0 || rosterCount > maxRoster) return false;                    // sane cap (prevents *entry overflow)
+                if (r.Remaining < rosterCount * MatchResultRosterEntryMinBytes) return false;     // real OOB guard (min entry size)
+                var roster = new MatchResultRosterEntry[rosterCount];
+                for (int i = 0; i < rosterCount; i++)
+                {
+                    roster[i].PlayerId = r.ReadInt32();
+                    roster[i].Account = r.ReadString();
+                    roster[i].DisplayName = r.ReadString();
+                }
+                var span = r.ReadBytes();
+                if (span.Length > 0) m.Payload = span.ToArray();
+                m.ServerId ??= string.Empty;
+                m.Roster = roster; m.RosterCount = rosterCount;
+                return true;
+            }
+            catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)
+        }
+
+        // ── MatchResultAck (lobby → dedi) ───────────────────────────────────────
+        public static byte[] EncodeMatchResultAck(int requestId, bool ok)
+        {
+            var buf = new byte[1 + 4 + 1];
+            var w = new SpanWriter(buf);
+            w.WriteByte(MatchResultAck); w.WriteInt32(requestId); w.WriteBool(ok);
+            return buf;
+        }
+
+        public struct MatchResultAckMsg { public int RequestId; public bool Ok; }
+        public static bool TryDecodeMatchResultAck(byte[] data, int length, out MatchResultAckMsg m)
+        {
+            m = default;
+            try
+            {
+                var r = new SpanReader(data, 0, length);
+                if (r.ReadByte() != MatchResultAck) return false;
+                m.RequestId = r.ReadInt32(); m.Ok = r.ReadBool();
+                return true;
+            }
+            catch { m = default; return false; } // malformed wire → reject (never throw on the poll thread)
+        }
+
+        // Abort notification blob: the MatchResult payload when terminationKind == Aborted. Opaque to
+        // the wire envelope; the SD reporter (producer) and the reference lobby (consumer) share this codec.
+        // abortReason is a wire AbortReason* value (NOT a raw core enum cast — see SdRoomReporter.TryMapAbortReason).
+        //
+        // ⚠️ culpritPlayerId = -1 carries TWO distinct meanings, told apart ONLY by abortReason:
+        //   • StateDivergence(2) → "unknown who" — OnMatchAborted(reason) exposes no culprit; a real culprit is
+        //     resolvable later via the roster side-channel by id.
+        //   • Abandoned(10)      → "no SINGLE culprit" — everyone left; the responsible party is the WHOLE roster.
+        // A backend that treats -1 uniformly across reasons is wrong. For Abandoned, the honest reading is
+        // "culprit list = every roster entry", not "no one responsible".
+        public static byte[] EncodeAbortNotification(byte abortReason, int culpritPlayerId)
+        {
+            var buf = new byte[1 + 4];
+            var w = new SpanWriter(buf);
+            w.WriteByte(abortReason); w.WriteInt32(culpritPlayerId);
+            return buf;
+        }
+
+        public struct AbortNotificationMsg { public byte AbortReason; public int CulpritPlayerId; }
+        public static bool TryDecodeAbortNotification(byte[] data, out AbortNotificationMsg m)
+        {
+            m = default;
+            if (data == null) return false;
+            try
+            {
+                var r = new SpanReader(data, 0, data.Length);
+                m.AbortReason = r.ReadByte(); m.CulpritPlayerId = r.ReadInt32();
+                return true;
+            }
+            catch { m = default; return false; }
         }
 
         /// <summary>Reads the leading message-kind byte (0 if empty) for dispatch.</summary>

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 using xpTURN.Klotho.Logging;
 
 using xpTURN.Klotho.Core;
@@ -18,10 +20,12 @@ namespace Brawler
         static readonly FixedString32 ReasonTimeout = FixedString32.FromString("timeout");
 
         readonly EventSystem _events;
+        readonly int _stageId; // stamped into the match result blob; the authoritative stageId also rides the wire
 
-        public GameOverSystem(EventSystem events)
+        public GameOverSystem(EventSystem events, int stageId = 0)
         {
             _events = events;
+            _stageId = stageId;
         }
 
         public void Update(ref Frame frame)
@@ -130,7 +134,58 @@ namespace Brawler
             var goEvt = EventPool.Get<GameOverEvent>();
             goEvt.WinnerPlayerId = winnerId;
             goEvt.Reason         = reason;
+            // Assemble the game-owned result blob from verified state (always assign — a pooled reuse must
+            // never surface a stale blob; the generated Reset does not clear this non-[KlothoOrder] field).
+            goEvt.MatchResultData = AssembleResult(ref frame);
             _events.Enqueue(goEvt);
+        }
+
+        // Per-player stats + acquisitions keyed by PlayerId. Pure read-out of verified ECS state —
+        // no identity (Account/DisplayName ride the wire roster side-channel). Runs once per match at match-end.
+        byte[] AssembleResult(ref Frame frame)
+        {
+            var result = new BrawlerMatchResult { StageId = _stageId };
+            var filter = frame.Filter<CharacterComponent>();
+            while (filter.Next(out var entity))
+            {
+                ref readonly var c = ref frame.GetReadOnly<CharacterComponent>(entity);
+                result.Players.Add(new BrawlerPlayerResult
+                {
+                    PlayerId            = c.PlayerId,
+                    StockCount          = c.StockCount,
+                    KnockbackTaken      = c.KnockbackPower,
+                    AcquiredSkillMask   = c.AcquiredSkillMask,
+                    OwnedConsumableMask = c.OwnedConsumableMask,
+                });
+            }
+            AssignPlacements(result.Players);
+            return result.ToBytes();
+        }
+
+        // 1-based placement by (StockCount desc, KnockbackTaken asc, PlayerId asc) — a strict total order via
+        // PlayerId, so ranks are unique. Order-independent (counts strictly-better peers), hence stable
+        // regardless of filter iteration order.
+        internal static void AssignPlacements(List<BrawlerPlayerResult> players) // internal: unit-tested directly
+        {
+            for (int i = 0; i < players.Count; i++)
+            {
+                int rank = 1;
+                var pi = players[i];
+                for (int j = 0; j < players.Count; j++)
+                {
+                    if (i == j) continue;
+                    if (RanksAbove(players[j], pi)) rank++;
+                }
+                pi.Placement = rank;
+                players[i] = pi; // write back (value struct)
+            }
+        }
+
+        static bool RanksAbove(in BrawlerPlayerResult a, in BrawlerPlayerResult b)
+        {
+            if (a.StockCount != b.StockCount) return a.StockCount > b.StockCount;
+            if (a.KnockbackTaken != b.KnockbackTaken) return a.KnockbackTaken < b.KnockbackTaken;
+            return a.PlayerId < b.PlayerId;
         }
     }
 }

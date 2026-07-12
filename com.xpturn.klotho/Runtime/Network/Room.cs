@@ -50,6 +50,12 @@ namespace xpTURN.Klotho.Network
         public long CreatedAtMs { get; set; }
         public SessionPhase DrainPhase { get; private set; }
 
+        // Additive drain hook (set by RoomManager.CreateRoomAt from RoomManagerConfig.OnRoomDraining; null = no-op).
+        // Invoked exactly once on this room's own update thread the tick Update() transitions State → Draining
+        // (either branch). The core stays semantics-free: the subscriber decides what a drain MEANS (abandon vs
+        // normal/abort) from EndRequestedAtUtc / DrainPhase, both core truths captured before this fires.
+        public Action<Room> OnDraining { get; set; }
+
         // Match-end / abort grace state. Wall-time based so the EndGracePolicy.Pause case
         // (tick frozen) still progresses naturally. _endRequested (volatile) gates publication:
         // RequestEnd (ThreadPool worker) writes _endRequestedAtMs/EndReason/EndGrace, then sets
@@ -113,6 +119,7 @@ namespace xpTURN.Klotho.Network
                 State = RoomState.Draining;
                 string reasonStr = EndReason == EndReason.MatchEnded ? "match-ended" : "match-aborted";
                 _logger?.KInformation($"[Room {RoomId}] → Draining (reason={reasonStr}, phase={DrainPhase})");
+                OnDraining?.Invoke(this); // subscriber filters this out via EndRequestedAtUtc.HasValue
                 return;
             }
 
@@ -121,6 +128,7 @@ namespace xpTURN.Klotho.Network
                 DrainPhase = NetworkService.Phase;
                 State = RoomState.Draining;
                 _logger?.KInformation($"[Room {RoomId}] → Draining (reason=all-peers-gone, phase={DrainPhase})");
+                OnDraining?.Invoke(this); // all-peers-gone: EndRequestedAtUtc == null → the abandon case
             }
         }
 

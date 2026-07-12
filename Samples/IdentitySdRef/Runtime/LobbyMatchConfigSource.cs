@@ -25,7 +25,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         {
             public int StageId;
             public byte[] MatchConfigData;
-            public string MatchId;
+            public string MatchInstanceId; // the lobby's per-match-instance key, NOT the rendezvous matchId
             public long ExpiresAt;   // dedi-side TTL, mirrors the lobby reservation expiry
             public bool Materialized; // set once TryResolve hands this to CreateRoomAt (room went live)
         }
@@ -44,9 +44,10 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         }
 
         /// <summary>Applies a <c>ReservePush</c> (report-client poll thread). Returns the ReserveAck outcome:
-        /// (ok, nakReason). Refuses out-of-range rooms and a different match on an already-materialized room;
-        /// otherwise stores/overwrites the reservation.</summary>
-        public (bool ok, byte nakReason) ApplyReservePush(int roomId, string matchId, int stageId,
+        /// (ok, nakReason). Refuses out-of-range rooms and a DIFFERENT match on an already-materialized room;
+        /// a SAME-instance re-push (the reconnect path) is accepted and PRESERVES <c>Materialized</c> — otherwise
+        /// stores/overwrites the reservation (unmaterialized).</summary>
+        public (bool ok, byte nakReason) ApplyReservePush(int roomId, string matchInstanceId, int stageId,
                                                           byte[] matchConfigData, long expiresAt)
         {
             if (roomId < 0 || roomId >= _maxRooms)
@@ -54,12 +55,16 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
 
             lock (_lock)
             {
-                if (_table.TryGetValue(roomId, out var existing)
+                _table.TryGetValue(roomId, out var existing);
+                bool sameInstance = existing != null
+                    && string.Equals(existing.MatchInstanceId, matchInstanceId, StringComparison.Ordinal);
+
+                if (existing != null
                     && existing.Materialized
-                    && !string.Equals(existing.MatchId, matchId, StringComparison.Ordinal)
+                    && !sameInstance
                     && _nowMs() <= existing.ExpiresAt)
                 {
-                    _logger?.KWarning($"[LobbyMatchConfigSource] reserve NAK room={roomId} match={matchId} (materialized for {existing.MatchId})");
+                    _logger?.KWarning($"[LobbyMatchConfigSource] reserve NAK room={roomId} instance={matchInstanceId} (materialized for {existing.MatchInstanceId})");
                     return (false, LobbyWire.ReserveNakMatchConflict);
                 }
 
@@ -67,12 +72,15 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                 {
                     StageId = stageId,
                     MatchConfigData = matchConfigData,
-                    MatchId = matchId,
+                    MatchInstanceId = matchInstanceId,
                     ExpiresAt = expiresAt,
-                    Materialized = false,
+                    // A same-instance re-push (RePushReservations on reconnect) must NOT demote the flag: a live
+                    // room's conflict shield is the only guard on its result key, and dropping it lets a later
+                    // different-instance push overwrite the running match's key. A different/new match stays false.
+                    Materialized = sameInstance && existing.Materialized,
                 };
             }
-            _logger?.KInformation($"[LobbyMatchConfigSource] reserved room={roomId} match={matchId} stage={stageId}");
+            _logger?.KInformation($"[LobbyMatchConfigSource] reserved room={roomId} instance={matchInstanceId} stage={stageId}");
             return (true, LobbyWire.ReserveNakNone);
         }
 
@@ -105,6 +113,27 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public void Release(int roomId)
         {
             lock (_lock) { _table.Remove(roomId); }
+        }
+
+        /// <summary>Read-only lookup of a room's reserved match-instance key / stageId, for result capture.
+        /// Does NOT mutate (unlike <see cref="TryResolve"/>): the reporter reads this at match-end to key the
+        /// result self-contained. <paramref name="matchInstanceId"/> is the MATCH INSTANCE key the lobby minted,
+        /// not the rendezvous matchId the clients share. Returns false when there is no reservation for the room
+        /// (lobbyless / no result to key) — the reporter then emits nothing (no-regression).</summary>
+        public bool TryGetMatchInfo(int roomId, out string matchInstanceId, out int stageId)
+        {
+            lock (_lock)
+            {
+                if (_table.TryGetValue(roomId, out var e))
+                {
+                    matchInstanceId = e.MatchInstanceId;
+                    stageId = e.StageId;
+                    return true;
+                }
+            }
+            matchInstanceId = null;
+            stageId = 0;
+            return false;
         }
     }
 }

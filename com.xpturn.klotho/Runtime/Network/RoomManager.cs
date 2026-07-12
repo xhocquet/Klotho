@@ -83,6 +83,24 @@ namespace xpTURN.Klotho.Network
         /// ServerNetworkService at creation, alongside <see cref="PlayerConfigEntitlementGuard"/>.
         /// </summary>
         public IReliableCommandEntitlementGate ReliableCommandEntitlementGate { get; set; }
+
+        /// <summary>
+        /// Optional callback invoked once for each room right after it is fully constructed (engine
+        /// handlers attached) and before it transitions to Active — i.e. before any player joins.
+        /// null = no-op. Gives a host the seam to subscribe to per-room engine / network-service events
+        /// (the room is created inside the core, so this is the only external subscription point).
+        /// Called synchronously on the room-creation thread.
+        /// </summary>
+        public Action<Room> OnRoomCreated { get; set; }
+
+        /// <summary>
+        /// Optional callback invoked once per room the tick it transitions to Draining (either branch of
+        /// Room.Update — normal-end/abort grace expiry OR all-peers-gone). null = no-op. Fires on the room's
+        /// OWN update thread (NOT the main loop) so the subscriber's work — e.g. a journal fsync — cannot stall
+        /// the server tick. The core carries no "abandon" semantics: the subscriber discriminates
+        /// via Room.EndRequestedAtUtc / Room.DrainPhase. Symmetric with <see cref="OnRoomCreated"/>.
+        /// </summary>
+        public Action<Room> OnRoomDraining { get; set; }
     }
 
     /// <summary>
@@ -130,6 +148,14 @@ namespace xpTURN.Klotho.Network
             _loggerFactory = loggerFactory;
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _logger = loggerFactory?.CreateLogger("RoomManager");
+
+            // One-time coherence check (startup): an entitlement guard without an identity validator means no
+            // redeem ever populates PlayerInfo.Entitlement, so GetPlayerEntitlement is always null and the guard
+            // cannot enforce ownership (typically passes). Log rather than throw — a multi-room server should
+            // surface the misconfig, not fail to boot. The reliable-command gate has the same property.
+            if (_config.PlayerConfigEntitlementGuard != null && _config.IdentityValidator == null)
+                _logger?.KError(
+                    $"[RoomManager] PlayerConfigEntitlementGuard set without an IdentityValidator — player entitlement is always null, so the guard cannot enforce ownership (typically passes, enforcement effectively OFF).");
 
             _rooms = new Room[config.MaxRooms];
             _router.SetRoomManager(this);
@@ -262,6 +288,12 @@ namespace xpTURN.Klotho.Network
                 });
 
             room.CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            room.OnDraining = _config.OnRoomDraining; // additive drain hook; fires on the room's own update thread
+
+            // Room fully constructed (engine handlers attached) but not yet Active — the host's seam to
+            // subscribe to per-room engine / network-service events before any player joins (null = no-op).
+            _config.OnRoomCreated?.Invoke(room);
+
             room.State = RoomState.Active;
             _rooms[roomId] = room;
             _activeRoomCount++;

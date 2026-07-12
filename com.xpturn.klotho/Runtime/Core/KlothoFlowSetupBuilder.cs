@@ -103,6 +103,13 @@ namespace xpTURN.Klotho.Core
             return this;
         }
 
+        // Shared coherence predicate: a P2P entitlement guard needs the identity validator (which doubles as
+        // its re-verifier). Called from Build() (throw, fluent path) and KlothoSession.Create (log, the
+        // object-initializer escape hatch) so the two enforcement sites cannot silently diverge.
+        internal static bool GuardRequiresValidatorViolated(
+            IPlayerConfigEntitlementGuard guard, IPlayerIdentityValidator validator)
+            => guard != null && validator == null;
+
         /// <summary>
         /// Validates feature coherence and returns the assembled setup.
         /// Hard errors (always throw):
@@ -122,6 +129,15 @@ namespace xpTURN.Klotho.Core
             if (_s.CredentialsStore != null && (_s.DeviceIdProvider == null || _s.AppVersion == null))
                 throw new FlowSetupValidationException(
                     "WithReconnect requires WithHandshake (AppVersion + DeviceIdProvider) — reconnect credentials are minted by a prior normal join, which needs handshake identity.");
+
+            // A P2P entitlement guard is only wired when a validator is present (KlothoSession.Create nests the
+            // guard setup inside the validator branch, since the validator doubles as the re-verifier). Without
+            // the validator the guard is silently dropped — entitlement enforcement OFF with no signal. Fail
+            // fast here. Safe as a hard error: FlowSetup's guard is P2P-only (SD wires its guard via
+            // RoomManagerConfig, not this builder), so this cannot break an SD dedicated server.
+            if (GuardRequiresValidatorViolated(_s.PlayerConfigEntitlementGuard, _s.IdentityValidator))
+                throw new FlowSetupValidationException(
+                    "WithPlayerConfigEntitlementGuard requires WithIdentityValidator (the validator doubles as the P2P re-verifier) — without it the guard is silently ignored and entitlement enforcement is OFF.");
 
             // Spectator drives via SpectatorTransportFactory; replay-from-file needs neither — both exempt.
             // WithLobbyIdentity (a ticket-only guest) also signals a guest connect path,

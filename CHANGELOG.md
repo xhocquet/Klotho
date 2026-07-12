@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.5.6] - 2026-07-12
+
+### Match results reported to the lobby
+
+- **A dedicated server now reports each match's verified outcome back to the lobby**, so the game backend (persistence, leaderboards, rewards) hears the result from the server authority — never from a client. The game authors the payload: its match-end event implements the new `IMatchResultProvider`, exposing an opaque result blob (winner, per-player stats, acquisitions) assembled from verified simulation state at the moment the match ends. The engine and the wire carry only the bytes — the game owns the schema on both ends. Opt-in: an event that does not implement the interface reports nothing, and with no lobby wired nothing is emitted.
+- **Verified identities travel alongside the result, outside the game payload.** The report carries a per-player roster of the lobby-verified account and display name — including players who left before the end — keyed by the same player id the game blob uses, so the backend joins stats to accounts by id. The deterministic game payload itself stays identity-free.
+- **Delivery is at-least-once and intake is idempotent.** The server appends each result to a local crash-backstop journal, then sends and re-sends until the lobby acknowledges; a reconnect re-flushes everything un-acked. The lobby hands the result to the game backend through a new `IMatchResultSink` seam and acknowledges only after that handoff returns cleanly — a backend failure withholds the ack so the server retries, and a duplicate is acknowledged without being processed twice. Results are flushed ahead of the room's state report, so the lobby processes the outcome before the room's reclaim signal.
+- **Aborted and abandoned matches are reported too.** A server-authoritative mid-match abort (state divergence) and the abandoned case — every player left mid-match with no end ever reached — arrive as an abort notification with a reason code. The two reuse the same "no culprit id" value with different meanings (unknown culprit vs. the whole roster walked away), so penalty and match-void policy should branch on the reason, never on the id alone. A match that never started is not reported; the lobby's reservation timeout reclaims it.
+
+### Per-match instance identity
+
+- **The lobby now mints a unique id for every match instance when it binds a room.** The match id players share to meet in a room is a rendezvous key — it repeats when the same party re-queues — so keying results by it would discard a real second match as a duplicate. The instance id (`{matchId}#{token}`) is pushed to the server with the room reservation and keys the result end to end; a backend recovers the rendezvous key by taking everything before the last `#`. A server re-pushing its reservations after a reconnect keeps the same instance id, so its own live match is never mistaken for a conflicting one.
+
+### Fixes
+
+- **A live room's reservation could be silently dropped by the dedicated server's release gate.** Two defects sat on the same gate: the server released a room's reservation only on the empty state while the lobby also reclaims on disposing — leaving a window where a reservation pushed for the next match was wiped — and a transient failed room read was reported as if the room were empty, releasing a live room's entry (and with it, the key its result would need). The gate now releases exactly once on a live-to-terminal transition, and a failed read holds the last known state instead of masquerading as empty.
+- **The demo stage selector no longer trusts its input's trailing character blindly.** The dev lobby derives a stage — which also drives the bot count — from the match id's trailing digit; the parse now accepts ASCII digits only (a fullwidth digit would have produced an unbounded bot count) and clamps to the stages the demo actually ships.
+
+### API additions
+
+- **`IMatchResultProvider` is new** — an optional companion to `IMatchEndEvent` exposing the game-authored result blob (`MatchResultData`, a `byte[]`; null = no result) that the server authority reads at match end. Existing match-end events are unaffected.
+- **`RoomManagerConfig.OnRoomCreated` / `OnRoomDraining` are new** — per-room lifecycle hooks a host can subscribe: one fires after a room is fully constructed and before it goes active (the seam for attaching per-room engine and network-service subscriptions), the other fires exactly once on the room's own update thread when it starts draining. Both are optional and default to no-op.
+
+### Samples
+
+- **Brawler carries a worked result payload end to end.** Match end assembles a per-player result — placement (deterministically ranked), remaining stocks, accumulated knockback, and acquired skills/consumables, keyed by player id — onto its game-over event, and both the single-room and multi-room dedicated servers report it to the dev lobby along with abort and abandoned-match notifications.
+- **The reference lobby wire grew the result messages and the reservation push now carries the match instance id**, so the sample lobby and dedicated server must run the same version.
+
+> Guides: [Lobby integration §4-F](Docs/LobbyIntegrationGuide.md#4-f-match-result-reporting-sd-multi-room) (the report channel end to end) · [Game-developer API §3.7](Docs/GameDevAPI.md#37-match-result--imatchresultprovider) (authoring and reading the result blob).
+
 ## [0.5.5] - 2026-07-11
 
 ### Navigation — ORCA avoidance fixes

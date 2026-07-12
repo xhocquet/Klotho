@@ -387,6 +387,7 @@ The multi-room server assigns each room a **stage** and a **per-match config**, 
 - **Per-match bot count rides `MatchConfigData`** — the CLI `botCount` is encoded into each room's `MatchConfigData` (via `BrawlerMatchConfig`, a `[KlothoSerializableStruct]` payload) instead of injected straight into the callback, so it propagates like the stage. The context factory decodes it back with `BrawlerMatchConfig.Decode(matchCtx.MatchConfigData)`.
 - **Single-room mode is unchanged** — no `IMatchConfigSource`, so it runs the default stage with the CLI bot count as before.
 - **Lobby-driven** — with `--lobby`, the lobby (not the CLI) picks each room's stage and match config and reserves it on the server before the client connects; see [LobbyIntegrationGuide §4-E](../LobbyIntegrationGuide.md#4-e-per-room-match-config--reservation-sd-multi-room). Framework-level API: [GameDevAPI §3.6](../GameDevAPI.md#36-per-match-config--stageid--matchconfigdata).
+- **Match results reported back** — also with `--lobby`, each room's verified result is pushed to the lobby at match end: `GameOverSystem` assembles a `BrawlerMatchResult` blob (per-player placement / stocks / knockback / acquisitions, keyed by `PlayerId`) onto `GameOverEvent` (an `IMatchResultProvider`), and the room reporter ships it — together with the verified identity roster and abort/abandoned notifications — with at-least-once delivery. Both single-room and multi-room paths emit. See [LobbyIntegrationGuide §4-F](../LobbyIntegrationGuide.md#4-f-match-result-reporting-sd-multi-room); framework-level API: [GameDevAPI §3.7](../GameDevAPI.md#37-match-result--imatchresultprovider).
 
 ---
 
@@ -396,7 +397,7 @@ The multi-room server assigns each room a **stage** and a **per-match config**, 
 dotnet run --project BrawlerDedicatedServer.csproj -- --test
 ```
 
-Runs both `MultiRoomTests.RunAll()` and `SingleRoomLifecycleTests.RunAll()` — verifies the server components only, with **MockTransport**, no real network or game logic. Each suite is wrapped by a `SafeRunSuite` shim that catches and reports crashes independently, so one suite's blow-up does not mask failures in the other. The exit code is the sum of failures across suites.
+Runs every server-side suite — `MultiRoomTests`, `SingleRoomLifecycleTests`, `NormalEndLifecycleTests`, `BrawlerMatchConfigTests`, `BrawlerMatchResultTests` — verifying the server components only, with **MockTransport**, no real network or game logic. Each suite is wrapped by a `SafeRunSuite` shim that catches and reports crashes independently, so one suite's blow-up does not mask failures in the others. The exit code is the sum of failures across suites.
 
 **MultiRoomTests** — multi-room behavior under `MaxRooms > 1`.
 

@@ -454,6 +454,49 @@ new RoomManagerConfigBuilder((matchCtx, roomLogger) =>            // match-aware
 
 ---
 
+### 3.7 Match result — `IMatchResultProvider`
+
+The mirror of §3.6: where the per-match *config* flows in, the match's **outcome payload** (winner, per-player stats, acquisitions) flows out. The game authors it at match end; the server authority reads it. The framework carries it as an opaque `byte[]` and never parses it — the game owns the schema on both ends.
+
+**Exposing it (game).** Implement `IMatchResultProvider` alongside `IMatchEndEvent` on the match-end event, and assemble the blob from **verified** simulation state when the event fires:
+
+```csharp
+[KlothoSerializable(104)]
+public partial class GameOverEvent : SimulationEvent, IMatchEndEvent, IMatchResultProvider
+{
+    public override EventMode Mode => EventMode.Synced;
+    [KlothoOrder] public int WinnerPlayerId;
+    [KlothoOrder] public FixedString32 Reason;
+
+    // Server-local result blob — deliberately NOT [KlothoOrder]: it is never sent and never part
+    // of the deterministic content hash (a byte[] hashes by reference → would fake a divergence).
+    public byte[] MatchResultData;
+
+    int IMatchEndEvent.WinnerPlayerId => WinnerPlayerId;
+    FixedString32 IMatchEndEvent.Reason => Reason;
+    byte[] IMatchResultProvider.MatchResultData => MatchResultData;
+}
+
+// At fire time — ALWAYS assign (events are pooled and the generated Reset clears only
+// [KlothoOrder] fields, so a skipped assignment would surface a stale blob):
+evt.MatchResultData = AssembleResult(ref frame);   // pure read-out of verified ECS state
+```
+
+**Reading it (server authority).** In `OnMatchEnded`, cast the event. A `null` blob — or an event that does not implement the interface — means "no result"; the path is opt-in:
+
+```csharp
+engine.OnMatchEnded += (tick, endEvt) =>
+{
+    byte[] blob = (endEvt as IMatchResultProvider)?.MatchResultData;
+    if (blob != null) { /* decode with the game codec → persist / report */ }
+};
+```
+
+- Define the blob's schema with the same serialization tools as any other payload (e.g. a `[KlothoSerializable]` message over `[KlothoSerializableStruct]` entries, as the Brawler sample's `BrawlerMatchResult` does) — producer and consumer share one generated codec, but the framework boundary stays `byte[]`.
+- Keep identity **out** of the blob — key entries by `PlayerId`. On a lobby-wired dedicated server the reference reporter ships the blob to the lobby together with a verified identity roster, and the backend joins the two by `PlayerId` — see [LobbyIntegrationGuide §4-F](./LobbyIntegrationGuide.md#4-f-match-result-reporting-sd-multi-room).
+
+---
+
 ## 4. Entity Prototype API
 
 Implement `IEntityPrototype` to encapsulate entity-creation logic. Two creation paths:

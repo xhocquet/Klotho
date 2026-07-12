@@ -115,7 +115,7 @@ namespace xpTURN.Klotho.LiteNetLib
                 return false;
             }
             _netManager.Connect(resolvedIp, port, _connectionKey);
-            _logger?.KInformation($"[LiteNetLibTransport] Connecting: {address}:{port}");
+            _logger?.KTrace($"[LiteNetLibTransport] Connecting: {address}:{port}");
             return true;
         }
 

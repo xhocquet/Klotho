@@ -24,6 +24,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         private readonly byte[] _serverRegister; // immutable — built once (serverId/host/port/maxRooms/maxPlayers fixed)
         private readonly Action _onConnected;    // reporter hook: mark dirty → fresh report next tick
         private readonly LobbyMatchConfigSource _reservations; // lobby-driven match config (null = lobbyless / no reserve channel)
+        private readonly Action<int> _onMatchResultAck; // reporter hook: MatchResultAck(requestId) → clear pending
 
         /// <param name="lobbyHost">/<paramref name="lobbyPort"/> — the dev lobby to connect to.</param>
         /// <param name="serverId">This dedicated server's id (carried in both messages).</param>
@@ -40,11 +41,13 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
                                            string serverId, string advertiseHost, int advertisePort,
                                            int maxRooms, int maxPlayersPerRoom,
                                            Action onConnected, string connectionKey = "xpTURN.DevLobby",
-                                           LobbyMatchConfigSource reservations = null)
+                                           LobbyMatchConfigSource reservations = null,
+                                           Action<int> onMatchResultAck = null)
         {
             _serverId = serverId;
             _onConnected = onConnected;
             _reservations = reservations;
+            _onMatchResultAck = onMatchResultAck;
             _serverRegister = LobbyWire.EncodeServerRegister(0, serverId, advertiseHost, advertisePort,
                                                              maxRooms, maxPlayersPerRoom);
             _conn = new LiteNetLibLobbyConnection(logger, lobbyHost, lobbyPort, connectionKey,
@@ -59,18 +62,29 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
         public void SendRoomReport(RoomStateReport[] rooms, int count)
             => _conn.TrySend(LobbyWire.EncodeRoomReport(0, _serverId, rooms, count));
 
+        /// <summary>Sends a pre-encoded MatchResult wire. Returns false if not yet connected — the
+        /// reporter keeps it pending and re-sends via its retry timer / on reconnect.</summary>
+        public bool SendMatchResult(byte[] wire) => _conn.TrySend(wire);
+
         private void OnConnected()
         {
             _conn.TrySend(_serverRegister); // (re)advertise capacity/endpoint — also the reconnect-restore trigger
             _onConnected?.Invoke();         // reporter marks dirty → fresh roomReport next tick
         }
 
-        // Inbound from the lobby. register/report are one-way (no reply); ReservePush is the exception — the
-        // lobby pushes a room's match config and awaits a ReserveAck (gates its deferred IssueResponse).
-        // Runs on the connection's poll thread; ApplyReservePush is lock-guarded, TrySend is same-thread-safe.
+        // Inbound from the lobby. register/report/matchResult are dedi→lobby; ReservePush and MatchResultAck
+        // are the lobby→dedi replies handled here. Runs on the connection's poll thread; ApplyReservePush is
+        // lock-guarded, the ack hook hands off to the reporter thread (ConcurrentQueue), TrySend is same-thread-safe.
         private void OnData(int peerId, byte[] data, int length)
         {
-            if (LobbyWire.PeekKind(data, length) != LobbyWire.ReservePush) return;
+            byte kind = LobbyWire.PeekKind(data, length);
+            if (kind == LobbyWire.MatchResultAck)
+            {
+                if (LobbyWire.TryDecodeMatchResultAck(data, length, out var ack) && ack.Ok)
+                    _onMatchResultAck?.Invoke(ack.RequestId); // clear pending — the dedi stops resending this result
+                return;
+            }
+            if (kind != LobbyWire.ReservePush) return;
             if (!LobbyWire.TryDecodeReservePush(data, length, out var m)) return;
 
             // No reserve source wired → ack OK as a no-op: the lobby commits and the dedi resolves the room
@@ -79,7 +93,7 @@ namespace xpTURN.Klotho.Samples.Identity.Sd
             // here, so lobby-driven config selection is silently ignored unless the dedi passes a
             // LobbyMatchConfigSource (reservations). A wired source applies the push and returns its real ok/nak.
             (bool ok, byte nak) = _reservations != null
-                ? _reservations.ApplyReservePush(m.RoomId, m.MatchId, m.StageId, m.MatchConfigData, m.ReservationExpiresAt)
+                ? _reservations.ApplyReservePush(m.RoomId, m.MatchInstanceId, m.StageId, m.MatchConfigData, m.ReservationExpiresAt)
                 : (true, LobbyWire.ReserveNakNone);
             _conn.TrySend(LobbyWire.EncodeReserveAck(m.RequestId, ok, nak));
         }

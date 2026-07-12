@@ -24,7 +24,7 @@ namespace xpTURN.Samples.DevLobby.Tests
             Assert.True(LobbyWire.TryDecodeReservePush(buf, buf.Length, out var m));
             Assert.Equal(42, m.RequestId);
             Assert.Equal(3, m.RoomId);
-            Assert.Equal("matchX", m.MatchId);
+            Assert.Equal("matchX", m.MatchInstanceId);
             Assert.Equal(2, m.StageId);
             Assert.Equal(payload, m.MatchConfigData);
             Assert.Equal(123456789L, m.ReservationExpiresAt);
@@ -70,12 +70,15 @@ namespace xpTURN.Samples.DevLobby.Tests
         private readonly List<(int peer, byte[] wire)> _sent = new List<(int, byte[])>();
         private LobbyRoomRegistry _reg;
 
+        private int _tokenSeq;
+
         private DevLobbyCore NewCore()
         {
             _reg = new LobbyRoomRegistry();
             _reg.AddServer(Server, "127.0.0.1", 7777, MaxRooms, Capacity);
             var core = new DevLobbyCore(SdDevLobby.CreateIssuer(_backend), _backend, SdDevIdentity.PublicKey,
-                                        () => _now, 30_000, _reg);
+                                        () => _now, 30_000, _reg,
+                                        instanceTokenFactory: () => "t" + (++_tokenSeq)); // deterministic instance ids
             core.HandleServerRegister(Server, "127.0.0.1", 7777, MaxRooms, Capacity, ServerPeer); // set PeerId
             return core;
         }
@@ -116,7 +119,7 @@ namespace xpTURN.Samples.DevLobby.Tests
 
             var push = LastPush();
             Assert.Equal(0, push.RoomId);
-            Assert.Equal("A", push.MatchId);
+            Assert.Equal("A#t1", push.MatchInstanceId);         // the wire slot that used to carry matchId
             Assert.Equal(1, push.StageId);              // room 0 → stage 1+(0%2)=1
             Assert.Equal(ServerPeer, _sent[0].peer);    // pushed to the assigned server's peer
             Assert.Equal(0, IssueResponses().count);    // deferred — no IssueResponse yet
@@ -262,7 +265,7 @@ namespace xpTURN.Samples.DevLobby.Tests
 
             var push = LastPush();          // exactly one re-push for room 0
             Assert.Equal(0, push.RoomId);
-            Assert.Equal("A", push.MatchId);
+            Assert.Equal("A#t1", push.MatchInstanceId); // the SAME instance id as the original push (else the dedi NAKs us)
             Assert.Equal(1, push.StageId);
             // Fire-and-forget: its ack lands on no pending → no-op (no stray IssueResponse).
             coord.HandleReserveAck(ServerPeer, push.RequestId, ok: true, nakReason: 0);

@@ -23,6 +23,10 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
         private readonly int _maxPlayers;
         private readonly int _botCount;
         private readonly int _stageId;
+#if DEBUG
+        private readonly long _devAbortAfterMs; // DEV: >0 → StateDivergence-abort N ms into the match (abort-path e2e)
+        private IKlothoEngine _engine;          // captured at OnInitializeWorld for the dev abort trigger
+#endif
 
         public BrawlerServerCallbacks(IKLogger logger,
                                         List<FPStaticCollider> staticColliders,
@@ -30,7 +34,8 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
                                         int maxPlayers,
                                         int botCount,
                                         List<IDataAsset> dataAssets = null,
-                                        int stageId = 0)
+                                        int stageId = 0,
+                                        long devAbortAfterMs = 0)
         {
             _logger = logger;
             _staticColliders = staticColliders;
@@ -40,6 +45,9 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
             _maxPlayers = maxPlayers;
             _botCount = botCount;
             _stageId = stageId;
+#if DEBUG
+            _devAbortAfterMs = devAbortAfterMs;
+#endif
         }
 
         public void RegisterSystems(EcsSimulation simulation)
@@ -56,11 +64,21 @@ namespace xpTURN.Klotho.BrawlerDedicatedServer
             botFSMSystem.SetQuery(query);
 
             BrawlerSimSetup.RegisterSystems(simulation, _logger, _dataAssets, _staticColliders, botFSMSystem, _stageId);
+#if DEBUG
+            // DEV: after BrawlerSimSetup so it runs last in the tick; fires the abort on the engine thread.
+            if (_devAbortAfterMs > 0)
+                simulation.AddSystem(
+                    new DevAbortSystem(() => _engine?.AbortMatch(AbortReason.StateDivergence), _devAbortAfterMs),
+                    SystemPhase.PostUpdate);
+#endif
         }
 
         public void OnInitializeWorld(IKlothoEngine engine)
         {
             _logger?.KInformation($"[BrawlerServerCallbacks] OnInitializeWorld: seed={engine.RandomSeed}");
+#if DEBUG
+            _engine = engine; // capture for the dev abort trigger (called before any tick)
+#endif
             BrawlerSimSetup.InitializeWorldState(engine, _maxPlayers, _botCount);
         }
 
