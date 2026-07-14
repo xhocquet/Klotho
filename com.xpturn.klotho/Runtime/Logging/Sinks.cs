@@ -10,7 +10,7 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Console sink. Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class ConsoleSink : IKLogSink
     {
-        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        private const string DefaultTimestampFormat = "mm:ss.fff";
 
         private readonly object _gate = new object();
         private readonly string _tsFormat;
@@ -38,7 +38,7 @@ namespace xpTURN.Klotho.Logging
             int pos = 0;
 
             int tn;
-            while (!DateTime.Now.TryFormat(buf.AsSpan(pos), out tn, "mm:ss.fff", CultureInfo.InvariantCulture))
+            while (!DateTime.Now.TryFormat(buf.AsSpan(pos), out tn, _tsFormat, CultureInfo.InvariantCulture))
                 buf = Grow(buf, pos + 32);
             pos += tn;
 
@@ -91,7 +91,7 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Rolling file sink (by day and by size). Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class RollingFileSink : IKLogSink
     {
-        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        private const string DefaultTimestampFormat = "mm:ss.fff";
 
         private readonly object _gate = new object();
         private readonly string _dir;
@@ -164,11 +164,19 @@ namespace xpTURN.Klotho.Logging
 
                 var now = DateTime.Now;
                 EnsureWriter(now);
+
+                // Fast path formats into the stack buffer; a custom format longer than the buffer
+                // falls back to a heap string so the timestamp is never silently truncated.
                 int n;
-                now.TryFormat(ts, out n, "mm:ss.fff", CultureInfo.InvariantCulture);
+                string tsFallback = null;
+                if (!now.TryFormat(ts, out n, _tsFormat, CultureInfo.InvariantCulture))
+                {
+                    tsFallback = now.ToString(_tsFormat, CultureInfo.InvariantCulture);
+                    n = tsFallback.Length;
+                }
 
                 string shortLevel = KLogLevelShort.Of(level);
-                _writer.Write(ts.Slice(0, n));
+                if (tsFallback != null) _writer.Write(tsFallback); else _writer.Write(ts.Slice(0, n));
                 _writer.Write('|'); _writer.Write(shortLevel); _writer.Write('|'); _writer.Write(message);
                 long len = n + 2 + shortLevel.Length + (message?.Length ?? 0);
                 if (exception != null)
