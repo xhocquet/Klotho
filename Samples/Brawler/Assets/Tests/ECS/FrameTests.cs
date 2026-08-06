@@ -115,6 +115,49 @@ namespace xpTURN.Klotho.ECS.Tests
         }
 
         [Test]
+        public void TryRead_WithComponent_ReturnsTrueAndValue()
+        {
+            var entity = _frame.CreateEntity();
+            _frame.Add(entity, new HealthComponent { MaxHealth = 100, CurrentHealth = 60 });
+
+            Assert.IsTrue(_frame.TryRead<HealthComponent>(entity, out var health));
+            Assert.AreEqual(100, health.MaxHealth);
+            Assert.AreEqual(60, health.CurrentHealth);
+        }
+
+        [Test]
+        public void TryRead_WithoutComponent_ReturnsFalseAndDefault()
+        {
+            var entity = _frame.CreateEntity();
+
+            Assert.IsFalse(_frame.TryRead<HealthComponent>(entity, out var health));
+            Assert.AreEqual(0, health.MaxHealth);
+            Assert.AreEqual(0, health.CurrentHealth);
+        }
+
+        [Test]
+        public void TryRead_AfterRemove_ReturnsFalse()
+        {
+            var entity = _frame.CreateEntity();
+            _frame.Add(entity, new HealthComponent { MaxHealth = 100, CurrentHealth = 100 });
+            _frame.Remove<HealthComponent>(entity);
+
+            Assert.IsFalse(_frame.TryRead<HealthComponent>(entity, out _));
+        }
+
+        [Test]
+        public void TryRead_ReturnsCopy_DoesNotAliasStorage()
+        {
+            var entity = _frame.CreateEntity();
+            _frame.Add(entity, new HealthComponent { MaxHealth = 100, CurrentHealth = 100 });
+
+            _frame.TryRead<HealthComponent>(entity, out var health);
+            health.CurrentHealth = 1;
+
+            Assert.AreEqual(100, _frame.Get<HealthComponent>(entity).CurrentHealth);
+        }
+
+        [Test]
         public void Remove_SetsHasFalse()
         {
             var entity = _frame.CreateEntity();
