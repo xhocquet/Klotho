@@ -92,6 +92,19 @@ namespace xpTURN.Klotho.ECS
         public bool Has<T>(EntityRef entity) where T : unmanaged, IComponent
             => GetStorage<T>().Has(entity.Index);
 
+        // Has + GetReadOnly in one lookup. Copies out by value — use Has + Get for ref mutation.
+        public bool TryRead<T>(EntityRef entity, out T component) where T : unmanaged, IComponent
+        {
+            var storage = GetStorage<T>();
+            if (!storage.Has(entity.Index))
+            {
+                component = default;
+                return false;
+            }
+            component = storage.GetReadOnly(entity.Index);
+            return true;
+        }
+
         // --- Singleton component access ---
         // Intended for components marked [KlothoSingletonComponent], whose engine-side
         // invariant guarantees exactly one entity carrier at the relevant lifecycle window.
