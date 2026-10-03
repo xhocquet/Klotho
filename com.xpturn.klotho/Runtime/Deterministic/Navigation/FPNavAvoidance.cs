@@ -870,7 +870,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             if (gridLineFail < _orcaLineCount)
             {
                 _infeasibleCount++;
-                LinearProgram3(gridLineFail, agent.Speed, ref gridResult);
+                LinearProgram3(gridLineFail, agent.Speed, 0, ref gridResult);
             }
             return gridResult;
         }

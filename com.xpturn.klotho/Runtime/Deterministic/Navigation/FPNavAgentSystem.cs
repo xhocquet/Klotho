@@ -1658,7 +1658,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
                 }
             }
 
-            UpdateMovement(ref frame, entities, entityCount, dt);
+            UpdateMovement(ref frame, entities, entityCount, currentTick, dt);
         }
 
         public unsafe void UpdateSteering(ref Frame frame, EntityRef[] entities, int entityCount, int currentTick)
@@ -1671,7 +1671,7 @@ namespace xpTURN.Klotho.Deterministic.Navigation
             }
         }
 
-        public unsafe void UpdateMovement(ref Frame frame, EntityRef[] entities, int entityCount, FP64 dt)
+        public unsafe void UpdateMovement(ref Frame frame, EntityRef[] entities, int entityCount, int currentTick, FP64 dt)
         {
             for (int i = 0; i < entityCount; i++)
             {
