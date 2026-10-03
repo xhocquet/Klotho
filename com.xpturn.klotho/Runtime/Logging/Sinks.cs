@@ -10,7 +10,7 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Console sink. Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class ConsoleSink : IKLogSink
     {
-        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        private const string DefaultTimestampFormat = "mm:ss.fff";
 
         private readonly object _gate = new object();
         private readonly string _tsFormat;
@@ -91,7 +91,7 @@ namespace xpTURN.Klotho.Logging
     /// <summary>Rolling file sink (by day and by size). Emits a "{ts}|{short}|" prefix.</summary>
     public sealed class RollingFileSink : IKLogSink
     {
-        private const string DefaultTimestampFormat = "yyyy-MM-dd HH:mm:ss.fff";
+        private const string DefaultTimestampFormat = "mm:ss.fff";
 
         private readonly object _gate = new object();
         private readonly string _dir;
